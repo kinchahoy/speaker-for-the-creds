@@ -51,6 +51,9 @@ The guest build imports an Ubuntu rootfs through Gondolin. Its tool selections l
 {.ai}
 
 On x86_64, `guest/build.sh` requires a Krun ELF kernel at `.runtime/krun/vmlinux` or the path named by `KRUN_VMLINUX`. Some hosts also need a compatible runner at `.runtime/krun-runner/bin/gondolin-krun-runner`; `start.sh` selects it when present. These host-specific artifacts are local prerequisites, not bundled binaries. The owner must provision and verify them on a fresh host.
+
+To use QEMU instead of Krun, install `qemu-system-x86` and run both the build and the service with `PI_V2_VMM=qemu` (`PI_V2_VMM=qemu mise run guest-build pi-v5-guest`, then `PI_V2_VMM=qemu mise run bottle`). The build then skips the Krun kernel, and the image runs only under QEMU.
+{.ai}
 {.ai}
 
 From another terminal, launch and inspect a task:

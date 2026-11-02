@@ -96,6 +96,7 @@ to the configured notification service.
 
 Define bundles in `DATA_DIR/bundles.json` as `{ "<name>": [{ "kind", "ref" }] }`. Copy
 [bundles.example.json](bundles.example.json) to start. Restart speaker after editing it.
+A request names the bundle and the owner approves all members at once. A caller may request a bundle only if it may request every member kind. `GET /_speaker/bundles` lists those bundles for the caller.
 {.ai}
 
 <!-- author: ai -->

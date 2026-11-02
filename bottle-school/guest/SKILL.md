@@ -28,7 +28,7 @@ Use this when an HTTP request returns 403, or when a tool or folder you need is 
 
 1. Confirm the cause. A denied HTTP request returns 403.
 2. Call `request_capability` once for each missing capability.
-   - `kind` and `ref`: the capability, in the format below.
+   - `kind` and `ref`: the capability. The `speaker` skill lists each kind and its `ref` format.
    - `bundle`: a bundle name, in place of `kind` and `ref`.
    - `reason`: one sentence on what the request unblocks.
    - `duration`: `15m`, `30m`, `1h`, `1d`, `7d`, or `30d`. Ask for the shortest that fits the task.
@@ -37,14 +37,6 @@ Use this when an HTTP request returns 403, or when a tool or folder you need is 
    - `The owner denied ...`: continue without it, or record in `/output/NOTES.md` what is blocked.
    - `... expired undecided` or `has not decided yet`: continue other work. Do not ask again for the same capability.
 4. Do not retry in a loop.
-
-| Kind | `ref` format | Example |
-| --- | --- | --- |
-| `site` | `<host>` or `*.<domain>` | `pypi.org` |
-| `secret` | `<NAME>@<host>[,<host>]` | `GITHUB_TOKEN@api.github.com` |
-| `folder` | `<share>` (read-only) or `<share>:rw` | `photos:rw` |
-| `mcp` | `<catalog id>` | `context7` |
-| `credential` | `<provider>.read` or `<provider>.write` | `paperless.read` |
 
 A request grants nothing until the owner approves it. Do not reach the same destination by another route.
 {.ai}
@@ -79,10 +71,5 @@ Request each host with `request_capability`, `kind: site`, `ref: <host>`. Reques
 
 ## Homelab APIs
 
-Homelab APIs go through speaker. They use `kind: credential`, `ref: <provider>.read` or `<provider>.write`.
+Homelab APIs and HTTP MCP servers go through speaker. Follow the `speaker` skill.
 {.ai}
-
-- Call `$SPEAKER_URL/<provider>/<path>` with the header `Authorization: Bearer $SPEAKER_TOKEN`.
-- Speaker adds the provider's real credential. You never see it.
-- A call without a lease returns `403 approval_required` and a `requestId`. Request the credential, then retry.
-- `GET $SPEAKER_URL/_speaker/providers` lists providers. `GET $SPEAKER_URL/_speaker/providers/<name>/guide` returns a provider's guide.

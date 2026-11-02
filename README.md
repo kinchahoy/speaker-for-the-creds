@@ -36,7 +36,7 @@ chmod 600 speaker/.env
 mise run speaker
 ```
 
-Open `PUBLIC_URL/admin`, configure a provider, and test approval and revocation with the demo before adding real credentials. Agents use [the speaker skill](speaker/skill/SKILL.md) to enroll sessions and request access. The owner approves each session and capability in the browser.
+Open `PUBLIC_URL/admin`, configure a provider, and test approval and revocation with the demo before adding real credentials. Agents use [the access-and-creds skill](speaker/skill/SKILL.md) to enroll sessions and request access. The owner approves each session and capability in the browser.
 {.ai}
 
 The owner can deploy speaker through [Docker](speaker/README.md#docker--home-server-deployment). The owner must verify the real upstream URL, TLS, private routing, and approval flow. Speaker is a supervised-pilot candidate. bottle-school still needs an end-to-end guest run and host storage quotas before unattended use.

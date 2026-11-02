@@ -146,6 +146,8 @@ export const systemNote = (
     "- Deliver the simplest working version first. Improve it only when the owner asks.",
     "- Do not read a tool's source code to debug it. Use `--help` or the docs, or try another approach.",
     "- When the owner says stop or wrap up, hand over what exists in that same turn.",
+    "- Test each deliverable the way its user will use it, and fix failures before moving on.",
+    "- Record assumptions and anything unfinished in `/output/NOTES.md`. Write `/output/DONE` (one line saying what was delivered) only when the whole task is complete and verified; never for partial work. When blocked, say so in `/output/NOTES.md` and in your final reply.",
     "",
     "## Environment",
     "",
@@ -154,7 +156,9 @@ export const systemNote = (
     "- JavaScript work: write TypeScript. Run it with `node file.ts`, check types with `tsc --noEmit`, manage packages with pnpm, lint with `oxlint`, and format with `oxfmt`.",
     "- Go work: use `go mod init`, `go build`, and `go test`. Module downloads need `proxy.golang.org` and `sum.golang.org`.",
     "- Browser automation: some images include Python Playwright with headless Chromium. Check with `command -v playwright`.",
-    "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request `pypi.org` and `files.pythonhosted.org`, or `registry.npmjs.org`, if the install is denied. Request direct binary downloads (such as GitHub releases) only when no registry package exists.",
+    "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (such as GitHub releases) only when no registry package exists.",
+    "- Hosts to request as `site` leases: PyPI `pypi.org`, `files.pythonhosted.org`; npm `registry.npmjs.org`; git clone `github.com`, `codeload.github.com`; GitHub raw `raw.githubusercontent.com`; GitHub releases `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com`; Hugging Face `huggingface.co`, `cdn-lfs.huggingface.co`, `cas-bridge.xethub.hf.co`; Rust `crates.io`, `index.crates.io`, `static.crates.io`; Go `proxy.golang.org`, `sum.golang.org`. For any other site request the exact hostnames the tool contacts, and check redirects. Prefer a named bundle when the owner offers one.",
+    "- For homelab APIs, HTTP MCP servers, and every other lease kind, follow the `access-and-creds` skill.",
     "",
     "## Leases at this Pi start",
     "",
@@ -232,8 +236,9 @@ export const writeGuestConfig = (
     `${import.meta.dirname}/../guest/extensions/request-capability.ts`,
     `${directory}/extensions/request-capability.ts`,
   );
-  mkdirSync(`${directory}/skills/task-workflow`, { recursive: true });
-  copyFileSync(`${import.meta.dirname}/../guest/SKILL.md`, `${directory}/skills/task-workflow/SKILL.md`);
+  // The access-and-creds skill is the one agents use anywhere; it lives with speaker and is mounted unchanged. It is the only skill the guest gets.
+  mkdirSync(`${directory}/skills/access-and-creds`, { recursive: true });
+  copyFileSync(`${import.meta.dirname}/../../speaker/skill/SKILL.md`, `${directory}/skills/access-and-creds/SKILL.md`);
   const writeJson = (name: string, value: unknown) =>
     writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config, credentials));
@@ -267,7 +272,7 @@ export const writeGuestConfig = (
     "--no-context-files",
     "--no-approve",
     "--skill",
-    "/etc/pi-v2/skills/task-workflow",
+    "/etc/pi-v2/skills/access-and-creds",
     "--append-system-prompt",
     "/etc/pi-v2/APPEND_SYSTEM.md",
     "-e",

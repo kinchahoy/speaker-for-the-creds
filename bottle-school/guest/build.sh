@@ -1,6 +1,7 @@
 #!/bin/sh
 # Builds one pinned guest image through Gondolin's supported build configuration.
 # Usage: guest/build.sh [image-tag]   (default: pi-v5-guest)
+# PI_V2_VMM=qemu builds a QEMU-only image and skips the Krun kernel (run the service with the same PI_V2_VMM=qemu).
 # PI_GUEST_BROWSER=1 adds Playwright and Chromium, for example: PI_GUEST_BROWSER=1 guest/build.sh pi-v5-guest-browser
 # Docker builds the Ubuntu rootfs from guest/Dockerfile; Gondolin imports it through guest/build.json.
 set -eu
@@ -8,6 +9,8 @@ IMAGE=${1:-pi-v5-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 GONDOLIN=${GONDOLIN:-"$ROOT/node_modules/.bin/gondolin"}
 VMLINUX=${KRUN_VMLINUX:-"$ROOT/.runtime/krun/vmlinux"}
+KRUN=1
+[ "${PI_V2_VMM:-krun}" = qemu ] && KRUN=0
 
 # Ensure e2fsprogs (keg-only on macOS) is on PATH for mke2fs.
 if ! command -v mke2fs >/dev/null 2>&1; then
@@ -30,7 +33,7 @@ case "$(uname -m)" in
     ;;
 esac
 
-if [ "$ARCH" = "x86_64" ]; then
+if [ "$ARCH" = "x86_64" ] && [ "$KRUN" = 1 ]; then
   [ -f "$VMLINUX" ] || { echo "missing Krun x86_64 ELF kernel: $VMLINUX" >&2; exit 1; }
 fi
 
@@ -44,7 +47,7 @@ trap cleanup EXIT INT TERM
 if [ ! -w "$ASSETS/manifest.json" ]; then
   docker run --rm -v "$ASSETS:/assets" alpine:3.23 chown -R "$(id -u):$(id -g)" /assets
 fi
-if [ "$ARCH" = "x86_64" ]; then
+if [ "$ARCH" = "x86_64" ] && [ "$KRUN" = 1 ]; then
   node "$ROOT/guest/patch-krun-assets.mjs" "$ASSETS" "$VMLINUX"
 fi
 "$GONDOLIN" build --verify "$ASSETS"

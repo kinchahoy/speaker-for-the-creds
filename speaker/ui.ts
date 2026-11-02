@@ -1,36 +1,72 @@
 import { html, raw } from 'hono/html'
 import type { Capability, Provider, View } from './server.ts'
 
+const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
 const input = (name: string, label: string, type = 'text', value = '') =>
   html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
   html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', approval: 'Require approval', always: 'Always allow', deny: 'Deny' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
-const form = (action: string, fields: unknown, button: string, kind = 'inline') =>
-  html`<form class="${kind}" method="post" action="${action}">${fields}<button>${button}</button></form>`
+// `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
+const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
+  html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
 const durations = ['15m', '30m', '1h', '1d', '7d', '30d']
 const permanentOverride = html`<label class="override" title="Creates a permanent lease that stays until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
+
+const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-credential" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
+<symbol id="i-secret" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+<symbol id="i-site" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.200 3 14.800 0 18M12 3c-3 3.200-3 14.800 0 18"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-mcp" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+<symbol id="i-enforcer" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.500-3.200 8-8 9-4.800-1-8-4.500-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-session" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
+</defs></svg>`
+
 const liveScript = `
-const status = document.querySelector('#live-status');
-const choices = new Map();
-document.querySelector('#approvals')?.addEventListener('change', ({target}) => {
-  const form = target.closest('form');
-  if (form) choices.set(form.action, new FormData(form));
-});
+const $ = (selector) => document.querySelector(selector);
+const status = $('#live-status'), dialog = $('#confirm'), search = $('#q');
+const choices = new Map(), opened = new Set(), kinds = new Set();
+let target = null;
+const ladder = [900, 1800, 3600, 86400, 604800, 2592000];
+const short = (seconds) => seconds >= 86400 ? Math.ceil(seconds / 86400) + 'd' : seconds >= 3600 ? Math.ceil(seconds / 3600) + 'h' : seconds >= 60 ? Math.ceil(seconds / 60) + 'm' : seconds + 's';
+function filter() {
+  const query = (search ? search.value : '').trim().toLowerCase();
+  document.querySelectorAll('ul.rows').forEach((list) => {
+    let total = 0, shown = 0;
+    list.querySelectorAll(':scope > li[data-search]').forEach((row) => {
+      total++;
+      const match = row.dataset.search.includes(query) && (!kinds.size || row.dataset.kinds.split(' ').some((kind) => kinds.has(kind)));
+      row.hidden = !match;
+      if (match) shown++;
+    });
+    list.toggleAttribute('data-nomatch', total > 0 && !shown);
+  });
+}
+function count(pending) {
+  const badge = $('#pending-count');
+  if (badge) { badge.textContent = pending; badge.hidden = !pending; }
+  document.title = (pending ? '(' + pending + ') ' : '') + 'Speaker';
+}
 function updateTimes() {
   if (document.hidden) return;
-  document.querySelectorAll('[data-expires-at]').forEach(time => {
-    const end = Number(time.dataset.expiresAt), seconds = Math.max(0, Math.ceil((end - Date.now()) / 1000));
-    const remaining = seconds >= 86400 ? Math.ceil(seconds / 86400) + 'd' : seconds >= 3600 ? Math.ceil(seconds / 3600) + 'h' : seconds >= 60 ? Math.ceil(seconds / 60) + 'm' : seconds + 's';
-    time.textContent = seconds ? remaining + ' remaining · expires ' + new Date(end).toLocaleString() : 'Expired';
+  const now = Date.now();
+  document.querySelectorAll('[data-expires-at]').forEach((time) => {
+    const end = Number(time.dataset.expiresAt), seconds = Math.max(0, Math.ceil((end - now) / 1000));
+    time.textContent = seconds ? short(seconds) + ' left' : 'Expired';
+    time.title = 'Expires ' + new Date(end).toLocaleString();
   });
-  document.querySelectorAll('[data-last-used-at]').forEach(time => {
-    const seconds = Math.max(0, Math.floor((Date.now() - Number(time.dataset.lastUsedAt)) / 1000));
-    const age = seconds < 60 ? seconds + 's' : seconds < 3600 ? Math.floor(seconds / 60) + 'm' : seconds < 86400 ? Math.floor(seconds / 3600) + 'h' : Math.floor(seconds / 86400) + 'd';
-    time.textContent = age + ' ago';
+  document.querySelectorAll('[data-end]').forEach((meter) => {
+    const left = Math.max(0, (Number(meter.dataset.end) - now) / 1000), scale = ladder.find((step) => step >= left) || ladder[ladder.length - 1];
+    meter.style.setProperty('--p', Math.min(1, left / scale));
+    meter.classList.toggle('low', left < 300 || left / scale < 0.1);
+  });
+  document.querySelectorAll('[data-last-used-at]').forEach((time) => {
+    const seconds = Math.max(0, Math.floor((now - Number(time.dataset.lastUsedAt)) / 1000));
+    time.textContent = (seconds < 60 ? seconds + 's' : seconds < 3600 ? Math.floor(seconds / 60) + 'm' : seconds < 86400 ? Math.floor(seconds / 3600) + 'h' : Math.floor(seconds / 86400) + 'd') + ' ago';
   });
 }
 async function refresh() {
-  if (!document.hidden) {
+  if (!document.hidden && !dialog.open) {
     try {
       const response = await fetch('/admin/live', {cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.timeout(10000)});
       if (!response.ok) throw new Error('Refresh failed');
@@ -38,10 +74,11 @@ async function refresh() {
       for (const id of ['approvals', 'leases']) {
         const panel = document.getElementById(id);
         if (!panel) continue;
-        // Leave an actively edited form alone; retain choices on later refreshes.
+        // Leave an actively edited form alone; retain choices and open details on later refreshes.
         if (panel.contains(document.activeElement)) continue;
         panel.innerHTML = panels[id];
-        panel.querySelectorAll('form').forEach(form => {
+        panel.querySelectorAll('details[id]').forEach((details) => { details.open = opened.has(details.id); });
+        panel.querySelectorAll('form').forEach((form) => {
           const saved = choices.get(form.action);
           if (saved) for (const field of form.elements) {
             if (field.type === 'checkbox') field.checked = saved.has(field.name);
@@ -49,40 +86,195 @@ async function refresh() {
           }
         });
       }
-      status.textContent = 'Live updates · times shown in ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
+      count(panels.pending);
+      filter();
+      status.textContent = 'Live';
+      status.title = 'Times shown in ' + Intl.DateTimeFormat().resolvedOptions().timeZone;
       updateTimes();
     } catch {
-      status.textContent = 'Live updates stopped. Refresh the page to reconnect.';
+      status.textContent = 'Live updates stopped. Reload.';
       return;
     }
   }
   setTimeout(refresh, 5000);
 }
+document.addEventListener('change', ({target}) => {
+  const form = target.closest('#approvals form');
+  if (form) choices.set(form.action, new FormData(form));
+});
+document.addEventListener('toggle', ({target}) => { if (target.id) target.open ? opened.add(target.id) : opened.delete(target.id); }, true);
+document.addEventListener('click', ({target}) => {
+  const chip = target.closest('[data-kind]');
+  if (!chip) return;
+  const on = !kinds.delete(chip.dataset.kind);
+  if (on) kinds.add(chip.dataset.kind);
+  chip.setAttribute('aria-pressed', on);
+  filter();
+});
+document.addEventListener('submit', (event) => {
+  const form = event.target;
+  if (!form.dataset.confirm || form.dataset.ok) return;
+  event.preventDefault();
+  target = form;
+  $('#confirm-text').textContent = form.dataset.confirm;
+  $('#confirm-ok').textContent = form.querySelector('button').textContent;
+  dialog.showModal();
+});
+dialog.addEventListener('close', () => {
+  if (dialog.returnValue === 'ok' && target) { target.dataset.ok = '1'; target.submit(); }
+  target = null;
+  dialog.returnValue = '';
+});
+search?.addEventListener('input', filter);
+$('.nav [aria-current]')?.scrollIntoView({inline: 'center', block: 'nearest'});
 updateTimes();
 setInterval(updateTimes, 1000);
 refresh();
 `
-const css = `:root{color-scheme:dark;--bg:#0a0d14;--panel:#111520;--raised:#171c2b;--line:#22293d;--ink:#f0f3fa;--dim:#a6b2cc;--accent:#7aa2ff;--good:#4fd197;--warn:#f5c443;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}*{box-sizing:border-box}body{margin:0}main{max-width:1080px;margin:auto;padding:28px 18px 48px}header{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:18px}h1{font-size:1.55rem;letter-spacing:-.03em;margin:0}h2{font-size:1.08rem;margin:0 0 12px}h3{font-size:.95rem;margin:12px 0 8px}.muted,.meta{color:var(--dim);font-size:.88rem}.nav{display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid var(--line)}.nav a{color:var(--dim);text-decoration:none;padding:9px 12px;border-bottom:2px solid transparent}.nav a[aria-current=page]{color:var(--ink);border-color:var(--accent)}.layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,.9fr);gap:14px;align-items:start}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;min-width:0}.editor{padding-bottom:24px;margin-bottom:20px;border-bottom:1px solid var(--line)}.card ul{list-style:none;padding:0;margin:0}.card li{padding:11px 0;border-top:1px solid var(--line)}.card li:first-child{border-top:0}.item{display:flex;gap:12px;align-items:center;justify-content:space-between}.item-main{min-width:0;overflow-wrap:anywhere}.item-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}form{margin:0}.inline{display:inline-flex;align-items:center;gap:6px}.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;align-items:end}.fields button{width:100%}label{display:block;font-size:.82rem;color:var(--dim)}input,select,textarea{display:block;width:100%;margin-top:5px;padding:10px 11px;border:1px solid var(--line);border-radius:8px;background:var(--raised);color:var(--ink);font:inherit;font-size:.92rem}button{min-height:44px;border:1px solid transparent;border-radius:8px;background:var(--accent);color:#080d18;padding:9px 13px;font:inherit;font-size:.88rem;font-weight:650;cursor:pointer;white-space:nowrap}.inline button{min-height:44px;padding:7px 10px}.danger button,.deny{background:transparent;color:#ff8b8b;border-color:#54303a}.danger button:hover,.deny:hover{background:#28171e}.decision{display:grid;gap:8px;width:min(100%,440px)}.decision-fields{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}.decision-fields select{min-width:0}.decision-fields .override{white-space:nowrap;font-size:.8rem;padding-bottom:10px}.decision-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}.decision-buttons button{width:100%}details{margin-top:16px}summary{cursor:pointer;color:var(--accent);font-weight:600;padding:8px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--raised);padding:12px;border-radius:8px}a{color:var(--accent)}.chip{display:inline-block;padding:2px 8px;border-radius:999px;font-size:.75rem;background:#20263a;color:var(--dim)}.chip.good{background:#153328;color:var(--good)}.chip.warn{background:#332a15;color:var(--warn)}.override{display:flex;align-items:center;gap:7px;max-width:200px}.override input{width:auto;margin:0}#approvals .item{align-items:flex-start;flex-direction:column}#approvals .item-actions{flex-wrap:wrap}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}@media(max-width:700px){main{padding:16px 12px calc(32px + env(safe-area-inset-bottom))}header{padding-bottom:14px}.layout{grid-template-columns:1fr}.card{padding:14px}.nav{overflow-x:auto;scrollbar-width:none}.nav a{white-space:nowrap;padding:10px 9px}.item{align-items:flex-start;flex-direction:column}.item-actions{flex-wrap:wrap}.decision{width:100%}.decision-fields{grid-template-columns:minmax(0,1fr) auto}}`
-const page = (title: string, body: unknown, nonce: string) =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${raw(css)}</style></head><body><main><header><h1>${title}</h1><a href="/admin">Refresh</a></header>${body}</main><script nonce="${nonce}">${raw(liveScript)}</script></body></html>`
 
-const caps = (members: Capability[]) =>
-  members.map((m) => html`${m.kind} ${m.ref}`).reduce((a, b) => html`${a}<br>${b}`)
-const expiry = (at: string | null) =>
-  at === null
-    ? 'until revoked (human override)'
-    : html`<time datetime="${at}" data-expires-at="${Date.parse(at)}">expires ${at}</time>`
+const css = `
+:root{color-scheme:light dark;
+--bg:oklch(97.5% .006 265);--surface:oklch(100% 0 0);--sunk:oklch(95% .012 265);--ink:oklch(22% .04 265);--dim:oklch(44% .03 265);--line:oklch(90% .014 265);--field:oklch(58% .03 265);
+--brand:oklch(36% .17 268);--accent:oklch(48% .21 268);--on-accent:oklch(100% 0 0);
+--region:oklch(94.5% .03 268);--ticket:oklch(100% 0 0);--perf:oklch(80% .05 268);
+--go:oklch(46% .14 155);--on-go:oklch(100% 0 0);--good:oklch(42% .13 155);--good-bg:oklch(92% .07 155);
+--warn:oklch(42% .1 70);--warn-bg:oklch(92% .1 85);--warn-fill:oklch(76% .16 75);
+--bad:oklch(48% .19 25);--bad-bg:oklch(95% .03 25);
+--mark-bg:oklch(92% .05 var(--h,268));--mark-ink:oklch(40% .15 var(--h,268));
+--shadow:0 1px 2px oklch(25% .05 268/.14),0 10px 24px -12px oklch(25% .08 268/.4);
+font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);accent-color:var(--accent);scrollbar-color:var(--field) transparent}
+@media(prefers-color-scheme:dark){:root{
+--bg:oklch(17% .02 265);--surface:oklch(22% .025 265);--sunk:oklch(19% .025 265);--ink:oklch(95% .01 265);--dim:oklch(77% .03 265);--line:oklch(31% .03 265);
+--brand:oklch(30% .15 268);--accent:oklch(77% .13 268);--on-accent:oklch(18% .05 268);
+--region:oklch(22% .05 268);--ticket:oklch(31% .05 268);--perf:oklch(42% .06 268);
+--go:oklch(80% .17 155);--on-go:oklch(20% .05 155);--good:oklch(84% .15 155);--good-bg:oklch(30% .06 155);
+--warn:oklch(87% .14 85);--warn-bg:oklch(32% .06 80);--warn-fill:oklch(80% .15 80);
+--bad:oklch(80% .13 25);--bad-bg:oklch(28% .05 25);
+--mark-bg:oklch(33% .08 var(--h,268));--mark-ink:oklch(85% .12 var(--h,268));
+--shadow:0 1px 2px #0006,0 12px 24px -12px #000b}}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:320px}::selection{background:var(--accent);color:var(--on-accent)}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.top{position:sticky;top:0;z-index:10;background:var(--brand);color:oklch(100% 0 0)}
+.top-in{max-width:1120px;margin:auto;padding:10px 20px 0}
+.bar{display:flex;align-items:center;gap:12px;min-height:44px}
+.logo{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:oklch(100% 0 0);color:var(--brand)}
+h1{font-size:1.45rem;line-height:1.2;font-weight:800;letter-spacing:-.03em;margin:0}
+#live-status{margin:0 0 0 auto;font-size:.82rem;color:oklch(90% .04 268);min-width:0;text-align:right}
+#live-status::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:oklch(80% .17 155);margin-right:7px}
+.refresh{color:oklch(100% 0 0);font-size:.88rem;min-height:44px;display:inline-flex;align-items:center}
+.nav{display:flex;gap:4px;margin-top:6px;overflow-x:auto;scrollbar-width:none}
+.nav a{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px 12px 0 0;color:oklch(92% .035 268);text-decoration:none;font-weight:650;white-space:nowrap}
+.nav a:hover{background:oklch(100% 0 0/.12)}.nav a[aria-current=page]{background:var(--bg);color:var(--ink)}
+.count{min-width:22px;padding:1px 7px;border-radius:99px;background:oklch(86% .16 85);color:oklch(25% .06 85);font-size:.78rem;font-weight:800;text-align:center}
+main{max-width:1120px;margin:auto;padding:20px 20px 72px}
+h2{display:flex;align-items:center;gap:10px;font-size:1.3rem;line-height:1.25;font-weight:750;letter-spacing:-.02em;margin:0 0 14px}
+h3{font-size:1rem;margin:0 0 10px}
+.meta,.muted{color:var(--dim);font-size:.86rem}.muted{margin:18px 0 0}
+a{color:var(--accent);text-underline-offset:3px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;overflow-wrap:anywhere}
+.tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-bottom:18px}
+.tools label{flex:1 1 240px;max-width:420px}.tools input{margin:0}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;max-width:100%}
+.chips button{display:inline-flex;align-items:center;gap:7px;background:var(--surface);color:var(--ink);border:1px solid var(--field);font-weight:600;font-size:.88rem}
+.chips button[aria-pressed=true]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:22px;align-items:start}
+.inbox{background:var(--region);border-radius:18px;padding:20px;min-width:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;min-width:0}
+.rows{list-style:none;margin:0;padding:0}
+.rows>li{padding:12px 0;border-top:1px solid var(--line)}.rows>li:first-child{border-top:0}
+.rows[data-nomatch]::after{content:"Nothing matches this filter.";display:block;padding:14px 0;color:var(--dim)}
+.inbox .rows{display:grid;gap:14px}.inbox .rows>li{border:0}.rows>li.ticket{padding:var(--tp) var(--tp) 0}
+.empty{padding:6px 0;color:var(--dim)}.empty strong{display:block;color:var(--ink);font-size:1.05rem;margin-bottom:2px}
+.inbox .empty{padding:24px 6px}
+.mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}
+.mark.sm{width:24px;height:24px;border-radius:7px}.mark.sm .ic{width:14px;height:14px}
+.k-credential{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-enforcer{--h:250}.k-session{--h:180}
+.strip{display:inline-flex;gap:3px}
+.ticket{--tp:18px;background:var(--ticket);border-radius:16px;box-shadow:var(--shadow);padding:var(--tp) var(--tp) 0;min-width:0}
+.t-head{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px}
+.t-head strong{font-size:1.12rem;font-weight:750;letter-spacing:-.01em;overflow-wrap:anywhere}
+.t-age{margin-left:auto;font-size:.82rem;color:var(--dim);white-space:nowrap}
+.t-grant{margin-top:12px;display:grid;gap:8px}
+.caps{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.cap{display:flex;gap:10px;align-items:center;min-width:0}.cap code{font-weight:650}.cap .meta{display:block;line-height:1.2}
+details{min-width:0}summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-height:44px;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
+summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .15s}
+details[open]>summary::after{transform:rotate(225deg)}
+.bundle summary{background:var(--sunk);border-radius:10px;padding:0 12px;font-weight:600}
+.bundle .caps{padding:10px 12px 4px}.rows details .caps{padding:6px 0 14px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;background:var(--sunk);color:var(--dim);white-space:nowrap}
+.chip.good,.chip.warn,.chip.bad{padding-left:8px}.chip.good::before,.chip.warn::before,.chip.bad::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.chip.good{background:var(--good-bg);color:var(--good)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}
+.chip.solid{background:var(--accent);color:var(--on-accent)}
+.why{margin-top:10px;font-size:.92rem}.why summary{min-height:0;display:block;padding:0}.why summary::after{display:none}.why[open] summary{margin-bottom:4px}.why summary span{color:var(--dim)}
+.t-meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px}
+.stub{position:relative;margin:14px calc(-1*var(--tp)) 0;padding:14px var(--tp) var(--tp);border-top:2px dashed var(--perf)}
+.stub::before,.stub::after{content:"";position:absolute;top:-9px;width:16px;height:16px;border-radius:50%;background:var(--region)}
+.stub::before{left:-8px}.stub::after{right:-8px}
+.decision{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.pick{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:end;flex:1 1 100%}.pick label:not(.override){flex:1 1 150px}.pick:empty{display:none}
+.go{display:flex;gap:8px;flex:1 1 100%}.go button{flex:1;min-height:52px;font-size:1.02rem}.go .approve{flex:1.7}
+form{margin:0}label{display:block;font-size:.82rem;font-weight:600;color:var(--dim)}
+input,select,textarea{display:block;width:100%;min-height:44px;margin-top:5px;padding:9px 12px;border:1px solid var(--field);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:.95rem}
+textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88rem}
+.override{display:flex;align-items:center;gap:8px;min-height:44px;color:var(--ink);font-size:.88rem;white-space:nowrap}.override input{width:20px;min-height:20px;margin:0}
+button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border:1px solid transparent;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-size:.92rem;font-weight:650;cursor:pointer;white-space:nowrap;transition:filter .15s,transform .15s}
+button:hover{filter:brightness(1.1)}button:active{transform:translateY(1px);filter:brightness(.94)}button:disabled{opacity:.5;cursor:not-allowed}
+.approve{background:var(--go);color:var(--on-go);font-weight:750}
+.deny{background:transparent;color:var(--bad);border-color:var(--bad)}.danger button{background:transparent;color:var(--bad);border-color:var(--line);font-weight:600}.deny:hover,.danger button:hover{background:var(--bad-bg);filter:none}
+.dlg-actions .ok{background:var(--bad);color:var(--surface);border-color:var(--bad)}
+.row{display:flex;gap:12px;align-items:center}.row-main{flex:1;min-width:0;overflow-wrap:anywhere}.row-title{font-weight:650}.row-sub{color:var(--dim);font-size:.85rem}
+.row-act{display:flex;gap:6px;align-items:center;flex:none}.row-act a{display:inline-flex;align-items:center;min-height:44px;padding:0 10px;font-weight:600}
+.expiry{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin:5px 0 3px}
+.left{font-variant-numeric:tabular-nums;font-weight:700;font-size:.88rem}
+.meter{--p:1;flex:0 1 110px;min-width:56px;height:8px;border-radius:99px;background:var(--sunk);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.meter i{display:block;height:100%;width:calc(var(--p)*100%);background:var(--go);border-radius:99px;transition:width .6s}.meter.low i{background:var(--warn-fill)}
+.wide .rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:0 28px}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;align-items:end;padding:6px 0 4px}.fields button{width:100%}
+.editor{padding-bottom:18px;margin-bottom:8px;border-bottom:1px solid var(--line)}
+.panel>details>summary{color:var(--accent);font-weight:650;border-top:1px solid var(--line);margin-top:8px}
+dialog{width:min(420px,calc(100vw - 32px));padding:22px;border:1px solid var(--line);border-radius:16px;background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+dialog::backdrop{background:oklch(15% .04 268/.6)}dialog h2{margin-bottom:8px}dialog p{margin:0 0 18px}
+.dlg-actions{display:flex;gap:10px;justify-content:flex-end}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.top a:focus-visible{outline-color:oklch(100% 0 0)}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.wide .rows{grid-template-columns:1fr}}
+@media(max-width:560px){.nav,.chips{mask-image:linear-gradient(to right,#000 calc(100% - 32px),transparent)}.nav a{scroll-margin:0 24px}#live-status{font-size:.76rem;line-height:1.25}.row.wrap{flex-wrap:wrap}.row.wrap .row-main{flex-basis:calc(100% - 50px)}.row.wrap .row-act{margin-left:46px}
+.top-in{padding:6px 12px 0}h1{font-size:1.25rem}.logo{width:30px;height:30px}.refresh{display:none}.nav a{padding:0 13px}
+main{padding:14px 12px 56px}.inbox{padding:12px;border-radius:14px}.panel{padding:14px}.ticket{--tp:14px}
+input,select,textarea{font-size:1rem}.pick{flex-basis:100%}.go{flex-basis:100%}.go button{min-height:56px}
+.t-age{margin-left:0;flex-basis:100%}h2{font-size:1.2rem}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+`
+const page = (title: string, nav: unknown, body: unknown, nonce: string) =>
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${title}</title><style>${raw(css)}</style></head><body>${raw(sprite)}<header class="top"><div class="top-in"><div class="bar"><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-credential"></use></svg></span><h1>${title}</h1><p id="live-status" role="status">Connecting…</p><a class="refresh" href="/admin">Refresh</a></div>${nav}</div></header><main>${body}</main><dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Are you sure?</h2><p id="confirm-text"></p><div class="dlg-actions"><button value="cancel" autofocus>Keep</button><button value="ok" id="confirm-ok" class="ok">Confirm</button></div></form></dialog><script nonce="${nonce}">${raw(liveScript)}</script></body></html>`
+
+const mark = (kind: string, small = false) =>
+  html`<span class="mark k-${kind} ${small ? 'sm' : ''}"><svg class="ic" aria-hidden="true"><use href="#i-${kind}"></use></svg></span>`
+const strip = (list: readonly string[]) =>
+  html`<span class="strip">${[...new Set(list)].map((kind) => html`${mark(kind, true)}<span class="sr">${kind}</span>`)}</span>`
+const cap = (m: Capability) =>
+  html`<li class="cap">${mark(m.kind)}<div><code>${m.ref}</code><span class="meta">${m.kind}</span></div></li>`
+const caps = (list: Capability[]) => html`<ul class="caps">${list.map(cap)}</ul>`
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }) =>
-  html`${uses} ${uses === 1 ? 'use' : 'uses'} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
+  html`${plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
 const chips = { active: ['good', 'active'], granted: ['warn', 'granted'], waiting: ['warn', 'waiting for enforcer'] }
 const notices = {
-  disabled: 'Phone notifications not configured',
+  disabled: '',
   sending: 'Sending phone notification…',
-  sent: 'Phone notification accepted by ntfy',
-  failed: 'Phone notification failed — access remains locked',
+  sent: 'Phone notification sent',
+  failed: 'Phone notification failed. Access stays locked.',
 }
-const identity = (what: string, meta: unknown, path: string) =>
-  html`<li><div class="item"><div class="item-main"><strong>${what}</strong><div class="meta">${meta}</div></div><div class="item-actions">${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger')}</div></div></li>`
+const searchable = (...parts: unknown[]) => parts.join(' ').toLowerCase()
+const identity = (type: 'enforcer' | 'session', what: string, meta: unknown, kindList: string[], path: string) =>
+  html`<li data-search="${searchable(type, what, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${what}</div><div class="row-sub">${meta}</div></div><div class="row-act">${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger', `Revoke ${type} ${what}`, `Revoke ${type} ${what}? It stops working immediately and must be approved again.`)}</div></div></li>`
+const empty = (title: string, hint: string) => html`<li class="empty"><strong>${title}</strong>${hint}</li>`
+const bundleBlock = (id: string, name: string, list: Capability[], note: unknown = '') =>
+  list.length > 3
+    ? html`<details class="bundle" id="${id}"><summary><span class="chip solid">Bundle</span><strong>${name}</strong><span class="meta">${plural(list.length, 'capability', 'capabilities')}</span>${strip(list.map((m) => m.kind))}</summary>${caps(list)}</details>${note}`
+    : html`<div><span class="chip solid">Bundle</span> <strong>${name}</strong> <span class="meta">${plural(list.length, 'capability', 'capabilities')}</span></div>${caps(list)}${note}`
 
 export function adminPage(
   providers: Record<string, Provider>,
@@ -91,25 +283,42 @@ export function adminPage(
   selectedId?: string,
   nonce?: string,
   section = 'approvals',
+  bundles: Record<string, Capability[]> = {},
 ) {
   const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
   const activeSection = selected
     ? 'providers'
-    : ['access', 'identities', 'providers'].includes(section)
+    : ['access', 'identities', 'providers', 'bundles'].includes(section)
       ? section
       : 'approvals'
   const providerList = Object.entries(providers).map(
     ([id, provider]) =>
-      html`<li><div class="item"><div class="item-main"><strong>${id}</strong> <span class="meta">${provider.baseUrl}</span><div class="meta">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'} · read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}</div></div><div class="item-actions"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger')}</div></div></li>`,
+      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
   )
   const panels = livePanels(view)
   const identities = [
     ...view.enforcers
       .filter((e) => e.status === 'approved')
-      .map((e) => identity(`Enforcer ${e.name}`, html`${e.kinds.join(', ')} · ${activity(e)}`, `enforcers/${e.id}`)),
+      .map((e) =>
+        identity(
+          'enforcer',
+          `Enforcer ${e.name}`,
+          html`${e.kinds.join(', ')} · ${activity(e)}`,
+          [...e.kinds],
+          `enforcers/${e.id}`,
+        ),
+      ),
     ...view.sessions
       .filter((s) => s.status === 'approved')
-      .map((s) => identity(`Session ${s.label}`, html`LLM: ${s.llmName ?? 'not supplied'} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`, `sessions/${s.id}`)),
+      .map((s) =>
+        identity(
+          'session',
+          `Session ${s.label}`,
+          html`LLM: ${s.llmName ?? 'not supplied'} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`,
+          ['credential'],
+          `sessions/${s.id}`,
+        ),
+      ),
   ]
   const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication', ['bearer', 'header', 'basic'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
   const providerEditor = selected
@@ -118,83 +327,126 @@ export function adminPage(
   const addProvider = selected
     ? ''
     : html`<details><summary>Add provider</summary>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</details>`
+  const bundleForm = (id: string, list: Capability[]) =>
+    form(
+      '/admin/bundles/save',
+      html`${input('id', 'Bundle id', 'text', id)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" placeholder="credential notes.read">${list.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
+      'Save bundle',
+      'fields',
+    )
+  const bundleEditor = (id: string, list: Capability[]) =>
+    html`<details><summary>${id ? 'Edit members' : 'Add bundle'}</summary>${bundleForm(id, list)}</details>`
+  const bundleList = Object.entries(bundles).map(
+    ([id, list]) =>
+      html`<li data-search="${searchable(id, list.map((m) => `${m.kind} ${m.ref}`).join(' '))}" data-kinds="${[...new Set(list.map((m) => m.kind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div><div class="row-sub">${plural(list.length, 'member', 'members')}, granted together by one approval</div></div><div class="row-act">${form('/admin/bundles/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete bundle ${id}`, `Delete bundle ${id}? Agents can no longer request it. Existing leases stay.`)}</div></div><details id="bundle-${id}"><summary>${strip(list.map((m) => m.kind))}<span class="meta">Members and editing</span></summary>${caps(list)}${bundleForm(id, list)}</details></li>`,
+  )
   const nav = html`<nav class="nav" aria-label="Admin sections">${[
     ['approvals', 'Approvals'],
     ['access', 'Leases'],
     ['identities', 'Identities'],
     ['providers', 'Providers'],
+    ['bundles', 'Bundles'],
   ].map(
     ([id, label]) =>
-      html`<a href="/admin?section=${id}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}</a>`,
+      html`<a href="/admin?section=${id}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
   )}</nav>`
+  const tools = (withKinds: boolean) =>
+    html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, ref or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
   const content =
     activeSection === 'access'
-      ? html`<section class="card"><div id="leases">${raw(panels.leases)}</div></section>`
+      ? html`${tools(true)}<section class="panel wide"><div id="leases">${raw(panels.leases)}</div></section>`
       : activeSection === 'identities'
-        ? html`<section class="card"><h2>Approved identities</h2><ul>${identities.length ? identities : html`<li class="meta">No approved identities</li>`}</ul></section>`
+        ? html`${tools(false)}<section class="panel"><h2>Approved identities</h2><ul class="rows">${identities.length ? identities : empty('No approved identities', 'Enforcers and sessions appear here after you approve them, and can be revoked.')}</ul></section>`
         : activeSection === 'providers'
-          ? html`<section class="card"><h2>Providers</h2>${providerEditor}<ul>${providerList.length ? providerList : html`<li class="meta">No providers configured</li>`}</ul>${addProvider}</section><p class="muted">Credentials stay on this server.</p>`
-          : html`<div class="layout"><section class="card" id="approvals">${raw(panels.approvals)}</section><section class="card"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
-  return page(
-    'Speaker',
-    html`${nav}<p id="live-status" class="meta" role="status">Connecting live updates…</p>${content}`,
-    nonce ?? '',
-  )
+          ? html`${tools(false)}<section class="panel"><h2>Providers</h2>${providerEditor}<ul class="rows">${providerList.length ? providerList : empty('No providers configured', 'Add a provider to let agents request access to an upstream API.')}</ul>${addProvider}</section><p class="muted">Credentials stay on this server.</p>`
+          : activeSection === 'bundles'
+            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2><ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', [])}</section><p class="muted">Changes apply to new requests; requests already pending keep their members.</p>`
+            : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
+  return page('Speaker', nav, content, nonce ?? '')
 }
 
 export function livePanels({ enforcers, sessions, requests, leases }: View) {
-  const row = (id: string, main: unknown, actions: unknown) =>
-    html`<li id="${id}"><div class="item"><div class="item-main">${main}</div><div class="item-actions">${actions}</div></div></li>`
-  const decide = (path: string, picker: unknown) =>
-    html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="decision-fields">${picker}</div><div class="decision-buttons"><button>Approve</button><button class="deny" formaction="/admin/${path}/deny">Deny</button></div></form>`
+  const decide = (path: string, picker: unknown, subject: string, approve = 'Approve') =>
+    html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/deny" aria-label="Deny: ${subject}">Deny</button></div></form>`
+  const ticket = (
+    id: string,
+    search: string,
+    kindList: readonly string[],
+    head: unknown,
+    body: unknown,
+    stub: unknown,
+  ) =>
+    html`<li class="ticket" id="${id}" data-search="${search.toLowerCase()}" data-kinds="${kindList.join(' ')}"><div class="t-head">${head}</div>${body}<div class="stub">${stub}</div></li>`
   const items = [
     ...enforcers
       .filter((e) => e.status === 'pending')
       .map((e) =>
-        row(
+        ticket(
           `enforcer-${e.id}`,
-          html`<strong>Enforcer ${e.name}</strong><div class="meta">Kinds: ${e.kinds.join(', ') || 'none'}</div>`,
-          decide(`enforcers/${e.id}`, ''),
+          `enforcer ${e.name} ${e.kinds.join(' ')}`,
+          e.kinds,
+          html`${mark('enforcer')}<strong>Enforcer ${e.name}</strong><span class="chip">wants to enforce</span>`,
+          html`<div class="t-grant"><div class="meta">Approving lets this enforcer apply leases for ${e.kinds.join(', ') || 'no kinds'} ${strip(e.kinds)}</div></div>`,
+          decide(`enforcers/${e.id}`, '', `enforcer ${e.name}`),
         ),
       ),
     ...sessions
       .filter((s) => s.status === 'pending')
       .map((s) =>
-        row(
+        ticket(
           `session-${s.id}`,
-          html`<strong>Session ${s.label}</strong><div class="meta">LLM: ${s.llmName ?? 'not supplied'} · Credential access only</div>`,
+          `session ${s.label} ${s.llmName ?? ''}`,
+          ['credential'],
+          html`${mark('session')}<strong>Session ${s.label}</strong><span class="chip">wants to connect</span>`,
+          html`<div class="t-grant"><div class="meta">LLM: ${s.llmName ?? 'not supplied'} · Can request credential access only</div></div>`,
           decide(
             `sessions/${s.id}`,
             html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
+            `session ${s.label}`,
           ),
         ),
       ),
     ...requests
       .filter((r) => r.status === 'pending')
-      .map((r) =>
-        row(
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((r) => {
+        const note = r.bundle
+          ? html`<div class="meta">One approval grants all ${r.members.length} for the chosen time.</div>`
+          : ''
+        return ticket(
           `request-${r.id}`,
-          html`<strong>${r.label}</strong>${r.llmName ? html` <span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html` <span class="meta">via ${r.enforcer}</span>` : ''}<div>${r.bundle ? html`Bundle ${r.bundle}<div class="meta">${caps(r.members)}</div>` : caps(r.members)}</div>${r.method ? html`<div class="meta">${r.method} ${r.path}</div>` : ''}<div class="meta">${r.reason || 'No reason supplied yet'}</div><div class="meta">${notices[r.notification]}</div>`,
+          `${r.label} ${r.llmName ?? ''} ${r.enforcer ?? ''} ${r.bundle ?? ''} ${r.reason} ${r.members.map((m) => `${m.kind} ${m.ref}`).join(' ')}`,
+          r.members.map((m) => m.kind),
+          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
+          html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}`}</div>${
+            r.reason.length > 120
+              ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
+              : html`<p class="why"><span class="meta">Reason:</span> ${r.reason || html`<span class="meta">none supplied yet</span>`}</p>`
+          }${r.method || notices[r.notification] ? html`<div class="t-meta">${r.method ? html`<span class="meta">Triggered by <code>${r.method} ${r.path}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
           decide(
             `requests/${r.id}`,
             html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
+            r.bundle ? `bundle ${r.bundle}` : r.label,
+            r.members.length > 1 ? `Approve all ${r.members.length}` : 'Approve',
           ),
-        ),
-      ),
+        )
+      }),
   ]
-  const leaseList = leases.map((l) =>
-    row(
-      `lease-${l.id}`,
-      html`<strong>${l.label}</strong>${l.llmName ? html`<div class="meta">LLM: ${l.llmName}</div>` : ''}<div>${l.kind} ${l.ref}</div><div class="meta">${l.kind === 'credential' ? html`${activity(l)} · ` : ''}${expiry(l.expiresAt)} · <span class="chip ${chips[l.state][0]}">${chips[l.state][1]}</span></div>`,
-      form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger'),
-    ),
+  // Soonest expiry first so what is about to lapse is on top; "until revoked" leases last.
+  const ordered = [...leases].sort(
+    (a, b) => (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity),
   )
+  const leaseList = ordered.map((l) => {
+    const [tone, state] = chips[l.state]
+    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
+  })
   return {
+    pending: items.length,
     approvals: String(
-      html`<h2>Approvals <span class="meta">${items.length} pending</span></h2><ul>${items.length ? items : html`<li class="meta">No requests are waiting. New approvals appear here when an agent asks for access.</li>`}</ul>`,
+      html`<h2>Approvals ${items.length ? html`<span class="chip warn">${items.length} pending</span>` : ''}</h2><ul class="rows">${items.length ? items : empty('Nothing to approve', 'New requests appear here as soon as an agent asks for access. This page updates by itself.')}</ul>`,
     ),
     leases: String(
-      html`<h2>Leases</h2><ul>${leaseList.length ? leaseList : html`<li class="meta">No active leases</li>`}</ul>`,
+      html`<h2>Leases ${leaseList.length ? html`<span class="meta">${leaseList.length} active</span>` : ''}</h2><ul class="rows">${leaseList.length ? leaseList : empty('No active leases', 'Approved access is listed here until it expires or you revoke it.')}</ul>`,
     ),
   }
 }

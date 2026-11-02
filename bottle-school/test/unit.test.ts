@@ -260,17 +260,15 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.throws(() => loadTemplates(path), /repeat an id/);
 });
 
-test("guest configuration loads one consolidated skill and the curated MCP tools", () => {
+test("guest configuration loads the access-and-creds skill alone and the curated MCP tools", () => {
   const config = loadConfig(writeConfig());
   const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
   const directory = join(config.configRoot, "guest");
   writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen" }, new Map(), [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
   assert.equal(args.filter((arg) => arg === "--skill").length, 1);
-  assert.ok(args.includes("/etc/pi-v2/skills/task-workflow"));
+  assert.ok(args.includes("/etc/pi-v2/skills/access-and-creds"));
+  assert.match(readFileSync(join(directory, "skills/access-and-creds/SKILL.md"), "utf8"), /^name: access-and-creds$/m);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
-  const skill = readFileSync(join(directory, "skills/task-workflow/SKILL.md"), "utf8");
-  for (const heading of ["# Task workflow", "# Requesting a capability", "# Network access"])
-    assert.ok(skill.includes(heading));
 });

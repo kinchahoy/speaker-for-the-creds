@@ -1,4 +1,36 @@
 {
+  "packages": [
+    {
+      "kind": "site",
+      "ref": "pypi.org"
+    },
+    {
+      "kind": "site",
+      "ref": "files.pythonhosted.org"
+    },
+    {
+      "kind": "site",
+      "ref": "registry.npmjs.org"
+    }
+  ],
+  "github-read": [
+    {
+      "kind": "site",
+      "ref": "github.com"
+    },
+    {
+      "kind": "site",
+      "ref": "codeload.github.com"
+    },
+    {
+      "kind": "site",
+      "ref": "raw.githubusercontent.com"
+    },
+    {
+      "kind": "secret",
+      "ref": "GITHUB_READ@api.github.com"
+    }
+  ],
   "developer": [
     {
       "kind": "site",
@@ -37,55 +69,33 @@
       "ref": "context7"
     }
   ],
-  "github-read": [
-    {
-      "kind": "site",
-      "ref": "*.github.com"
-    },
-    {
-      "kind": "secret",
-      "ref": "GITHUB_READ@api.github.com"
-    },
-    {
-      "kind": "folder",
-      "ref": "projects"
-    }
-  ],
-  "packages": [
-    {
-      "kind": "site",
-      "ref": "pypi.org"
-    },
-    {
-      "kind": "site",
-      "ref": "files.pythonhosted.org"
-    },
-    {
-      "kind": "site",
-      "ref": "registry.npmjs.org"
-    }
-  ],
   "research": [
+    {
+      "kind": "mcp",
+      "ref": "parallel-search"
+    },
     {
       "kind": "site",
       "ref": "*.wikipedia.org"
     },
     {
       "kind": "site",
-      "ref": "*.arxiv.org"
+      "ref": "arxiv.org"
     },
     {
       "kind": "site",
-      "ref": "openrouter.ai"
-    },
-    {
-      "kind": "secret",
-      "ref": "OPENROUTER@openrouter.ai"
-    },
-    {
-      "kind": "folder",
-      "ref": "papers"
+      "ref": "export.arxiv.org"
     }
   ],
-  "offline": []
+  "offline": [],
+  "notes-read": [
+    {
+      "kind": "credential",
+      "ref": "obsidian.read"
+    },
+    {
+      "kind": "credential",
+      "ref": "karakeep.read"
+    }
+  ]
 }

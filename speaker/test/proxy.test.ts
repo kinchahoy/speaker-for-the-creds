@@ -213,6 +213,44 @@ test('a bundle request creates one lease per member with the same expiry', async
   assert.equal(new Set(leases.map((l) => l.expiresAt)).size, 1)
 })
 
+test('bundle listing shows a caller only bundles it may request in full', async (t) => {
+  const f = await setup(t, {
+    pack: [{ kind: 'site', ref: 'a.example' }],
+    notes: [{ kind: 'credential', ref: 'notes.read' }],
+  })
+  const { subject } = await approvedEnforcer(f)
+  const listed = async (token: string) =>
+    Object.keys(await (await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${token}` } })).json())
+  assert.deepEqual((await listed(subject.token)).sort(), ['notes', 'pack'])
+  const { id } = (await (
+    await f.call('/_speaker/sessions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
+    })
+  ).json()) as { id: string }
+  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
+  assert.deepEqual(await listed('st'), ['notes'])
+})
+
+test('the admin saves and deletes bundles without a restart', async (t) => {
+  const f = await setup(t)
+  const { subject } = await approvedEnforcer(f)
+  const listed = async () =>
+    (await (
+      await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${subject.token}` } })
+    ).json()) as Record<string, { kind: string; ref: string }[]>
+  const saved = await f.ownerForm('/bundles/save', { id: 'pack', members: 'site a.example\nsite b.example' })
+  assert.equal(saved.status, 303)
+  assert.deepEqual((await listed()).pack, [
+    { kind: 'site', ref: 'a.example' },
+    { kind: 'site', ref: 'b.example' },
+  ])
+  assert.equal((await f.ownerForm('/bundles/save', { id: 'bad', members: 'nonsense x' })).status, 400)
+  assert.equal((await f.ownerForm('/bundles/delete', { id: 'pack' })).status, 303)
+  assert.deepEqual(await listed(), {})
+})
+
 test('the proxy returns redirects without following them', async (t) => {
   const f = await setup(t)
   const { id } = (await (
