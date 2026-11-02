@@ -102,7 +102,7 @@ test('session enroll, approval, request approval, then the proxy injects the cre
   const enrolled = await f.call('/_speaker/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label: 'big agent', tokenHash: sha('session-token'), duration: '1h' }),
+    body: JSON.stringify({ label: 'big agent', llmName: 'Test LLM', tokenHash: sha('session-token'), duration: '1h' }),
   })
   const { id } = (await enrolled.json()) as { id: string }
   const call = () => f.call('/notes/things?q=1', { headers: bearer('session-token') })
@@ -125,7 +125,7 @@ test('a session cannot request a site capability', async (t) => {
     await f.call('/_speaker/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 's', tokenHash: sha('st'), duration: '1h' }),
+      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
     })
   ).json()) as { id: string }
   await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
@@ -219,7 +219,7 @@ test('the proxy returns redirects without following them', async (t) => {
     await f.call('/_speaker/sessions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 's', tokenHash: sha('st'), duration: '1h' }),
+      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
     })
   ).json()) as { id: string }
   await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })

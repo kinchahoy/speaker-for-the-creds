@@ -71,11 +71,15 @@ const enforcerSchema = z.object({
 const sessionSchema = z.object({
   id: idSchema,
   label: z.string().trim().min(1).max(200),
+  llmName: z.string().trim().min(1).max(120).optional(),
   tokenHash: hashSchema,
   duration: durationSchema,
   status: statusSchema,
   expiresAt: z.string().nullable(),
 })
+const sessionEnrollmentSchema = sessionSchema
+  .pick({ label: true, tokenHash: true, duration: true })
+  .extend({ llmName: z.string().trim().min(1).max(120) })
 const subjectSchema = z.object({ id: idSchema, label: z.string(), enforcer: idSchema, tokenHash: hashSchema })
 const leaseSchema = z.object({
   id: idSchema,
@@ -84,18 +88,27 @@ const leaseSchema = z.object({
   ref: z.string(),
   expiresAt: z.string().nullable(),
 })
+const usageSchema = z.object({ uses: z.number().int().nonnegative(), lastUsedAt: z.number().int().nonnegative().nullable() })
+const usageStoreSchema = z.object({
+  leases: z.record(idSchema, usageSchema).default({}),
+  identities: z.record(idSchema, usageSchema).default({}),
+})
 export type Provider = z.infer<typeof providerSchema>
 export type Capability = z.infer<typeof capabilitySchema>
 export type Enforcer = z.infer<typeof enforcerSchema>
 export type Session = z.infer<typeof sessionSchema>
 export type Lease = z.infer<typeof leaseSchema>
-export type LeaseView = Lease & { label: string; state: 'active' | 'granted' | 'waiting' }
+type Usage = { uses: number; lastUsedAt: number | null }
+export type LeaseView = Lease & Usage & { label: string; llmName?: string; state: 'active' | 'granted' | 'waiting' }
+type EnforcerView = Enforcer & Usage
+type SessionView = Session & Usage
 const decisionSchema = z.object({ duration: adminDurationSchema, permanent: z.literal('on').optional() })
 type Duration = z.infer<typeof adminDurationSchema>
 export type Pending = {
   id: string
   subjectId: string
   label: string
+  llmName?: string
   enforcer?: string
   members: Capability[]
   bundle?: string
@@ -107,7 +120,7 @@ export type Pending = {
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
 }
-export type View = { enforcers: Enforcer[]; sessions: Session[]; requests: Pending[]; leases: LeaseView[] }
+export type View = { enforcers: EnforcerView[]; sessions: SessionView[]; requests: Pending[]; leases: LeaseView[] }
 type Caller = { role: 'enforcer'; enforcer: Enforcer } | { role: 'subject'; id: string; kinds: string[] }
 type Env = { Variables: { caller: Caller } }
 const demoSecret = 'speaker-demo-credential-not-for-real-services'
@@ -186,6 +199,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const sessions = await loadList('sessions.json', sessionSchema)
   const subjects = await loadList('subjects.json', subjectSchema)
   let leases = await loadList('permanent-leases.json', leaseSchema)
+  const storedUsage = usageStoreSchema.parse(JSON.parse((await optionalFile(file('usage.json'))) ?? '{}'))
   const secrets = new Map(
     await Promise.all(
       Object.entries(providers).map(
@@ -196,6 +210,18 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const pending = new Map<string, Pending>()
   const sockets = new Map<string, WSContext>()
   const applied = new Map<string, Set<string>>()
+  const leaseUsage = new Map(Object.entries(storedUsage.leases))
+  const identityUsage = new Map(Object.entries(storedUsage.identities))
+  const emptyUsage = (): Usage => ({ uses: 0, lastUsedAt: null })
+  const useStats = (map: Map<string, Usage>, id: string) => map.get(id) ?? emptyUsage()
+  let usageWrites: Promise<unknown> = Promise.resolve()
+  const persistUsage = () => {
+    const result = usageWrites.then(() =>
+      save(file('usage.json'), { leases: Object.fromEntries(leaseUsage), identities: Object.fromEntries(identityUsage) }),
+    )
+    usageWrites = result.catch(() => {})
+    return result
+  }
   let version = 0
   const rid = () => randomBytes(16).toString('hex')
   const unexpired = (item: { expiresAt: string | null }) =>
@@ -240,15 +266,29 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     version++
     push()
   }
-  const hasLease = (subjectId: string, kind: string, ref: string) =>
-    [...leases.values()].some((l) => unexpired(l) && l.subjectId === subjectId && l.kind === kind && l.ref === ref)
+  const matchingLease = (subjectId: string, kind: string, ref: string) =>
+    [...leases.values()].find((l) => unexpired(l) && l.subjectId === subjectId && l.kind === kind && l.ref === ref)
+  const hasLease = (subjectId: string, kind: string, ref: string) => Boolean(matchingLease(subjectId, kind, ref))
+  const recordUse = async (leaseId: string, subjectId: string) => {
+    const now = Date.now()
+    for (const [map, id] of [[leaseUsage, leaseId], [identityUsage, subjectId]] as const) {
+      const previous = useStats(map, id)
+      map.set(id, { uses: previous.uses + 1, lastUsedAt: now })
+    }
+    const enforcerId = subjects.get(subjectId)?.enforcer
+    if (enforcerId) {
+      const previous = useStats(identityUsage, enforcerId)
+      identityUsage.set(enforcerId, { uses: previous.uses + 1, lastUsedAt: now })
+    }
+    await persistUsage()
+  }
   const removeLeases = (matches: (lease: Lease) => boolean) =>
     serial(() => commitLeases(new Map([...leases].filter(([, lease]) => !matches(lease)))))
   const owner = (subjectId: string) => {
     const subject = subjects.get(subjectId)
-    if (subject) return { label: subject.label, enforcer: enforcers.get(subject.enforcer)?.name }
+    if (subject) return { label: subject.label, llmName: undefined, enforcer: enforcers.get(subject.enforcer)?.name }
     const session = sessions.get(subjectId)
-    if (session) return { label: session.label, enforcer: undefined }
+    if (session) return { label: session.label, llmName: session.llmName, enforcer: undefined }
     throw new HTTPException(404, { message: 'Unknown subject' })
   }
   const requestStatus = (request: Pending) => {
@@ -264,12 +304,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return applied.get(enforcerId)?.has(lease.id) ? 'active' : 'granted'
   }
   const view = (): View => ({
-    enforcers: [...enforcers.values()],
-    sessions: [...sessions.values()],
+    enforcers: [...enforcers.values()].map((enforcer) => ({ ...enforcer, ...useStats(identityUsage, enforcer.id) })),
+    sessions: [...sessions.values()].map((session) => ({ ...session, ...useStats(identityUsage, session.id) })),
     requests: [...pending.values()].map((request) => ({ ...request, status: requestStatus(request) })),
     leases: [...leases.values()]
       .filter(unexpired)
-      .map((lease) => ({ ...lease, label: owner(lease.subjectId).label, state: leaseState(lease) })),
+      .map((lease) => {
+        const { label, llmName } = owner(lease.subjectId)
+        return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
+      }),
   })
   function pendingRequest(id: string) {
     const request = pending.get(id)
@@ -481,12 +524,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return c.json({ id: enforcer.id, status: enforcer.status }, 201)
   })
   app.post('/_speaker/sessions', async (c) => {
-    const input = sessionSchema.pick({ label: true, tokenHash: true, duration: true }).parse(await c.req.json())
+    const input = sessionEnrollmentSchema.parse(await c.req.json())
     const session: Session = { id: rid(), ...input, status: 'pending', expiresAt: null }
     sessions.set(session.id, session)
     await saveList('sessions.json', sessions)
-    audit('session_enrolled', { session: session.id, label: session.label })
-    void notify(`Session "${session.label}" wants access`, `session-${session.id}`)
+    audit('session_enrolled', { session: session.id, label: session.label, llmName: session.llmName })
+    void notify(`Session "${session.label}" (${session.llmName}) wants access`, `session-${session.id}`)
     return c.json({ id: session.id }, 201)
   })
   app.get('/_speaker/sessions/:id', (c) => {
@@ -779,6 +822,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       )
       return c.json({ error: 'approval_required', capability, requestId: request.id }, 403)
     }
+    const lease = rule === 'approval' ? matchingLease(caller.id, 'credential', capability) : undefined
     const base = new URL(provider.baseUrl),
       target = new URL(base.origin)
     const prefix = `${base.pathname.replace(/\/$/, '')}/`
@@ -786,6 +830,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     target.search = incoming.search
     if (target.origin !== base.origin || !target.pathname.startsWith(prefix))
       return c.json({ error: 'invalid_provider_url' }, 400)
+    if (lease) await recordUse(lease.id, caller.id)
     const headers = new Headers(c.req.raw.headers)
     const hopHeaders = [
       'connection',

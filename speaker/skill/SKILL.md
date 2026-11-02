@@ -12,7 +12,7 @@ Use speaker only when the task needs a homelab service. Keep tokens out of outpu
 1. Check for `${XDG_STATE_HOME:-$HOME/.local/state}/speaker/token`. If it exists, skip to step 5.
 2. Generate a token: `mkdir -p -m 700 "$dir" && openssl rand -hex 32 > "$dir/token" && chmod 600 "$dir/token"`.
 3. Compute `tokenHash` as the token's SHA-256 (`printf %s "$(cat "$dir/token")" | sha256sum`).
-4. `POST $SPEAKER_URL/_speaker/sessions` with `{"label":"<project or task>","tokenHash":"<hash>","duration":"1h"}`. Give the user the returned `id` and ask them to approve it in `/admin`.
+4. Identify your LLM/model name accurately (for example, the provider and model version). `POST $SPEAKER_URL/_speaker/sessions` with `{"label":"<project or task>","llmName":"<LLM/model name>","tokenHash":"<hash>","duration":"1h"}`. Give the user the returned `id` and ask them to approve it in `/admin`.
 5. Poll `GET /_speaker/sessions/<id>` until `status` is `approved`. Stop on `denied` or an `expiresAt` in the past, and enroll again.
 
 Send `Authorization: Bearer <token>` on every other call. Read the token from the file inside the HTTP client or shell; do not paste its value into command arguments.

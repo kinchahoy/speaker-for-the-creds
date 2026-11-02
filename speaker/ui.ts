@@ -23,6 +23,11 @@ function updateTimes() {
     const remaining = seconds >= 86400 ? Math.ceil(seconds / 86400) + 'd' : seconds >= 3600 ? Math.ceil(seconds / 3600) + 'h' : seconds >= 60 ? Math.ceil(seconds / 60) + 'm' : seconds + 's';
     time.textContent = seconds ? remaining + ' remaining · expires ' + new Date(end).toLocaleString() : 'Expired';
   });
+  document.querySelectorAll('[data-last-used-at]').forEach(time => {
+    const seconds = Math.max(0, Math.floor((Date.now() - Number(time.dataset.lastUsedAt)) / 1000));
+    const age = seconds < 60 ? seconds + 's' : seconds < 3600 ? Math.floor(seconds / 60) + 'm' : seconds < 86400 ? Math.floor(seconds / 3600) + 'h' : Math.floor(seconds / 86400) + 'd';
+    time.textContent = age + ' ago';
+  });
 }
 async function refresh() {
   if (!document.hidden) {
@@ -67,6 +72,8 @@ const expiry = (at: string | null) =>
   at === null
     ? 'until revoked (human override)'
     : html`<time datetime="${at}" data-expires-at="${Date.parse(at)}">expires ${at}</time>`
+const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }) =>
+  html`${uses} ${uses === 1 ? 'use' : 'uses'} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
 const chips = { active: ['good', 'active'], granted: ['warn', 'granted'], waiting: ['warn', 'waiting for enforcer'] }
 const notices = {
   disabled: 'Phone notifications not configured',
@@ -74,7 +81,7 @@ const notices = {
   sent: 'Phone notification accepted by ntfy',
   failed: 'Phone notification failed — access remains locked',
 }
-const identity = (what: string, meta: string, path: string) =>
+const identity = (what: string, meta: unknown, path: string) =>
   html`<li><div class="item"><div class="item-main"><strong>${what}</strong><div class="meta">${meta}</div></div><div class="item-actions">${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger')}</div></div></li>`
 
 export function adminPage(
@@ -99,10 +106,10 @@ export function adminPage(
   const identities = [
     ...view.enforcers
       .filter((e) => e.status === 'approved')
-      .map((e) => identity(`Enforcer ${e.name}`, e.kinds.join(', '), `enforcers/${e.id}`)),
+      .map((e) => identity(`Enforcer ${e.name}`, html`${e.kinds.join(', ')} · ${activity(e)}`, `enforcers/${e.id}`)),
     ...view.sessions
       .filter((s) => s.status === 'approved')
-      .map((s) => identity(`Session ${s.label}`, s.expiresAt ?? 'until revoked', `sessions/${s.id}`)),
+      .map((s) => identity(`Session ${s.label}`, html`LLM: ${s.llmName ?? 'not supplied'} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`, `sessions/${s.id}`)),
   ]
   const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication', ['bearer', 'header', 'basic'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
   const providerEditor = selected
@@ -155,7 +162,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
       .map((s) =>
         row(
           `session-${s.id}`,
-          html`<strong>Session ${s.label}</strong><div class="meta">Credential access only</div>`,
+          html`<strong>Session ${s.label}</strong><div class="meta">LLM: ${s.llmName ?? 'not supplied'} · Credential access only</div>`,
           decide(
             `sessions/${s.id}`,
             html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
@@ -167,7 +174,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
       .map((r) =>
         row(
           `request-${r.id}`,
-          html`<strong>${r.label}</strong>${r.enforcer ? html` <span class="meta">via ${r.enforcer}</span>` : ''}<div>${r.bundle ? html`Bundle ${r.bundle}<div class="meta">${caps(r.members)}</div>` : caps(r.members)}</div>${r.method ? html`<div class="meta">${r.method} ${r.path}</div>` : ''}<div class="meta">${r.reason || 'No reason supplied yet'}</div><div class="meta">${notices[r.notification]}</div>`,
+          html`<strong>${r.label}</strong>${r.llmName ? html` <span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html` <span class="meta">via ${r.enforcer}</span>` : ''}<div>${r.bundle ? html`Bundle ${r.bundle}<div class="meta">${caps(r.members)}</div>` : caps(r.members)}</div>${r.method ? html`<div class="meta">${r.method} ${r.path}</div>` : ''}<div class="meta">${r.reason || 'No reason supplied yet'}</div><div class="meta">${notices[r.notification]}</div>`,
           decide(
             `requests/${r.id}`,
             html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
@@ -178,7 +185,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
   const leaseList = leases.map((l) =>
     row(
       `lease-${l.id}`,
-      html`<strong>${l.label}</strong><div>${l.kind} ${l.ref}</div><div class="meta">${expiry(l.expiresAt)} · <span class="chip ${chips[l.state][0]}">${chips[l.state][1]}</span></div>`,
+      html`<strong>${l.label}</strong>${l.llmName ? html`<div class="meta">LLM: ${l.llmName}</div>` : ''}<div>${l.kind} ${l.ref}</div><div class="meta">${l.kind === 'credential' ? html`${activity(l)} · ` : ''}${expiry(l.expiresAt)} · <span class="chip ${chips[l.state][0]}">${chips[l.state][1]}</span></div>`,
       form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger'),
     ),
   )
