@@ -1,35 +1,60 @@
 ---
-name: speaker
-description: Enroll this session with the user's speaker credential service, then request approved access to homelab APIs or HTTP MCP servers.
+name: access-and-creds
+description: Get owner-approved access through speaker: authenticated homelab APIs and HTTP MCP servers (for example Obsidian notes), plus network sites, secrets, folders, and MCP servers inside a sandbox. Use when a task needs a service you have no credential for, or a call returns 403.
 ---
 
-# speaker access
+# Access and credentials
 
-Use speaker only when the task needs a homelab service. Keep tokens out of output, notes, and generated files.
+This skill gets you access you do not have, through the owner's speaker service. Speaker holds the real credentials. The owner approves every grant. You never see an upstream key, so never ask for one and never use the admin API. Keep your speaker token out of output, notes, and files.
 
-## Enroll once per session
+You may already hold a lease, or you may not. Do not assume either way: make the call, and request access on a 403.
 
-1. Check for `${XDG_STATE_HOME:-$HOME/.local/state}/speaker/token`. If it exists, skip to step 5.
-2. Generate a token: `mkdir -p -m 700 "$dir" && openssl rand -hex 32 > "$dir/token" && chmod 600 "$dir/token"`.
-3. Compute `tokenHash` as the token's SHA-256 (`printf %s "$(cat "$dir/token")" | sha256sum`).
-4. Identify your LLM/model name accurately (for example, the provider and model version). `POST $SPEAKER_URL/_speaker/sessions` with `{"label":"<project or task>","llmName":"<LLM/model name>","tokenHash":"<hash>","duration":"1h"}`. Give the user the returned `id` and ask them to approve it in `/admin`.
-5. Poll `GET /_speaker/sessions/<id>` until `status` is `approved`. Stop on `denied` or an `expiresAt` in the past, and enroll again.
+## Where you run
 
-Send `Authorization: Bearer <token>` on every other call. Read the token from the file inside the HTTP client or shell; do not paste its value into command arguments.
+- `BOTTLE_SCHOOL=1`: a sandbox. You are already enrolled, `SPEAKER_URL` and `SPEAKER_TOKEN` are set, and you may request any kind in the table below. Use the `request_capability` tool for requests.
+- Otherwise: a direct session. Enroll once (below). You may request only `credential`.
 
-## Use
+Send `Authorization: Bearer <token>` on every call. The token is `$SPEAKER_TOKEN` or the file `${XDG_STATE_HOME:-$HOME/.local/state}/speaker/token`. Read it inside the shell or HTTP client; do not paste it into arguments.
 
-- `GET /_speaker/providers` lists services, their policy, and `hasGuide`.
-- Read `GET /_speaker/providers/<name>/guide` only when the task needs that service.
-- Call `/<provider>/<path>`. The provider's base URL already includes its API prefix.
-- GET, HEAD, and OPTIONS use `<provider>.read`. Other methods use `<provider>.write`.
+### Enroll (direct session only)
+
+1. `mkdir -p -m 700 "$dir" && openssl rand -hex 32 > "$dir/token" && chmod 600 "$dir/token"`, with `dir=${XDG_STATE_HOME:-$HOME/.local/state}/speaker`. Skip steps 1 to 3 when the file exists and its session is still approved.
+2. `tokenHash` is the token's SHA-256: `printf %s "$(cat "$dir/token")" | sha256sum`.
+3. `POST $SPEAKER_URL/_speaker/sessions` with `{"label":"<task>","llmName":"<your provider and model>","tokenHash":"<hash>","duration":"1h"}`. Give the user the returned `id` and ask them to approve it at `/admin`.
+4. Poll `GET /_speaker/sessions/<id>` until `status` is `approved`. On `denied` or a past `expiresAt`, enroll again.
+
+## Use a service
+
+1. `GET $SPEAKER_URL/_speaker/providers` lists providers (`obsidian`, `karakeep`, ...) with their policy and `hasGuide`.
+2. If `hasGuide` is true, read `GET /_speaker/providers/<name>/guide` for that provider's endpoints.
+3. Call `$SPEAKER_URL/<provider>/<path>`. The provider's base URL already includes its API prefix. Speaker adds the credential.
+4. GET, HEAD, and OPTIONS need `<provider>.read`. Every other method needs `<provider>.write`.
 
 ## Request access
 
-On `403` with `approval_required`, or before first use:
+On `403` with `approval_required`:
 
-1. `POST /_speaker/requests` with `{"capability":{"kind":"credential","ref":"<provider>.read"},"reason":"<why>","duration":"15m"}`. Choose the shortest duration the task needs (`15m`, `30m`, `1h`, `1d`, `7d`, `30d`). A session may request only `credential`.
+1. `POST $SPEAKER_URL/_speaker/requests` with `{"capability":{"kind":"<kind>","ref":"<ref>"},"reason":"<one sentence>","duration":"15m"}`. Use the shortest duration that fits: `15m`, `30m`, `1h`, `1d`, `7d`, `30d`.
 2. Tell the user the request needs approval at `/admin`.
-3. Poll `GET /_speaker/requests/<id>` at a modest interval until `approved`, then retry the call. Stop on `denied` or `expired`.
+3. Poll `GET /_speaker/requests/<id>` every 10 to 30 seconds until `approved`, then retry the call once. Stop on `denied` or `expired`.
+4. Ask once per capability. Do not loop, and do not reach a denied destination another way.
 
-Do not retry writes after a timeout without checking the outcome. Never use the admin API or ask for an upstream key.
+| Kind | `ref` | Example |
+| --- | --- | --- |
+| `credential` | `<provider>.read` or `<provider>.write` | `obsidian.read` |
+| `site` | `<host>` or `*.<domain>` | `pypi.org` |
+| `secret` | `<NAME>@<host>[,<host>]` | `GITHUB_TOKEN@api.github.com` |
+| `folder` | `<share>` or `<share>:rw` | `photos:rw` |
+| `mcp` | `<catalog id>` | `context7` |
+
+Only `credential` works in a direct session. `site`, `secret`, `folder`, and `mcp` work in a sandbox.
+
+### Bundles
+
+A bundle is a named set of capabilities the owner approves in one decision. `GET /_speaker/bundles` lists those you may request, with their members. When a task needs several of them, request `{"bundle":"<name>","reason":"...","duration":"1h"}` instead of one call per member. A bundle with any member you cannot request is not listed.
+
+## Example: read a note in Obsidian
+
+1. `GET /obsidian/<path from its guide>` returns `403 approval_required`.
+2. Request `{"kind":"credential","ref":"obsidian.read"}` with reason "read the meeting note", duration `15m`.
+3. After approval, repeat the GET. Request `obsidian.write` only when you must change a note, and check the result of a write before repeating it.

@@ -362,7 +362,7 @@ export const bootGuest = async (
 
   const vm = await VM.create({
     sandbox: {
-      vmm: process.env.PI_V2_VMM === "qemu" ? "qemu" : "krun",
+      vmm: process.env.PI_V2_VMM === "krun" ? "krun" : "qemu",
       console: "none",
       imagePath: config.guestImage,
     },
@@ -376,6 +376,7 @@ export const bootGuest = async (
           .filter(([name]) => name !== "SPEAKER_TOKEN")
           .map(([name, value]) => [`PI_V2_SECRET_${name}`, value]),
       ),
+      BOTTLE_SCHOOL: "1",
       SPEAKER_URL: speaker.url,
       SPEAKER_TOKEN: secretPlaceholders.SPEAKER_TOKEN!,
       ...env,

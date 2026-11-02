@@ -88,7 +88,10 @@ const leaseSchema = z.object({
   ref: z.string(),
   expiresAt: z.string().nullable(),
 })
-const usageSchema = z.object({ uses: z.number().int().nonnegative(), lastUsedAt: z.number().int().nonnegative().nullable() })
+const usageSchema = z.object({
+  uses: z.number().int().nonnegative(),
+  lastUsedAt: z.number().int().nonnegative().nullable(),
+})
 const usageStoreSchema = z.object({
   leases: z.record(idSchema, usageSchema).default({}),
   identities: z.record(idSchema, usageSchema).default({}),
@@ -217,7 +220,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   let usageWrites: Promise<unknown> = Promise.resolve()
   const persistUsage = () => {
     const result = usageWrites.then(() =>
-      save(file('usage.json'), { leases: Object.fromEntries(leaseUsage), identities: Object.fromEntries(identityUsage) }),
+      save(file('usage.json'), {
+        leases: Object.fromEntries(leaseUsage),
+        identities: Object.fromEntries(identityUsage),
+      }),
     )
     usageWrites = result.catch(() => {})
     return result
@@ -271,7 +277,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const hasLease = (subjectId: string, kind: string, ref: string) => Boolean(matchingLease(subjectId, kind, ref))
   const recordUse = async (leaseId: string, subjectId: string) => {
     const now = Date.now()
-    for (const [map, id] of [[leaseUsage, leaseId], [identityUsage, subjectId]] as const) {
+    for (const [map, id] of [
+      [leaseUsage, leaseId],
+      [identityUsage, subjectId],
+    ] as const) {
       const previous = useStats(map, id)
       map.set(id, { uses: previous.uses + 1, lastUsedAt: now })
     }
@@ -307,12 +316,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     enforcers: [...enforcers.values()].map((enforcer) => ({ ...enforcer, ...useStats(identityUsage, enforcer.id) })),
     sessions: [...sessions.values()].map((session) => ({ ...session, ...useStats(identityUsage, session.id) })),
     requests: [...pending.values()].map((request) => ({ ...request, status: requestStatus(request) })),
-    leases: [...leases.values()]
-      .filter(unexpired)
-      .map((lease) => {
-        const { label, llmName } = owner(lease.subjectId)
-        return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
-      }),
+    leases: [...leases.values()].filter(unexpired).map((lease) => {
+      const { label, llmName } = owner(lease.subjectId)
+      return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
+    }),
   })
   function pendingRequest(id: string) {
     const request = pending.get(id)
@@ -596,6 +603,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         c.req.query('provider'),
         c.get('secureHeadersNonce'),
         c.req.query('section'),
+        bundles,
       ),
     ),
   )
@@ -644,6 +652,32 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       if (request.members.some((m) => m.kind === 'credential' && m.ref.startsWith(`${id}.`))) pending.delete(key)
     audit('provider_deleted', { provider: id })
     return redirect(c)
+  })
+  const bundleFile = file('bundles.json')
+  admin.post('/bundles/save', async (c) => {
+    const input = z.object({ id: idSchema, members: z.string() }).parse(await fields(c))
+    const lines = input.members
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    const parsed = z
+      .array(capabilitySchema.extend({ kind: z.enum(kinds) }))
+      .min(1, 'List at least one member, one per line as "kind ref"')
+      .safeParse(lines.map((line) => ({ kind: line.split(/\s+/)[0], ref: line.replace(/^\S+\s*/, '') })))
+    if (!parsed.success)
+      throw new HTTPException(400, { message: `Each line must be "kind ref" with kind one of ${kinds.join(', ')}` })
+    bundles[input.id] = parsed.data
+    await save(bundleFile, bundles)
+    audit('bundle_saved', { bundle: input.id })
+    return c.redirect('/admin?section=bundles', 303)
+  })
+  admin.post('/bundles/delete', async (c) => {
+    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    if (!Object.hasOwn(bundles, id)) throw new HTTPException(404, { message: 'Unknown bundle' })
+    delete bundles[id]
+    await save(bundleFile, bundles)
+    audit('bundle_deleted', { bundle: id })
+    return c.redirect('/admin?section=bundles', 303)
   })
   const pendingIdentity = <T extends { status: string }>(store: Map<string, T>, id: string) => {
     const item = store.get(id)
@@ -748,6 +782,17 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     await deleteSubject(id)
     return c.json({ ok: true })
   })
+  const kindsOf = (caller: Caller) =>
+    caller.role === 'enforcer' ? ['credential', ...caller.enforcer.kinds] : caller.kinds
+  // Lists only bundles whose every member the caller may request, since a request with any other member is refused whole.
+  app.get('/_speaker/bundles', (c) => {
+    const allowed = kindsOf(c.get('caller'))
+    return c.json(
+      Object.fromEntries(
+        Object.entries(bundles).filter(([, members]) => members.every((m) => allowed.includes(m.kind))),
+      ),
+    )
+  })
   app.post('/_speaker/requests', async (c) => {
     const input = z
       .object({
@@ -760,17 +805,16 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .refine((value) => Boolean(value.capability) !== Boolean(value.bundle), 'Send either capability or bundle')
       .parse(await c.req.json())
     const caller = c.get('caller')
-    let subjectId: string, allowedKinds: string[]
+    const allowedKinds = kindsOf(caller)
+    let subjectId: string
     if (caller.role === 'enforcer') {
       if (!input.subjectId || subjects.get(input.subjectId)?.enforcer !== caller.enforcer.id)
         throw new HTTPException(404, { message: 'Subject not found' })
       subjectId = input.subjectId
-      allowedKinds = ['credential', ...caller.enforcer.kinds]
     } else {
       if (input.subjectId && input.subjectId !== caller.id)
         throw new HTTPException(403, { message: 'A session or subject requests only for itself' })
       subjectId = caller.id
-      allowedKinds = caller.kinds
     }
     const members = input.bundle ? bundles[input.bundle] : input.capability ? [input.capability] : undefined
     if (!members) throw new HTTPException(404, { message: 'Unknown bundle' })
