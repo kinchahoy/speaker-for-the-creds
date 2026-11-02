@@ -1,0 +1,24 @@
+{
+  "name": "speaker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.13",
+    "write-file-atomic": "^8.0.0",
+    "ws": "^8.22.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@types/node": "^26.6.5",
+    "@types/write-file-atomic": "^4.0.3",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=26.11.1"
+  }
+}

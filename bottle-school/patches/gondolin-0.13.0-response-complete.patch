@@ -1,0 +1,212 @@
+--- a/dist/src/qemu/contracts.d.ts
++++ b/dist/src/qemu/contracts.d.ts
+@@ -32,6 +32,19 @@
+     onRequest?: HttpOnRequestHook;
+     /** response rewrite hook */
+     onResponse?: (response: Response, request: Request) => Promise<Response | void> | Response | void;
++    /** maximum body bytes retained by the response-complete observer */
++    captureBodyLimit?: (request: { url: string; method: string }, direction: "request" | "response") => number;
++    /** observer called after a response body is forwarded or an upstream fetch fails */
++    onResponseComplete?: (response: Response | null, request: Request, info: {
++        durationMs: number;
++        bytes?: number;
++        complete: boolean;
++        error?: string;
++        requestBody?: Uint8Array;
++        requestBytes?: number;
++        requestLimit?: number;
++        responseLimit?: number;
++    }) => void | Promise<void>;
+ };
+ export type DnsMode = "open" | "trusted" | "synthetic";
+ export type SyntheticDnsHostMappingMode = "single" | "per-host";
+@@ -123,4 +136,4 @@
+     settleFlowResume(key: string, err?: Error): void;
+     abortTcpSession(key: string, session: TSession, reason: string): void;
+ };
+-//# sourceMappingURL=contracts.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=contracts.d.ts.map
+--- a/dist/src/qemu/http.js
++++ b/dist/src/qemu/http.js
+@@ -928,11 +928,26 @@
+                 protocol,
+             })
+             : null;
+-        const bodyInit = bodyStream
+-            ? bodyStream
+-            : currentRequest.body
+-                ? new Uint8Array(currentRequest.body)
+-                : undefined;
++        const requestLimit = Math.max(0, backend.options.httpHooks?.captureBodyLimit?.(currentRequest, "request") ?? 0);
++        const responseLimit = Math.max(0, backend.options.httpHooks?.captureBodyLimit?.(currentRequest, "response") ?? 0);
++        const requestChunks = [];
++        let requestBytes = 0;
++        let requestCapturedBytes = 0;
++        const captureRequestChunk = (chunk) => {
++            requestBytes += chunk.byteLength;
++            const remaining = requestLimit - requestCapturedBytes;
++            if (remaining > 0) {
++                const captured = Buffer.from(chunk.subarray(0, remaining));
++                requestChunks.push(captured);
++                requestCapturedBytes += captured.length;
++            }
++        };
++        const requestBodyStream = bodyStream?.pipeThrough(new TransformStream({
++            transform(chunk, controller) { captureRequestChunk(chunk); controller.enqueue(chunk); },
++        }));
++        if (!bodyStream && currentRequest.body) captureRequestChunk(currentRequest.body);
++        const capturedRequestBody = () => Buffer.concat(requestChunks);
++        const bodyInit = requestBodyStream ?? (currentRequest.body ? new Uint8Array(currentRequest.body) : undefined);
+         // Avoid duplicate Content-Length when Fetch derives framing for buffered bodies.
+         // Remove it from a copy so redirects and hooks keep the measured length.
+         const fetchHeaders = { ...currentRequest.headers };
+@@ -956,11 +971,12 @@
+             });
+         }
+         catch (err) {
++            const message = errorMessage(err);
++            await notifyResponseComplete(backend, null, currentRequest, { durationMs: Date.now() - responseStart, bytes: 0, complete: false, error: message, requestBody: capturedRequestBody(), requestBytes, requestLimit, responseLimit });
+             if (originKey) {
+                 evictSharedDispatcher(backend, originKey);
+             }
+             if (backend.options.debug) {
+-                const message = errorMessage(err);
+                 backend.emitDebug(`http bridge fetch failed ${currentRequest.method} ${currentUrl.toString()} (${message})`);
+             }
+             throw err;
+@@ -1052,12 +1068,23 @@
+             };
+             hookResponse = await applyResponseHooks(backend, hookResponse, currentRequest);
+             sendHttpResponse(write, normalizeHookResponseForGuest(hookResponse, currentRequest.method), httpVersion);
++            await notifyResponseComplete(backend, hookResponse, currentRequest, { durationMs: Date.now() - responseStart, bytes: 0, complete: true, requestBody: capturedRequestBody(), requestBytes, requestLimit, responseLimit });
+             return;
+         }
+         const canStream = Boolean(responseBodyStream) && !backend.options.httpHooks?.onResponse;
+         if (canStream && responseBodyStream) {
+             const allowChunked = httpVersion === "HTTP/1.1";
+             let streamedBytes = 0;
++            const responseChunks = [];
++            let responseCapturedBytes = 0;
++            const captureResponseChunk = (chunk) => {
++                const remaining = responseLimit - responseCapturedBytes;
++                if (remaining > 0) {
++                    const captured = Buffer.from(chunk.subarray(0, remaining));
++                    responseChunks.push(captured);
++                    responseCapturedBytes += captured.length;
++                }
++            };
+             try {
+                 if (contentEncoding || !hasValidLength) {
+                     delete responseHeaders["content-length"];
+@@ -1068,7 +1095,7 @@
+                             statusText: response.statusText || "OK",
+                             headers: responseHeaders,
+                         }, httpVersion);
+-                        streamedBytes = await sendChunkedBody(responseBodyStream, write, waitForWritable);
++                        streamedBytes = await sendChunkedBody(responseBodyStream, write, waitForWritable, captureResponseChunk);
+                     }
+                     else {
+                         delete responseHeaders["transfer-encoding"];
+@@ -1077,7 +1104,7 @@
+                             statusText: response.statusText || "OK",
+                             headers: responseHeaders,
+                         }, httpVersion);
+-                        streamedBytes = await sendStreamBody(responseBodyStream, write, waitForWritable);
++                        streamedBytes = await sendStreamBody(responseBodyStream, write, waitForWritable, captureResponseChunk);
+                     }
+                 }
+                 else {
+@@ -1088,10 +1115,16 @@
+                         statusText: response.statusText || "OK",
+                         headers: responseHeaders,
+                     }, httpVersion);
+-                    streamedBytes = await sendStreamBody(responseBodyStream, write, waitForWritable);
++                    streamedBytes = await sendStreamBody(responseBodyStream, write, waitForWritable, captureResponseChunk);
+                 }
+             }
+             catch (err) {
++                await notifyResponseComplete(backend, {
++                    status: response.status,
++                    statusText: response.statusText || "OK",
++                    headers: responseHeaders,
++                    body: Buffer.concat(responseChunks),
++                }, currentRequest, { durationMs: Date.now() - responseStart, bytes: streamedBytes, complete: false, error: err instanceof Error ? err.message : String(err), requestBody: capturedRequestBody(), requestBytes, requestLimit, responseLimit });
+                 if (originKey) {
+                     evictSharedDispatcher(backend, originKey);
+                 }
+@@ -1107,6 +1140,12 @@
+                 const elapsed = Date.now() - responseStart;
+                 backend.emitDebug(`http bridge body complete ${requestLabel} ${streamedBytes} bytes in ${elapsed}ms`);
+             }
++            await notifyResponseComplete(backend, {
++                status: response.status,
++                statusText: response.statusText || "OK",
++                headers: responseHeaders,
++                body: Buffer.concat(responseChunks),
++            }, currentRequest, { durationMs: Date.now() - responseStart, bytes: streamedBytes, complete: true, requestBody: capturedRequestBody(), requestBytes, requestLimit, responseLimit });
+             return;
+         }
+         const maxResponseBytes = backend.http.maxHttpResponseBodyBytes;
+@@ -1143,6 +1182,7 @@
+             const elapsed = Date.now() - responseStart;
+             backend.emitDebug(`http bridge body complete ${requestLabel} ${hookResponse.body.length} bytes in ${elapsed}ms`);
+         }
++        await notifyResponseComplete(backend, { ...hookResponse, body: hookResponse.body.subarray(0, responseLimit) }, currentRequest, { durationMs: Date.now() - responseStart, bytes: hookResponse.body.length, complete: true, requestBody: capturedRequestBody(), requestBytes, requestLimit, responseLimit });
+         return;
+     }
+ }
+@@ -1218,7 +1258,7 @@
+         hookRequest,
+     }, options, httpVersion);
+ }
+-async function sendChunkedBody(body, write, waitForWritable) {
++async function sendChunkedBody(body, write, waitForWritable, onChunk) {
+     const reader = body.getReader();
+     let total = 0;
+     try {
+@@ -1229,6 +1269,7 @@
+             if (!value || value.length === 0)
+                 continue;
+             total += value.length;
++            onChunk?.(value);
+             const sizeLine = Buffer.from(`${value.length.toString(16)}\r\n`);
+             write(sizeLine);
+             write(Buffer.from(value));
+@@ -1244,7 +1285,7 @@
+     write(Buffer.from("0\r\n\r\n"));
+     return total;
+ }
+-async function sendStreamBody(body, write, waitForWritable) {
++async function sendStreamBody(body, write, waitForWritable, onChunk) {
+     const reader = body.getReader();
+     let total = 0;
+     try {
+@@ -1255,6 +1296,7 @@
+             if (!value || value.length === 0)
+                 continue;
+             total += value.length;
++            onChunk?.(value);
+             write(Buffer.from(value));
+             if (waitForWritable) {
+                 await waitForWritable();
+@@ -1616,6 +1658,12 @@
+         maxBodyBytes: backend.http.maxHttpResponseBodyBytes,
+     });
+ }
++async function notifyResponseComplete(backend, response, request, info) {
++    const hook = backend.options.httpHooks?.onResponseComplete;
++    if (!hook)
++        return;
++    await hook(response ? internalHttpResponseToWebResponse(response) : null, internalHttpRequestToWebRequest({ ...request, body: null }), info);
++}
+ function normalizeHookResponseForGuest(response, requestMethod) {
+     const status = response.status;
+     const isHead = requestMethod.toUpperCase() === "HEAD";
+@@ -1655,4 +1703,4 @@
+         return Number(url.port);
+     return protocol === "https" ? 443 : 80;
+ }
+-//# sourceMappingURL=http.js.map
+\ No newline at end of file
++//# sourceMappingURL=http.js.map

@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.sync-conflicts/
+speaker/data/
+bottle-school/.runtime/
+bottle-school/volumes/
+bottle-school/config.json
+bottle-school/secrets.env
+
+# Local-only personal configuration and historical material.
+/personal/

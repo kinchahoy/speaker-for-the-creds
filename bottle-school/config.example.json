@@ -1,0 +1,45 @@
+{
+  "bindHost": "100.64.0.10",
+  "controlPort": 7001,
+  "guestPort": 7002,
+  "maxTasks": 3,
+  "guestImage": "pi-v5-guest",
+  "speaker": {
+    "url": "http://100.64.0.10:7000"
+  },
+  "configRoot": "/srv/pi-v2/config",
+  "stateRoot": "/srv/pi-v2/state",
+  "outputRoot": "/srv/pi-v2/output",
+  "shareRoots": {
+    "documents": "/home/me/Documents",
+    "projects": "/home/me/projects"
+  },
+  "localModel": {
+    "guestHost": "model.internal",
+    "upstream": "127.0.0.1:8080",
+    "models": [
+      {
+        "id": "qwen3-coder-30b",
+        "label": "Qwen3 Coder 30B"
+      }
+    ]
+  },
+  "hostedProviders": [
+    {
+      "id": "openrouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "host": "openrouter.ai",
+      "credential": "OPENROUTER",
+      "models": [
+        {
+          "id": "moonshotai/kimi-k2",
+          "label": "Kimi K2"
+        },
+        {
+          "id": "google/gemini-2.5-pro",
+          "label": "Gemini 2.5 Pro"
+        }
+      ]
+    }
+  ]
+}

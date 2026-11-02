@@ -1,0 +1,31 @@
+{
+  "mcps": {
+    "parallel-search": {
+      "label": "Parallel Web Search",
+      "transport": "streamable-http",
+      "url": "https://search.parallel.ai/mcp",
+      "tools": [
+        "web_search",
+        "web_fetch"
+      ],
+      "write": false
+    },
+    "context7": {
+      "label": "Context7 Library Docs",
+      "transport": "streamable-http",
+      "url": "https://mcp.context7.com/mcp",
+      "tools": [
+        "resolve-library-id",
+        "query-docs"
+      ],
+      "write": false
+    }
+  },
+  "plugins": {
+    "subagent@1": {
+      "label": "Subagents",
+      "guestPath": "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/index.ts",
+      "description": "Lets Pi run subagents inside this same VM under this same policy."
+    }
+  }
+}

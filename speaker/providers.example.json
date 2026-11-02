@@ -1,0 +1,47 @@
+{
+  "demo": {
+    "baseUrl": "http://127.0.0.1:3000/_demo-upstream",
+    "auth": {
+      "type": "bearer",
+      "secret": "demo"
+    },
+    "policy": {
+      "read": "always",
+      "write": "approval"
+    }
+  },
+  "karakeep": {
+    "baseUrl": "https://bookmarks.example.com/api/v1",
+    "guide": "# Karakeep\n\nBookmarks API under `/karakeep/`.\n\n- `GET /karakeep/bookmarks` lists bookmarks.\n- `GET /karakeep/bookmarks/search?q=<text>` searches them.\n- `POST /karakeep/bookmarks` with `{\"type\":\"link\",\"url\":\"...\"}` adds one.\n\nReads need `karakeep.read`. Other methods need `karakeep.write`.\n",
+    "auth": {
+      "type": "bearer",
+      "secret": "karakeep"
+    },
+    "policy": {
+      "read": "approval",
+      "write": "approval"
+    }
+  },
+  "homeassistant": {
+    "baseUrl": "https://homeassistant.example.com/api",
+    "auth": {
+      "type": "bearer",
+      "secret": "homeassistant"
+    },
+    "policy": {
+      "read": "approval",
+      "write": "approval"
+    }
+  },
+  "obsidian": {
+    "baseUrl": "https://notes.example.com/api",
+    "auth": {
+      "type": "bearer",
+      "secret": "obsidian"
+    },
+    "policy": {
+      "read": "approval",
+      "write": "approval"
+    }
+  }
+}

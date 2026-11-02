@@ -1,0 +1,31 @@
+{
+  "arch": "x86_64",
+  "distro": "alpine",
+  "alpine": {
+    "version": "3.23.0",
+    "kernelPackage": "linux-virt",
+    "kernelImage": "vmlinuz-virt",
+    "rootfsPackages": [],
+    "initramfsPackages": [],
+    "krunfwVersion": "v5.2.1"
+  },
+  "oci": {
+    "image": "pi-guest-base:v5",
+    "pullPolicy": "never"
+  },
+  "rootfs": {
+    "label": "gondolin-root"
+  },
+  "env": {
+    "PATH": "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PI_OFFLINE": "1",
+    "PI_TELEMETRY": "0",
+    "PI_SKIP_VERSION_CHECK": "1",
+    "UV_PYTHON_INSTALL_DIR": "/opt/uv/python",
+    "UV_PYTHON_PREFERENCE": "only-managed",
+    "UV_PYTHON_DOWNLOADS": "never",
+    "VIRTUAL_ENV": "/opt/uv/venv",
+    "GOTOOLCHAIN": "local",
+    "PLAYWRIGHT_BROWSERS_PATH": "/opt/pw-browsers"
+  }
+}

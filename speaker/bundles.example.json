@@ -1,0 +1,91 @@
+{
+  "developer": [
+    {
+      "kind": "site",
+      "ref": "pypi.org"
+    },
+    {
+      "kind": "site",
+      "ref": "files.pythonhosted.org"
+    },
+    {
+      "kind": "site",
+      "ref": "registry.npmjs.org"
+    },
+    {
+      "kind": "site",
+      "ref": "github.com"
+    },
+    {
+      "kind": "site",
+      "ref": "codeload.github.com"
+    },
+    {
+      "kind": "site",
+      "ref": "raw.githubusercontent.com"
+    },
+    {
+      "kind": "site",
+      "ref": "release-assets.githubusercontent.com"
+    },
+    {
+      "kind": "site",
+      "ref": "objects.githubusercontent.com"
+    },
+    {
+      "kind": "mcp",
+      "ref": "context7"
+    }
+  ],
+  "github-read": [
+    {
+      "kind": "site",
+      "ref": "*.github.com"
+    },
+    {
+      "kind": "secret",
+      "ref": "GITHUB_READ@api.github.com"
+    },
+    {
+      "kind": "folder",
+      "ref": "projects"
+    }
+  ],
+  "packages": [
+    {
+      "kind": "site",
+      "ref": "pypi.org"
+    },
+    {
+      "kind": "site",
+      "ref": "files.pythonhosted.org"
+    },
+    {
+      "kind": "site",
+      "ref": "registry.npmjs.org"
+    }
+  ],
+  "research": [
+    {
+      "kind": "site",
+      "ref": "*.wikipedia.org"
+    },
+    {
+      "kind": "site",
+      "ref": "*.arxiv.org"
+    },
+    {
+      "kind": "site",
+      "ref": "openrouter.ai"
+    },
+    {
+      "kind": "secret",
+      "ref": "OPENROUTER@openrouter.ai"
+    },
+    {
+      "kind": "folder",
+      "ref": "papers"
+    }
+  ],
+  "offline": []
+}

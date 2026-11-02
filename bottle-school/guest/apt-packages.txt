@@ -1,0 +1,46 @@
+# Ubuntu packages for the guest, one per line. Installed with --no-install-recommends.
+# Prefer mise (single binaries) or guest/python/requirements.in (Python libraries) when a tool ships there.
+
+# Base system and shell
+bash
+dtach
+ca-certificates
+curl
+wget
+git
+git-lfs
+file
+less
+tree
+procps
+xz-utils
+zip
+unzip
+openssh-client
+diffutils
+patch
+gawk
+bc
+rsync
+# Gondolin networking: init brings up eth0 with `ip` and runs udhcpc
+iproute2
+udhcpc
+
+# Build toolchain for native extensions
+build-essential
+pkg-config
+cmake
+ninja-build
+sqlite3
+jq
+universal-ctags
+
+# Documents, PDF, OCR, images, and media
+poppler-utils
+qpdf
+ghostscript
+tesseract-ocr
+tesseract-ocr-eng
+imagemagick
+graphviz
+ffmpeg

@@ -1,0 +1,67 @@
+[
+  {
+    "id": "developer",
+    "label": "Developer (packages, GitHub, Context7 docs)",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24
+    },
+    "plugins": [],
+    "bundle": "developer"
+  },
+  {
+    "id": "github-read",
+    "label": "GitHub read",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24
+    },
+    "plugins": [],
+    "bundle": "github-read"
+  },
+  {
+    "id": "offline",
+    "label": "Offline document analysis",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24
+    },
+    "plugins": [],
+    "bundle": "offline"
+  },
+  {
+    "id": "packages",
+    "label": "Packages (PyPI and npm)",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24
+    },
+    "plugins": [],
+    "bundle": "packages"
+  },
+  {
+    "id": "research",
+    "label": "Public research",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24
+    },
+    "plugins": [],
+    "bundle": "research"
+  }
+]

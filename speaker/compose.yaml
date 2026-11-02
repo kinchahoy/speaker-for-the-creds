@@ -1,0 +1,19 @@
+services:
+  speaker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+    volumes:
+      - data:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+
+volumes:
+  data:

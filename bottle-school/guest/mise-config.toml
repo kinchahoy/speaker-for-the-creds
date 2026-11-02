@@ -1,0 +1,33 @@
+# System-wide tools for the v5 guest. Each build takes the latest release, except the pinned
+# low-download Pi extensions.
+[tools]
+node = "latest"
+go = "latest"
+uv = "latest"
+ripgrep = "latest"
+fd = "latest"
+ast-grep = "latest"
+yq = "latest"
+gh = "latest"
+shfmt = "latest"
+shellcheck = "latest"
+ruff = "latest"
+"npm:@earendil-works/pi-coding-agent" = "latest"
+# Pi extensions; pi-launch loads every npm package that declares a `pi` manifest.
+# Pinned: they bypass aube's low-download check, so update them deliberately.
+"npm:pi-loop-police" = "1.14.1"
+"npm:pi-token-speed" = "0.12.0"
+"npm:typescript" = "latest"
+"npm:pnpm" = "latest"
+"npm:oxlint" = "latest"
+"npm:oxfmt" = "latest"
+# Documents
+pandoc = "latest"
+typst = "latest"
+# Developer command-line tools
+just = "latest"
+hyperfine = "latest"
+delta = "latest"
+bat = "latest"
+watchexec = "latest"
+ty = "latest"

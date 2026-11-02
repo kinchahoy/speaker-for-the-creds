@@ -1,0 +1,46 @@
+[tools]
+node = "26.11.1"
+pnpm = "10.18.3"
+
+[tasks.install]
+description = "Install both packages' dependencies"
+run = ["pnpm -C speaker install", "pnpm -C bottle-school install"]
+
+[tasks.check]
+description = "Typecheck both packages and lint speaker"
+run = [
+  "cd speaker && pnpm exec tsc --noEmit && pnpm exec biome check .",
+  "cd bottle-school && pnpm exec tsc --noEmit",
+]
+
+[tasks.format]
+description = "Format speaker with Biome"
+dir = "speaker"
+run = "pnpm exec biome check --write ."
+
+[tasks.test]
+description = "Run both packages' tests"
+run = [
+  "cd speaker && node --test --test-timeout=15000 test/*.test.ts",
+  "cd bottle-school && node --test test/*.test.ts",
+]
+
+[tasks.speaker]
+description = "Run speaker with live reload"
+dir = "speaker"
+run = "node --watch --env-file-if-exists=.env server.ts"
+
+[tasks.bottle]
+description = "Run the bottle-school service"
+dir = "bottle-school"
+run = "./start.sh"
+
+[tasks.guest-build]
+description = "Build a guest image: mise run guest-build pi-v5-guest"
+dir = "bottle-school"
+run = "guest/build.sh"
+
+[tasks.bottle-cli]
+description = "Run the bottle CLI: mise run bottle-cli register|run|ls|attach|stop"
+dir = "bottle-school"
+run = "node src/cli.ts"
