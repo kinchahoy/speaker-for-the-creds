@@ -528,12 +528,31 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   admin.use('*', csrf({ origin: new URL(config.PUBLIC_URL).origin }))
   admin.use('*', async (c, next) => {
     const origin = c.req.header('origin')
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && origin && origin !== new URL(config.PUBLIC_URL).origin)
-      return c.text('Cross-origin request rejected', 403)
+    // Fetch Metadata identifies browser same-origin requests even when TLS ends at a reverse proxy.
+    // Keep the explicit Origin check for JSON clients, which Hono's form CSRF middleware skips.
+    if (
+      !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
+      origin &&
+      origin !== new URL(config.PUBLIC_URL).origin &&
+      c.req.header('sec-fetch-site') !== 'same-origin'
+    )
+      return c.text(
+        'Cross-origin request rejected. Open the admin page directly; check PUBLIC_URL if using a proxy.',
+        403,
+      )
     await next()
   })
   admin.get('/', (c) =>
-    c.html(adminPage(providers, secrets, view(), c.req.query('provider'), c.get('secureHeadersNonce'))),
+    c.html(
+      adminPage(
+        providers,
+        secrets,
+        view(),
+        c.req.query('provider'),
+        c.get('secureHeadersNonce'),
+        c.req.query('section'),
+      ),
+    ),
   )
   admin.get('/live', (c) => c.json(livePanels(view())))
   const fields = async (c: Context) => await c.req.parseBody()

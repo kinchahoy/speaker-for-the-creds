@@ -230,3 +230,55 @@ test('the proxy returns redirects without following them', async (t) => {
   assert.equal(response.headers.get('location'), '/must-not-follow')
   assert.equal(f.calls.length, 1)
 })
+
+test('admin provider saves accept a proxied same-origin browser and reject foreign form and JSON writes', async (t) => {
+  const f = await setup(t)
+  const input = {
+    id: 'obsidian',
+    baseUrl: 'https://notes.example.com/api',
+    authType: 'bearer',
+    secret: 'work-vault-test-key',
+    read: 'approval',
+    write: 'deny',
+  }
+  // The browser sees HTTPS while the fixture server and configured PUBLIC_URL use HTTP.
+  const saved = await f.call('/admin/providers/save', {
+    method: 'POST',
+    headers: {
+      authorization: ownerHeaders.authorization,
+      origin: 'https://speaker.example.com',
+      'sec-fetch-site': 'same-origin',
+      'x-forwarded-proto': 'https',
+    },
+    body: new URLSearchParams(input),
+  })
+  assert.equal(saved.status, 303)
+  const page = await (await f.call('/admin?provider=obsidian', { headers: ownerHeaders })).text()
+  assert.ok(page.includes('Read policy (GET / HEAD / OPTIONS)'))
+  assert.ok(page.includes('Write policy (all other methods)'))
+  assert.ok(page.includes('read approval · write deny'))
+  assert.ok(!page.includes(input.secret))
+
+  for (const site of ['cross-site', 'same-site', 'none', '']) {
+    for (const json of [false, true]) {
+      const response = await f.call('/admin/providers/save', {
+        method: 'POST',
+        headers: {
+          authorization: ownerHeaders.authorization,
+          origin: 'https://untrusted.example.com',
+          ...(site ? { 'sec-fetch-site': site } : {}),
+          ...(json ? { 'content-type': 'application/json' } : {}),
+          // Proxy headers alone must never authorize a foreign Origin.
+          'x-forwarded-host': 'untrusted.example.com',
+          'x-forwarded-proto': 'https',
+        },
+        body: json ? JSON.stringify(input) : new URLSearchParams({ ...input, write: 'always' }),
+      })
+      assert.equal(response.status, 403, `${site || 'no metadata'} ${json ? 'JSON' : 'form'}`)
+    }
+  }
+  const after = await (await f.call('/admin?provider=obsidian', { headers: ownerHeaders })).text()
+  assert.ok(after.includes('read approval · write deny'))
+  // Older clients still work with an explicitly configured Origin and no Fetch Metadata.
+  assert.equal((await f.ownerForm('/providers/save', input)).status, 303)
+})

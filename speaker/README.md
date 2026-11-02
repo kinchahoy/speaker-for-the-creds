@@ -105,15 +105,26 @@ NTFY_TOKEN=your-publish-token
 
 <sub>AI-written</sub>
 
+Run from `speaker/`. The included Compose file builds the image, binds port 3000 to host loopback, and stores state in a named volume.
+{.ai}
+
 ```sh
+cp .env.example .env
+chmod 600 .env
+# Edit .env: set ADMIN_PASSWORD and PUBLIC_URL before starting.
+docker compose config --quiet
 docker compose up --build -d
-docker compose -f compose.yaml -f compose.traefik.yaml up --build -d   # Traefik + TinyAuth on /admin
+docker compose logs --tail=100 speaker
 ```
 
-- Run one replica. Configuration, secrets, enforcers, sessions, subjects, and permanent leases persist under `DATA_DIR`
-  (Docker: `/data`). A restart ends temporary leases and pending requests.
-- Keep the data directory outside the agents' filesystem access. Secret files are owner-only, not encrypted.
-- `PUBLIC_URL` must match the browser origin for CSRF validation.
+For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localhost:3000/admin`. For a reverse proxy, set `PUBLIC_URL` to the exact URL you open in the browser, including `https://` and any nonstandard port. For example, `https://speaker.example.com`. Recreate the container after changing environment settings with `docker compose up -d --force-recreate`; a plain restart does not reload them.
+{.ai}
+
+- Configure your own proxy to forward to speaker and serve HTTPS. The sample binds loopback; a containerized proxy needs a shared Docker network or another explicitly configured route. The public example does not configure a proxy or external login service.
+- Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching PUBLIC_URL for form submissions. Cross-origin browser form and JSON writes remain blocked; do not disable CSRF checks or add wildcard origins.
+- Run one replica. Configuration, secrets, identities, and permanent leases persist in `/data`. A restart ends temporary leases and pending requests.
+- Keep the data volume outside the agents' filesystem access. Secret files are owner-only, not encrypted. Back up that volume.
+- The admin page uses speaker's own Basic authentication. Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their API tokens.
 
 <!-- author: ai -->
 
