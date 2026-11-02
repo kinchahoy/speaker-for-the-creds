@@ -13,6 +13,10 @@ run = [
   "cd bottle-school && pnpm exec tsc --noEmit",
 ]
 
+[tasks.ci]
+description = "Typecheck, lint, and test both packages"
+depends = ["check", "test"]
+
 [tasks.format]
 description = "Format speaker with Biome"
 dir = "speaker"
@@ -44,3 +48,18 @@ run = "guest/build.sh"
 description = "Run the bottle CLI: mise run bottle-cli register|run|ls|attach|stop"
 dir = "bottle-school"
 run = "node src/cli.ts"
+
+[tasks.setup]
+description = "Create bottle-school/config.json and its directories (env: LLM_UPSTREAM=host:port LLM_MODEL=id)"
+dir = "bottle-school"
+run = "node setup.ts"
+
+[tasks.doctor]
+description = "Check this host for bottle-school prerequisites (Linux or macOS)"
+dir = "bottle-school"
+run = "./doctor.sh"
+
+[tasks.speaker-up]
+description = "Build and run speaker in its hardened container (needs speaker/.env)"
+dir = "speaker"
+run = "docker compose up -d --build"

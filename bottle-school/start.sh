@@ -27,6 +27,13 @@ fi
 
 command -v qemu-img >/dev/null || { echo "qemu-img is required to create Gondolin's COW root disk" >&2; exit 1; }
 command -v setsid >/dev/null || { echo "setsid is required" >&2; exit 1; }
+if [ "${PI_V2_VMM:-qemu}" != krun ]; then
+	case "$(uname -m)" in
+		arm64|aarch64) qemu=qemu-system-aarch64 ;;
+		*) qemu=qemu-system-x86_64 ;;
+	esac
+	command -v "$qemu" >/dev/null || { echo "$qemu is required for the default QEMU backend (Linux: apt install qemu-system-x86; macOS: brew install qemu)" >&2; exit 1; }
+fi
 
 setsid node "$root/src/server.ts" &
 broker=$!

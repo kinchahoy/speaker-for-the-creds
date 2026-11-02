@@ -75,7 +75,7 @@ Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI
 
 <sub>AI-written</sub>
 
-`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, `plugins`, and an optional speaker `bundle`. The file retains the developer, github-read, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, `plugins`, and an optional speaker `bundle` with an optional `bundleDuration` (`15m` to `30d`, default `1d`) for the launch request. The file retains the developer, github-read, offline, packages, and research presets. Duplicate IDs fail validation.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline; optional `maxModelRequests` caps model request count.

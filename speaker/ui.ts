@@ -113,7 +113,7 @@ document.addEventListener('click', ({target}) => {
 });
 document.addEventListener('submit', (event) => {
   const form = event.target;
-  if (!form.dataset.confirm || form.dataset.ok) return;
+  if (!form.dataset.confirm || form.dataset.ok || typeof dialog.showModal !== 'function') return;
   event.preventDefault();
   target = form;
   $('#confirm-text').textContent = form.dataset.confirm;
@@ -152,6 +152,9 @@ font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);bac
 --bad:oklch(80% .13 25);--bad-bg:oklch(28% .05 25);
 --mark-bg:oklch(33% .08 var(--h,268));--mark-ink:oklch(85% .12 var(--h,268));
 --shadow:0 1px 2px #0006,0 12px 24px -12px #000b}}
+/* Browsers without OKLCH (before 2022) get a plain hex palette. */
+@supports not (color:oklch(50% 0 0)){:root{--bg:#f6f7fb;--surface:#fff;--sunk:#eceef5;--ink:#171a2b;--dim:#555b73;--line:#dfe2ec;--field:#8a90a6;--brand:#1c2b8f;--accent:#2f46d8;--region:#e4e9fb;--ticket:#fff;--perf:#aab4de;--go:#0b6b36;--good:#0a6a35;--good-bg:#d7f2e0;--warn:#7a5200;--warn-bg:#fbe9b5;--warn-fill:#e8a91f;--bad:#b3261e;--bad-bg:#fbe8e6;--mark-bg:#dfe4fb;--mark-ink:#2f3f9e;--shadow:0 1px 2px #1c2b8f24,0 10px 24px -12px #1c2b8f66}.count,.top{color:#fff}.count{background:#f6c344;color:#3b2a00}#live-status,.nav a{color:#dfe4ff}}
+@media(prefers-color-scheme:dark){@supports not (color:oklch(50% 0 0)){:root{--bg:#0e1018;--surface:#171a26;--sunk:#12141e;--ink:#eef0f8;--dim:#b3b8cc;--line:#2c3040;--brand:#16206b;--accent:#9aa8ff;--on-accent:#10143a;--region:#171c3a;--ticket:#222850;--perf:#3d4580;--go:#5fe39a;--on-go:#06240f;--good:#7fe6ad;--good-bg:#12331f;--warn:#f4d37a;--warn-bg:#3a2e10;--bad:#ff9d94;--bad-bg:#3a1a18;--mark-bg:#262d5e;--mark-ink:#b9c3ff}}}
 *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:320px}::selection{background:var(--accent);color:var(--on-accent)}
 .sprite{position:absolute;width:0;height:0;overflow:hidden}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
@@ -164,7 +167,7 @@ h1{font-size:1.45rem;line-height:1.2;font-weight:800;letter-spacing:-.03em;margi
 #live-status::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:oklch(80% .17 155);margin-right:7px}
 .refresh{color:oklch(100% 0 0);font-size:.88rem;min-height:44px;display:inline-flex;align-items:center}
 .nav{display:flex;gap:4px;margin-top:6px;overflow-x:auto;scrollbar-width:none}
-.nav a{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px 12px 0 0;color:oklch(92% .035 268);text-decoration:none;font-weight:650;white-space:nowrap}
+.nav::after,.chips::after{content:"";flex:0 0 28px}.nav a{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px 12px 0 0;color:oklch(92% .035 268);text-decoration:none;font-weight:650;white-space:nowrap}
 .nav a:hover{background:oklch(100% 0 0/.12)}.nav a[aria-current=page]{background:var(--bg);color:var(--ink)}
 .count{min-width:22px;padding:1px 7px;border-radius:99px;background:oklch(86% .16 85);color:oklch(25% .06 85);font-size:.78rem;font-weight:800;text-align:center}
 main{max-width:1120px;margin:auto;padding:20px 20px 72px}
@@ -206,7 +209,7 @@ details[open]>summary::after{transform:rotate(225deg)}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;background:var(--sunk);color:var(--dim);white-space:nowrap}
 .chip.good,.chip.warn,.chip.bad{padding-left:8px}.chip.good::before,.chip.warn::before,.chip.bad::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .chip.good{background:var(--good-bg);color:var(--good)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}
-.chip.solid{background:var(--accent);color:var(--on-accent)}
+.notice{margin:0 0 14px;padding:10px 14px;border-radius:10px;background:var(--bad-bg);color:var(--bad);font-weight:600}.chip.solid{background:var(--accent);color:var(--on-accent)}
 .why{margin-top:10px;font-size:.92rem}.why summary{min-height:0;display:block;padding:0}.why summary::after{display:none}.why[open] summary{margin-bottom:4px}.why summary span{color:var(--dim)}
 .t-meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px}
 .stub{position:relative;margin:14px calc(-1*var(--tp)) 0;padding:14px var(--tp) var(--tp);border-top:2px dashed var(--perf)}
@@ -240,7 +243,7 @@ dialog::backdrop{background:oklch(15% .04 268/.6)}dialog h2{margin-bottom:8px}di
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .top a:focus-visible{outline-color:oklch(100% 0 0)}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.wide .rows{grid-template-columns:1fr}}
-@media(max-width:560px){.nav,.chips{mask-image:linear-gradient(to right,#000 calc(100% - 32px),transparent)}.nav a{scroll-margin:0 24px}#live-status{font-size:.76rem;line-height:1.25}.row.wrap{flex-wrap:wrap}.row.wrap .row-main{flex-basis:calc(100% - 50px)}.row.wrap .row-act{margin-left:46px}
+@media(max-width:560px){.nav,.chips{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 32px),transparent)}.nav a{scroll-margin:0 24px}#live-status{font-size:.76rem;line-height:1.25}.row.wrap{flex-wrap:wrap}.row.wrap .row-main{flex-basis:calc(100% - 50px)}.row.wrap .row-act{margin-left:46px}
 .top-in{padding:6px 12px 0}h1{font-size:1.25rem}.logo{width:30px;height:30px}.refresh{display:none}.nav a{padding:0 13px}
 main{padding:14px 12px 56px}.inbox{padding:12px;border-radius:14px}.panel{padding:14px}.ticket{--tp:14px}
 input,select,textarea{font-size:1rem}.pick{flex-basis:100%}.go{flex-basis:100%}.go button{min-height:56px}
@@ -270,6 +273,11 @@ const notices = {
 const searchable = (...parts: unknown[]) => parts.join(' ').toLowerCase()
 const identity = (type: 'enforcer' | 'session', what: string, meta: unknown, kindList: string[], path: string) =>
   html`<li data-search="${searchable(type, what, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${what}</div><div class="row-sub">${meta}</div></div><div class="row-act">${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger', `Revoke ${type} ${what}`, `Revoke ${type} ${what}? It stops working immediately and must be approved again.`)}</div></div></li>`
+const bundleErrors: Record<string, string> = {
+  empty: 'Bundle not saved: list at least one member, one per line as "kind ref".',
+  line: `Bundle not saved: each line must be "kind ref", with kind one of ${kindNames.join(', ')}.`,
+  id: 'Bundle not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
+}
 const empty = (title: string, hint: string) => html`<li class="empty"><strong>${title}</strong>${hint}</li>`
 const bundleBlock = (id: string, name: string, list: Capability[], note: unknown = '') =>
   list.length > 3
@@ -284,6 +292,7 @@ export function adminPage(
   nonce?: string,
   section = 'approvals',
   bundles: Record<string, Capability[]> = {},
+  error?: string,
 ) {
   const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
   const activeSection = selected
@@ -330,7 +339,7 @@ export function adminPage(
   const bundleForm = (id: string, list: Capability[]) =>
     form(
       '/admin/bundles/save',
-      html`${input('id', 'Bundle id', 'text', id)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" placeholder="credential notes.read">${list.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
+      html`${input('id', 'Bundle id', 'text', id)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" required placeholder="credential notes.read">${list.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
       'Save bundle',
       'fields',
     )
@@ -360,7 +369,7 @@ export function adminPage(
         : activeSection === 'providers'
           ? html`${tools(false)}<section class="panel"><h2>Providers</h2>${providerEditor}<ul class="rows">${providerList.length ? providerList : empty('No providers configured', 'Add a provider to let agents request access to an upstream API.')}</ul>${addProvider}</section><p class="muted">Credentials stay on this server.</p>`
           : activeSection === 'bundles'
-            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2><ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', [])}</section><p class="muted">Changes apply to new requests; requests already pending keep their members.</p>`
+            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2>${bundleErrors[error ?? ''] ? html`<p class="notice" role="alert">${bundleErrors[error ?? '']}</p>` : ''}<ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', [])}</section><p class="muted">Changes apply to new requests; requests already pending keep their members.</p>`
             : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
   return page('Speaker', nav, content, nonce ?? '')
 }

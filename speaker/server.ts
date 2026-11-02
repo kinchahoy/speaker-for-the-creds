@@ -604,6 +604,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         c.get('secureHeadersNonce'),
         c.req.query('section'),
         bundles,
+        c.req.query('error'),
       ),
     ),
   )
@@ -637,7 +638,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     providers[input.id] = provider
     await save(providersFile, providers)
     audit('provider_saved', { provider: input.id })
-    return redirect(c)
+    return c.redirect('/admin?section=providers', 303)
   })
   admin.post('/providers/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
@@ -651,24 +652,25 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     for (const [key, request] of pending)
       if (request.members.some((m) => m.kind === 'credential' && m.ref.startsWith(`${id}.`))) pending.delete(key)
     audit('provider_deleted', { provider: id })
-    return redirect(c)
+    return c.redirect('/admin?section=providers', 303)
   })
   const bundleFile = file('bundles.json')
   admin.post('/bundles/save', async (c) => {
-    const input = z.object({ id: idSchema, members: z.string() }).parse(await fields(c))
-    const lines = input.members
+    const back = (error: string) => c.redirect(`/admin?section=bundles&error=${error}`, 303)
+    const input = z.object({ id: idSchema, members: z.string() }).safeParse(await fields(c))
+    if (!input.success) return back('id')
+    const lines = input.data.members
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
     const parsed = z
       .array(capabilitySchema.extend({ kind: z.enum(kinds) }))
-      .min(1, 'List at least one member, one per line as "kind ref"')
       .safeParse(lines.map((line) => ({ kind: line.split(/\s+/)[0], ref: line.replace(/^\S+\s*/, '') })))
-    if (!parsed.success)
-      throw new HTTPException(400, { message: `Each line must be "kind ref" with kind one of ${kinds.join(', ')}` })
-    bundles[input.id] = parsed.data
+    if (!lines.length) return back('empty')
+    if (!parsed.success) return back('line')
+    bundles[input.data.id] = parsed.data
     await save(bundleFile, bundles)
-    audit('bundle_saved', { bundle: input.id })
+    audit('bundle_saved', { bundle: input.data.id })
     return c.redirect('/admin?section=bundles', 303)
   })
   admin.post('/bundles/delete', async (c) => {

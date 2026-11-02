@@ -272,7 +272,7 @@ export class Tasks {
             subjectId: task.subjectId,
             bundle: template.bundle,
             reason: `launch template ${template.id}`,
-            duration: "1d",
+            duration: template.bundleDuration ?? "1d",
           });
         await pi.start(guest);
         task.state = "idle";

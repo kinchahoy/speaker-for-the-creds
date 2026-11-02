@@ -258,6 +258,10 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.deepEqual([...loadTemplates(path).keys()], ["developer", "github-read", "offline", "packages", "research"]);
   writeFileSync(path, JSON.stringify([templates[0], templates[0]]));
   assert.throws(() => loadTemplates(path), /repeat an id/);
+  writeFileSync(path, JSON.stringify([{ ...templates[0], bundleDuration: "1h" }]));
+  assert.equal(loadTemplates(path).get(templates[0].id)?.bundleDuration, "1h");
+  writeFileSync(path, JSON.stringify([{ ...templates[0], bundleDuration: "forever" }]));
+  assert.throws(() => loadTemplates(path));
 });
 
 test("guest configuration loads the access-and-creds skill alone and the curated MCP tools", () => {

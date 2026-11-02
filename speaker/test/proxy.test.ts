@@ -246,7 +246,10 @@ test('the admin saves and deletes bundles without a restart', async (t) => {
     { kind: 'site', ref: 'a.example' },
     { kind: 'site', ref: 'b.example' },
   ])
-  assert.equal((await f.ownerForm('/bundles/save', { id: 'bad', members: 'nonsense x' })).status, 400)
+  // Refused input redirects back to the editor with an error code, and saves nothing.
+  const refused = await f.ownerForm('/bundles/save', { id: 'bad', members: 'nonsense x' })
+  assert.equal(refused.headers.get('location'), '/admin?section=bundles&error=line')
+  assert.equal((await listed()).bad, undefined)
   assert.equal((await f.ownerForm('/bundles/delete', { id: 'pack' })).status, 303)
   assert.deepEqual(await listed(), {})
 })
@@ -319,4 +322,25 @@ test('admin provider saves accept a proxied same-origin browser and reject forei
   assert.ok(after.includes('read approval · write deny'))
   // Older clients still work with an explicitly configured Origin and no Fetch Metadata.
   assert.equal((await f.ownerForm('/providers/save', input)).status, 303)
+})
+
+test('admin bundle saves list members, refuse empty or malformed input with a readable redirect, and delete', async (t) => {
+  const f = await setup(t)
+  const members = 'credential notes.read\nfolder ~/vault'
+  assert.equal((await f.ownerForm('/bundles/save', { id: 'kit', members })).status, 303)
+  const page = await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()
+  assert.ok(page.includes('~/vault') && page.includes('2 members'))
+  for (const [body, code] of [
+    [{ id: 'kit', members: '  \n' }, 'empty'],
+    [{ id: 'kit', members: 'bogus x' }, 'line'],
+    [{ id: 'bad id!', members }, 'id'],
+  ] as const) {
+    const response = await f.ownerForm('/bundles/save', body)
+    assert.equal(response.status, 303)
+    assert.equal(response.headers.get('location'), `/admin?section=bundles&error=${code}`)
+  }
+  const failed = await (await f.call('/admin?section=bundles&error=empty', { headers: ownerHeaders })).text()
+  assert.ok(failed.includes('list at least one member'))
+  assert.equal((await f.ownerForm('/bundles/delete', { id: 'kit' })).status, 303)
+  assert.ok(!(await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()).includes('~/vault'))
 })

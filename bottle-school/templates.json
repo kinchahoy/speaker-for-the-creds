@@ -35,8 +35,7 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "plugins": [],
-    "bundle": "offline"
+    "plugins": []
   },
   {
     "id": "packages",

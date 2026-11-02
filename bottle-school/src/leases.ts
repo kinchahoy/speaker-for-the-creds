@@ -22,6 +22,8 @@ export const Template = z
     limits: Limits,
     plugins: z.array(z.string()),
     bundle: z.string().optional(),
+    /** How long the launch bundle is requested for; defaults to 1d. */
+    bundleDuration: z.enum(["15m", "30m", "1h", "1d", "7d", "30d"]).optional(),
   })
   .strict();
 export type Template = z.infer<typeof Template>;
