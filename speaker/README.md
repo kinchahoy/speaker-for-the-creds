@@ -132,8 +132,9 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 <sub>AI-written</sub>
 
-Install [skill/SKILL.md](skill/SKILL.md) in projects that need these services. The skill enrolls a session,
-reads provider guides on demand, and requests access.
+Give agents the public setup guide at `https://your-speaker-host/skill.md`; it is served without authentication
+so a new agent can bootstrap. It explains session enrollment, provider guides, and approval requests. Keep
+`/admin` protected and give the agent its Speaker token through its credential settings.
 {.ai}
 
 <!-- author: ai -->

@@ -151,6 +151,7 @@ const save = (path: string, value: unknown) => writeFile(path, JSON.stringify(va
 
 export async function createApp(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
+  const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
   const secretPath = (id: string) => join(dataDir, 'secrets', id)
   await mkdir(join(dataDir, 'secrets'), { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
@@ -438,6 +439,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   }
 
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
+  app.get('/skill.md', (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
   app.get(
     '/_speaker/enforcers/ws',
     auth,
