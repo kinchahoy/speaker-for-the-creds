@@ -71,6 +71,25 @@ session or subject. The caller may add a reason with `POST /_speaker/requests` f
 
 <!-- author: ai -->
 
+## Who receives provider credentials
+
+<sub>AI-written</sub>
+
+| Provider auth type | Stored by | Receives the real credential |
+| --- | --- | --- |
+| Bearer | Speaker in `/data/secrets` | The configured upstream API, in `Authorization: Bearer …` |
+| Basic | Speaker in `/data/secrets` as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
+| Custom header | Speaker in `/data/secrets`; the header name is provider configuration | The configured upstream API, in that header |
+
+Speaker keeps these values on its host-side data volume and injects them only when forwarding an approved
+provider request. It strips the agent's authorization and cookie headers first. Agents receive a Speaker
+session or subject token, not the upstream credential. The upstream API still receives the real credential
+and the request data. `ADMIN_PASSWORD` is only for Speaker's owner UI; `NTFY_TOKEN`, if configured, is sent
+to the configured notification service.
+{.ai}
+
+<!-- author: ai -->
+
 ## Bundles
 
 <sub>AI-written</sub>

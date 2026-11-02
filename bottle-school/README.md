@@ -86,6 +86,28 @@ Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI
 
 <!-- author: ai -->
 
+## Who receives bottle-school credentials
+
+<sub>AI-written</sub>
+
+| Credential path | What the guest sees | Who receives the real value |
+| --- | --- | --- |
+| Hosted model provider | A per-task placeholder in Pi's model config | The configured model API, after Gondolin substitutes it for requests to the approved provider host |
+| Remote HTTP MCP with `credential` | A per-task placeholder in the MCP request header | The configured MCP server, after Gondolin substitutes it for requests to the approved MCP host |
+| Speaker enforcer token | A per-task placeholder used for Speaker API calls | Speaker, and only on the configured subject-facing routes |
+| Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
+| stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
+
+For hosted models and credentialed HTTP MCPs, the host keeps the real values from `secrets.env` or its process
+environment. Gondolin replaces placeholders only after the live lease policy permits the destination. The
+remote model API or MCP server receives the real credential and request content. An MCP server also receives
+the tool arguments and results sent to it. Stdio MCPs and guest plugins run inside the VM with access to guest
+data; do not put raw secrets in their command, arguments, or configuration. Placeholder substitution keeps
+the real value off the guest, but it does not prevent an approved destination from using the granted access.
+{.ai}
+
+<!-- author: ai -->
+
 ## Task archive
 
 <sub>AI-written</sub>
