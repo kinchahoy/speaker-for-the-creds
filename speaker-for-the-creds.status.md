@@ -4,10 +4,10 @@ topic: Agents & security
 state: blocked
 updated: 2026-11-08T03:15
 repo: ~/code/workshop/speaker-for-the-creds
-tags: [workshop, checkpoint]
+tags: [workshop, status]
 ---
 
-# Checkpoints
+# speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
