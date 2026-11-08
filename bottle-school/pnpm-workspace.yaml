@@ -1,0 +1,5 @@
+allowBuilds:
+  cpu-features: true
+  ssh2: true
+patchedDependencies:
+  '@earendil-works/gondolin@0.14.0': patches/@earendil-works__gondolin@0.14.0.patch

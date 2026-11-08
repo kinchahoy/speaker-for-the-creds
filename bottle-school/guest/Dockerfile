@@ -2,7 +2,7 @@
 # Guest base for the v5 image. Gondolin imports this filesystem as its rootfs (see build.json).
 # BuildKit cache mounts keep apt, mise, npm, and uv downloads on the build host, so a rebuild
 # after a tool change reuses earlier downloads. The caches never enter the image.
-FROM ubuntu:26.04@sha256:c098726dd9b9733f3e885f8de0ef375206a311b0a317eadc40d347b1115fb944
+FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
 
 # Tool choices live in three files: apt-packages.txt (Ubuntu), mise-config.toml (binaries and npm),
 # and python/requirements.in (the default uv environment). Builds take the latest versions;
@@ -20,15 +20,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 ARG TARGETARCH
 
-# mise 2026.10.15 (checksum from the release SHASUMS256.txt)
+# mise 2026.10.25 (checksum from the release SHASUMS256.txt)
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      MISE_BIN="mise-v2026.10.15-linux-arm64"; \
-      MISE_SHA="3abbaac305a465ef038eb4ea07b961c037a8b639108005e43f8e2c00a8f67c11"; \
+      MISE_BIN="mise-v2026.10.25-linux-arm64"; \
+      MISE_SHA="bb09e88b13164ca90691a5cc042726d079f0ba26ab55527344cb173c2e83c998"; \
     else \
-      MISE_BIN="mise-v2026.10.15-linux-x64"; \
-      MISE_SHA="e3b186d4c70627f27037be615becaf4acfb30e41fb6a1819486717dc94e4e2a9"; \
+      MISE_BIN="mise-v2026.10.25-linux-x64"; \
+      MISE_SHA="5d362ecc578dc7c146679b841dda949d6472cbf86ff5635db7afdca1b6b3fd87"; \
     fi \
- && curl -fsSL -o /usr/local/bin/mise "https://github.com/jdx/mise/releases/download/v2026.10.15/$MISE_BIN" \
+ && curl -fsSL -o /usr/local/bin/mise "https://github.com/jdx/mise/releases/download/v2026.10.25/$MISE_BIN" \
  && echo "$MISE_SHA  /usr/local/bin/mise" | sha256sum -c - \
  && chmod 755 /usr/local/bin/mise
 

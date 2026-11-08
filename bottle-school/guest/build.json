@@ -7,7 +7,7 @@
     "kernelImage": "vmlinuz-virt",
     "rootfsPackages": [],
     "initramfsPackages": [],
-    "krunfwVersion": "v5.2.1"
+    "krunfwVersion": "v5.6.2"
   },
   "oci": {
     "image": "pi-guest-base:v5",

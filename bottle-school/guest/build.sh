@@ -46,7 +46,7 @@ trap cleanup EXIT INT TERM
 "$GONDOLIN" build --config "$ROOT/guest/build.json" --arch "$ARCH" --output "$ASSETS"
 # Gondolin's privileged Docker builder writes root-owned assets. The host user must patch and import them.
 if [ ! -w "$ASSETS/manifest.json" ]; then
-  docker run --rm -v "$ASSETS:/assets" alpine:3.23 chown -R "$(id -u):$(id -g)" /assets
+  docker run --rm -v "$ASSETS:/assets" alpine:3.24 chown -R "$(id -u):$(id -g)" /assets
 fi
 if [ "$ARCH" = "x86_64" ] && [ "$KRUN" = 1 ]; then
   node "$ROOT/guest/patch-krun-assets.mjs" "$ASSETS" "$VMLINUX"

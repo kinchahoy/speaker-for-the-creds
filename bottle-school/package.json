@@ -5,23 +5,14 @@
   "type": "module",
   "description": "Gondolin micro-VMs for local agents, enforcing speaker-for-the-creds leases.",
   "dependencies": {
-    "@earendil-works/gondolin": "0.13.0",
-    "@hono/node-server": "^1.19.5",
-    "hono": "^4.13.0",
-    "zod": "^4.4.0"
+    "@earendil-works/gondolin": "0.14.0",
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.16",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^24.10.0",
-    "typescript": "^5.9.0"
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@10.18.3",
-  "pnpm": {
-    "patchedDependencies": {
-      "@earendil-works/gondolin@0.13.0": "patches/gondolin-0.13.0-response-complete.patch"
-    },
-    "onlyBuiltDependencies": [
-      "cpu-features",
-      "ssh2"
-    ]
-  }
+  "packageManager": "pnpm@12.16.1"
 }
