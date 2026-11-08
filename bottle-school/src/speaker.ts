@@ -13,7 +13,7 @@ export type Lease = z.infer<typeof Lease>;
 
 const RequestStatus = z.object({
   id: z.string(),
-  status: z.enum(["pending", "approved", "denied", "expired"]),
+  status: z.enum(["pending", "approved", "denied", "expired", "revoked", "superseded"]),
 });
 const Snapshot = z.object({
   type: z.literal("snapshot"),

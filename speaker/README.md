@@ -35,6 +35,9 @@ Open `http://localhost:3000/admin` and sign in with `ADMIN_USER` / `ADMIN_PASSWO
   - An enforcer registers with `POST /_speaker/enforcers`. The owner approves it in `/admin`.
   - A big agent enrolls a session with `POST /_speaker/sessions`. The owner approves it with a duration.
   - An enforcer creates one subject per task with `POST /_speaker/subjects` and receives its token.
+  - The two unauthenticated enrollment routes share a budget of 20 calls per 15 minutes and then return `429`.
+- Requests, sessions, and enforcers move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is
+  `pending`, then `approved`, `denied`, or `expired`; an approval later ends as `expired`, `revoked`, or `superseded`.
 - Capabilities have a kind: `credential`, `secret`, `site`, `folder`, or `mcp`.
   - A session may request only `credential`.
   - A subject may request `credential` plus its enforcer's kinds. Other kinds return `400 unsupported_kind`.
@@ -145,6 +148,43 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 - Run one replica. Configuration, secrets, identities, and permanent leases persist in `/data`. A restart ends temporary leases and pending requests.
 - Keep the data volume outside the agents' filesystem access. Secret files are owner-only, not encrypted. Back up that volume.
 - The admin page uses speaker's own Basic authentication. Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their API tokens.
+
+<!-- author: ai -->
+
+## SSH certificates
+
+_AI-drafted_
+
+Speaker can act as an SSH user certificate authority, replacing hand-made ControlMaster sockets. An agent makes a throwaway keypair and asks for `user@host` for a short time. The owner approves it in `/admin` like any request. Speaker then signs an OpenSSH user certificate with OpenSSH's own `ssh-keygen -s`, so the agent connects with plain `ssh` until the certificate expires. The private key never leaves the agent; the CA key never leaves speaker.
+
+- Each certificate carries one principal, `<user>@<host alias>`, so a certificate for one host does not open another. It is valid from one minute before approval until the approved duration ends, and never longer than `SSH_MAX_DURATION` (default `1h`).
+- Certificates permit a PTY only. Agent and port forwarding are added only when the request asks and the owner approves it. A request may pin `sourceAddress` (comma-separated addresses or CIDR blocks).
+- Speaker cannot revoke an issued certificate early; keep durations short. Each issuance is logged as `ssh_certificate_issued` with principal, key fingerprint, options and expiry.
+
+Enable it with a CA keypair, a host list, and `SSH_CA_KEY`. Speaker refuses to start if the key or `ssh-hosts.json` is missing, unreadable, or too permissive for `ssh-keygen`.
+
+```sh
+mise run ssh-ca                       # writes speaker/data/ssh_ca and prints the public key
+# Docker: docker compose run --rm speaker ssh-keygen -q -t ed25519 -N '' -C speaker-ssh-ca -f /data/ssh_ca
+```
+
+```json
+// DATA_DIR/ssh-hosts.json: alias -> host and the login users an agent may ask for
+{ "nas": { "hostname": "nas.lan", "port": 22, "users": ["raist"] } }
+```
+
+One-time setup on each target host. The principals file names which certificate principals may log in as that user; normal `authorized_keys` logins keep working.
+
+```sh
+curl -fsS https://speaker.example.com/_speaker/ssh/ca.pub | sudo tee /etc/ssh/speaker_user_ca.pub
+sudo install -d -m 755 /etc/ssh/auth_principals
+echo 'raist@nas' | sudo tee /etc/ssh/auth_principals/raist
+printf '%s\n' 'TrustedUserCAKeys /etc/ssh/speaker_user_ca.pub' \
+  'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u' | sudo tee /etc/ssh/sshd_config.d/50-speaker-ca.conf
+sudo sshd -t && sudo systemctl reload ssh   # the unit is sshd on some distributions
+```
+
+Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh/hosts`, `POST /_speaker/ssh` with `{host, user, publicKey, reason, duration}`, poll `GET /_speaker/requests/<id>`, then save `certificate` next to the key.
 
 <!-- author: ai -->
 

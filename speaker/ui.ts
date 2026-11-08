@@ -20,6 +20,7 @@ const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
 <symbol id="i-mcp" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
 <symbol id="i-enforcer" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.500-3.200 8-8 9-4.800-1-8-4.500-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
 <symbol id="i-session" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
+<symbol id="i-ssh" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13l3 2-3 2"/></symbol>
 </defs></svg>`
 
 const liveScript = `
@@ -419,6 +420,10 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
       .filter((r) => r.status === 'pending')
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((r) => {
+        const ssh = r.ssh
+          ? html`<div class="meta">SSH certificate for <code>${r.ssh.user}@${r.ssh.hostname}:${r.ssh.port}</code> · key <code>${r.ssh.fingerprint}</code> · ${[r.ssh.agentForwarding && 'agent forwarding', r.ssh.portForwarding && 'port forwarding'].filter(Boolean).join(', ') || 'no forwarding'}${r.ssh.sourceAddress ? html` · only from <code>${r.ssh.sourceAddress}</code>` : ''} · cannot be revoked before it expires</div>`
+          : ''
+        const sshMax = r.ssh?.maxDuration
         const note = r.bundle
           ? html`<div class="meta">One approval grants all ${r.members.length} for the chosen time.</div>`
           : ''
@@ -427,14 +432,21 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
           `${r.label} ${r.llmName ?? ''} ${r.enforcer ?? ''} ${r.bundle ?? ''} ${r.reason} ${r.members.map((m) => `${m.kind} ${m.ref}`).join(' ')}`,
           r.members.map((m) => m.kind),
           html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
-          html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}`}</div>${
+          html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}${ssh}`}</div>${
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
               : html`<p class="why"><span class="meta">Reason:</span> ${r.reason || html`<span class="meta">none supplied yet</span>`}</p>`
           }${r.method || notices[r.notification] ? html`<div class="t-meta">${r.method ? html`<span class="meta">Triggered by <code>${r.method} ${r.path}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
           decide(
             `requests/${r.id}`,
-            html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
+            sshMax
+              ? select(
+                  'duration',
+                  'Certificate valid for',
+                  durations.slice(0, durations.indexOf(sshMax) + 1),
+                  r.duration,
+                )
+              : html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
             r.bundle ? `bundle ${r.bundle}` : r.label,
             r.members.length > 1 ? `Approve all ${r.members.length}` : 'Approve',
           ),

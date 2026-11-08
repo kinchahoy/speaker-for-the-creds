@@ -59,6 +59,18 @@ description = "Check this host for bottle-school prerequisites (Linux or macOS)"
 dir = "bottle-school"
 run = "./doctor.sh"
 
+[tasks.ssh-ca]
+description = "Create speaker's SSH user CA keypair: mise run ssh-ca [path], default speaker/data/ssh_ca"
+run = '''
+f="${usage_path:-speaker/data/ssh_ca}"
+test ! -e "$f" || { echo "$f exists; refusing to overwrite a CA that hosts may already trust" >&2; exit 1; }
+mkdir -p -m 700 "$(dirname "$f")"
+ssh-keygen -q -t ed25519 -N '' -C speaker-ssh-ca -f "$f"
+echo "CA private key: $f (set SSH_CA_KEY to it). Public key for hosts:"
+cat "$f.pub"
+'''
+usage = 'arg "[path]"'
+
 [tasks.speaker-up]
 description = "Build and run speaker in its hardened container (needs speaker/.env)"
 dir = "speaker"

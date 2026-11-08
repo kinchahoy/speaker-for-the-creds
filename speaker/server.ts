@@ -9,9 +9,30 @@ import { csrf } from 'hono/csrf'
 import { HTTPException } from 'hono/http-exception'
 import { NONCE, secureHeaders } from 'hono/secure-headers'
 import type { WSContext } from 'hono/ws'
+import { rateLimiter } from 'hono-rate-limiter'
 import writeFile from 'write-file-atomic'
 import { WebSocketServer } from 'ws'
 import { z } from 'zod'
+import {
+  type IdentityEvent,
+  type IdentityState,
+  IllegalTransition,
+  identityStates,
+  identityTable,
+  type RequestEvent,
+  type RequestState,
+  requestTable,
+  transition,
+} from './lifecycle.ts'
+import {
+  caPublicKey,
+  fingerprint,
+  principalOf,
+  type SshRequest,
+  signCertificate,
+  sshHostsSchema,
+  sshRequestSchema,
+} from './ssh.ts'
 import { adminPage, livePanels } from './ui.ts'
 
 const idSchema = z
@@ -58,7 +79,7 @@ const providerSchema = z.object({
 })
 const kinds = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
-const statusSchema = z.enum(['pending', 'approved', 'denied'])
+const statusSchema = z.enum(identityStates)
 const capabilitySchema = z.object({ kind: z.string(), ref: z.string().trim().min(1).max(500) })
 const bundlesSchema = z.record(idSchema, z.array(capabilitySchema.extend({ kind: z.enum(kinds) })))
 const enforcerSchema = z.object({
@@ -107,6 +128,7 @@ type EnforcerView = Enforcer & Usage
 type SessionView = Session & Usage
 const decisionSchema = z.object({ duration: adminDurationSchema, permanent: z.literal('on').optional() })
 type Duration = z.infer<typeof adminDurationSchema>
+type SshDuration = z.infer<typeof durationSchema>
 export type Pending = {
   id: string
   subjectId: string
@@ -119,7 +141,12 @@ export type Pending = {
   path?: string
   reason: string
   duration: z.infer<typeof durationSchema>
-  status: 'pending' | 'approved' | 'denied' | 'expired'
+  status: RequestState
+  /** Set on approval: the leases it created and when they end (null: until revoked). */
+  leaseIds: string[]
+  expiresAt: number | null
+  ssh?: SshRequest & { hostname: string; port: number; fingerprint: string; maxDuration: SshDuration }
+  certificate?: string
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
 }
@@ -142,13 +169,17 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
         .refine((value) => value !== 'change-this-password', 'Set a real admin password'),
       DATA_DIR: z.string().default('./data'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-      PUBLIC_URL: urlSchema.default('http://localhost:3000'),
+      // Required: approval links and the admin CSRF origin use it.
+      PUBLIC_URL: urlSchema,
       NTFY_URL: urlSchema.optional(),
       NTFY_TOPIC: z
         .string()
         .regex(/^[a-zA-Z0-9_-]+$/)
         .optional(),
       NTFY_TOKEN: z.string().optional(),
+      // Enables SSH certificates; DATA_DIR/ssh-hosts.json must then list the target hosts.
+      SSH_CA_KEY: z.string().min(1).optional(),
+      SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
     })
     .refine((value) => Boolean(value.NTFY_URL) === Boolean(value.NTFY_TOPIC), 'Set both NTFY_URL and NTFY_TOPIC')
     .parse(environment)
@@ -202,6 +233,13 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const sessions = await loadList('sessions.json', sessionSchema)
   const subjects = await loadList('subjects.json', subjectSchema)
   let leases = await loadList('permanent-leases.json', leaseSchema)
+  const ssh = config.SSH_CA_KEY
+    ? {
+        caKey: config.SSH_CA_KEY,
+        caPublicKey: await caPublicKey(config.SSH_CA_KEY),
+        hosts: sshHostsSchema.parse(JSON.parse(await readFile(file('ssh-hosts.json'), 'utf8'))),
+      }
+    : undefined
   const storedUsage = usageStoreSchema.parse(JSON.parse((await optionalFile(file('usage.json'))) ?? '{}'))
   const secrets = new Map(
     await Promise.all(
@@ -217,6 +255,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const identityUsage = new Map(Object.entries(storedUsage.identities))
   const emptyUsage = (): Usage => ({ uses: 0, lastUsedAt: null })
   const useStats = (map: Map<string, Usage>, id: string) => map.get(id) ?? emptyUsage()
+  // Write queues: the caller awaits and surfaces a failed write; the queue logs it and keeps serving later writes.
+  const writeFailed = (queue: string) => (error: unknown) => audit('write_failed', { queue, error: String(error) })
   let usageWrites: Promise<unknown> = Promise.resolve()
   const persistUsage = () => {
     const result = usageWrites.then(() =>
@@ -225,7 +265,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         identities: Object.fromEntries(identityUsage),
       }),
     )
-    usageWrites = result.catch(() => {})
+    usageWrites = result.catch(writeFailed('usage'))
     return result
   }
   let version = 0
@@ -234,7 +274,35 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     item.expiresAt === null || Date.parse(item.expiresAt) > Date.now()
   const expiry = (duration: Duration) =>
     duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
-  const liveSession = (session: Session) => session.status === 'approved' && unexpired(session)
+  // sweep() applies clock-driven transitions before every HTTP request and snapshot, so stored status is current.
+  const liveSession = (session: Session) => session.status === 'approved'
+  function move(request: Pending, event: RequestEvent, fields: Record<string, unknown> = {}) {
+    const from = request.status
+    request.status = transition('request', requestTable, from, event)
+    audit(`request_${request.status}`, { requestId: request.id, subject: request.subjectId, from, ...fields })
+  }
+  function moveIdentity(
+    kind: 'enforcer' | 'session',
+    item: { id: string; status: IdentityState },
+    event: IdentityEvent,
+  ) {
+    item.status = transition(kind, identityTable, item.status, event)
+    audit(`${kind}_${item.status}`, { [kind]: item.id })
+  }
+  function sweep() {
+    const now = Date.now()
+    for (const request of pending.values()) {
+      if (request.status === 'pending' && now - request.createdAt >= durations['15m']) move(request, 'expire')
+      if (request.status === 'approved' && request.expiresAt !== null && request.expiresAt <= now)
+        move(request, 'expire')
+    }
+    const ended = [...sessions.values()].filter(
+      (session) => session.status === 'approved' && session.expiresAt !== null && Date.parse(session.expiresAt) <= now,
+    )
+    for (const session of ended) moveIdentity('session', session, 'expire')
+    // Memory is authoritative until restart; a failed save is logged and the next sweep after restart expires again.
+    if (ended.length) saveList('sessions.json', sessions).catch(writeFailed('sessions'))
+  }
 
   const snapshot = (enforcerId: string) => ({
     type: 'snapshot',
@@ -245,7 +313,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .map((r) => ({
         id: r.id,
         subjectId: r.subjectId,
-        status: requestStatus(r),
+        status: r.status,
         what: r.bundle ? `bundle ${r.bundle}` : r.members.map((m) => `${m.kind} ${m.ref}`).join(', '),
         reason: r.reason,
       })),
@@ -253,14 +321,17 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const push = () => {
     for (const [id, ws] of sockets) ws.send(JSON.stringify(snapshot(id)))
   }
-  setInterval(push, 10_000).unref()
+  setInterval(() => {
+    sweep()
+    push()
+  }, 10_000).unref()
 
   // Serialize read/modify/write operations, including approval decisions. A failed
   // write reaches its caller without poisoning subsequent operations in the queue.
   let leaseWrites: Promise<unknown> = Promise.resolve()
   function serial<T>(operation: () => T | Promise<T>): Promise<T> {
     const result = leaseWrites.then(operation)
-    leaseWrites = result.catch(() => {})
+    leaseWrites = result.catch(writeFailed('leases'))
     return result
   }
   async function commitLeases(next: Map<string, Lease>) {
@@ -291,20 +362,23 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     await persistUsage()
   }
+  // Approved requests whose leases are removed move to `event` (revoke, or supersede when a new approval replaces them).
+  const endApprovals = (removed: Set<string>, event: 'revoke' | 'supersede') => {
+    for (const request of pending.values())
+      if (request.status === 'approved' && request.leaseIds.some((id) => removed.has(id))) move(request, event)
+  }
   const removeLeases = (matches: (lease: Lease) => boolean) =>
-    serial(() => commitLeases(new Map([...leases].filter(([, lease]) => !matches(lease)))))
+    serial(async () => {
+      const removed = new Set([...leases.values()].filter(matches).map((lease) => lease.id))
+      await commitLeases(new Map([...leases].filter(([id]) => !removed.has(id))))
+      endApprovals(removed, 'revoke')
+    })
   const owner = (subjectId: string) => {
     const subject = subjects.get(subjectId)
     if (subject) return { label: subject.label, llmName: undefined, enforcer: enforcers.get(subject.enforcer)?.name }
     const session = sessions.get(subjectId)
     if (session) return { label: session.label, llmName: session.llmName, enforcer: undefined }
     throw new HTTPException(404, { message: 'Unknown subject' })
-  }
-  const requestStatus = (request: Pending) => {
-    if (request.status === 'pending' && Date.now() - request.createdAt >= durations['15m']) return 'expired'
-    if (request.status === 'approved' && request.members.some((m) => !hasLease(request.subjectId, m.kind, m.ref)))
-      return 'expired'
-    return request.status
   }
   function leaseState(lease: Lease): LeaseView['state'] {
     const enforcerId = subjects.get(lease.subjectId)?.enforcer
@@ -315,16 +389,17 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const view = (): View => ({
     enforcers: [...enforcers.values()].map((enforcer) => ({ ...enforcer, ...useStats(identityUsage, enforcer.id) })),
     sessions: [...sessions.values()].map((session) => ({ ...session, ...useStats(identityUsage, session.id) })),
-    requests: [...pending.values()].map((request) => ({ ...request, status: requestStatus(request) })),
+    requests: [...pending.values()],
     leases: [...leases.values()].filter(unexpired).map((lease) => {
       const { label, llmName } = owner(lease.subjectId)
       return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
     }),
   })
-  function pendingRequest(id: string) {
+  // Checks the decision is legal before any side effect; move() then records it.
+  function decidable(id: string, event: 'approve' | 'deny') {
     const request = pending.get(id)
-    if (!request || requestStatus(request) !== 'pending')
-      throw new HTTPException(409, { message: 'Request is no longer pending' })
+    if (!request) throw new HTTPException(404, { message: 'Request not found' })
+    transition('request', requestTable, request.status, event)
     const session = sessions.get(request.subjectId)
     if (
       !(subjects.has(request.subjectId) || (session && liveSession(session))) ||
@@ -335,25 +410,58 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   }
   function approve(id: string, duration: Duration) {
     return serial(async () => {
-      const request = pendingRequest(id)
+      const request = decidable(id, 'approve')
+      if (request.ssh) return issueCertificate(request, request.ssh, duration)
       const expiresAt = expiry(duration)
       const next = new Map(leases)
+      const replaced = new Set<string>()
+      request.leaseIds = []
       for (const { kind, ref } of request.members) {
         for (const [key, lease] of next)
-          if (lease.subjectId === request.subjectId && lease.kind === kind && lease.ref === ref) next.delete(key)
+          if (lease.subjectId === request.subjectId && lease.kind === kind && lease.ref === ref) {
+            next.delete(key)
+            replaced.add(key)
+          }
         const lease = { id: rid(), subjectId: request.subjectId, kind, ref, expiresAt }
         next.set(lease.id, lease)
+        request.leaseIds.push(lease.id)
       }
       await commitLeases(next)
-      request.status = 'approved'
-      audit('request_approved', { requestId: id, subject: request.subjectId, expiresAt })
+      endApprovals(replaced, 'supersede')
+      request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
+      move(request, 'approve', { expiresAt })
+    })
+  }
+  // An SSH approval signs a certificate instead of creating leases; it cannot be revoked before it expires.
+  async function issueCertificate(request: Pending, order: NonNullable<Pending['ssh']>, duration: Duration) {
+    if (!ssh) throw new HTTPException(409, { message: 'SSH certificates are disabled' })
+    if (duration === 'permanent' || durations[duration] > durations[order.maxDuration])
+      throw new HTTPException(400, { message: `SSH access is limited to ${order.maxDuration}` })
+    const principal = request.members[0].ref
+    request.certificate = await signCertificate(ssh.caKey, {
+      ...order,
+      principal,
+      keyId: `speaker:${request.id}:${request.subjectId}`,
+      seconds: durations[duration] / 1000,
+    })
+    request.expiresAt = Date.now() + durations[duration]
+    const expiresAt = new Date(request.expiresAt).toISOString()
+    move(request, 'approve', { expiresAt })
+    audit('ssh_certificate_issued', {
+      requestId: request.id,
+      subject: request.subjectId,
+      principal,
+      hostname: order.hostname,
+      fingerprint: order.fingerprint,
+      sourceAddress: order.sourceAddress,
+      agentForwarding: order.agentForwarding,
+      portForwarding: order.portForwarding,
+      expiresAt,
     })
   }
   function deny(id: string) {
     return serial(() => {
-      const request = pendingRequest(id)
-      request.status = 'denied'
-      audit('request_denied', { requestId: id, subject: request.subjectId })
+      move(decidable(id, 'deny'), 'deny')
       push()
     })
   }
@@ -385,8 +493,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       if (!response.ok) throw new Error('Notification rejected')
       await response.body?.cancel()
       return 'sent'
-    } catch {
-      audit('notification_failed', { anchor })
+    } catch (error) {
+      // Audited boundary: a push is best-effort and must never block enrollment or a request.
+      // The admin page shows the failed state on the request.
+      audit('notification_failed', { anchor, cause: String(error) })
       return 'failed'
     }
   }
@@ -399,10 +509,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     duration: Pending['duration'],
     method?: string,
     path?: string,
+    sshOrder?: Pending['ssh'],
   ) {
-    for (const [id, request] of pending) if (requestStatus(request) === 'expired') pending.delete(id)
+    for (const [id, request] of pending)
+      if (['expired', 'revoked', 'superseded'].includes(request.status)) pending.delete(id)
+    // SSH requests carry a fresh public key each time, so they never merge.
     const existing = [...pending.values()].find(
       (r) =>
+        !sshOrder &&
+        !r.ssh &&
         r.subjectId === subjectId &&
         r.bundle === bundle &&
         JSON.stringify(r.members) === JSON.stringify(members) &&
@@ -423,6 +538,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       reason,
       duration,
       status: 'pending',
+      leaseIds: [],
+      expiresAt: null,
+      ssh: sshOrder,
       notification: config.NTFY_URL ? 'sending' : 'disabled',
       createdAt: Date.now(),
     }
@@ -441,6 +559,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const app = new Hono<Env>()
   app.onError((error, c) => {
     if (error instanceof HTTPException) return error.getResponse()
+    if (error instanceof IllegalTransition) return c.json({ error: 'conflict', message: error.message }, 409)
     if (error instanceof z.ZodError)
       return c.json(
         {
@@ -450,7 +569,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         400,
       )
     if (error instanceof SyntaxError) return c.json({ error: 'invalid_json' }, 400)
-    audit('request_failed', { type: error.name })
+    audit('request_failed', { type: error.name, message: error.message })
     return c.json({ error: 'internal_error' }, 500)
   })
 
@@ -488,7 +607,21 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return caller
   }
 
+  app.use('*', async (_c, next) => {
+    sweep()
+    await next()
+  })
+  // Enrollment is unauthenticated: one shared budget caps how many pending identities anyone can create.
+  // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
+  const enrollmentLimit = rateLimiter<Env>({
+    windowMs: 15 * 60_000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    keyGenerator: () => 'enrollment',
+    message: { error: 'rate_limited' },
+  })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
+  if (ssh) app.get('/_speaker/ssh/ca.pub', (c) => c.text(`${ssh.caPublicKey}\n`))
   app.get('/skill.md', (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
   app.get(
     '/_speaker/enforcers/ws',
@@ -521,7 +654,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       }
     }),
   )
-  app.post('/_speaker/enforcers', async (c) => {
+  app.post('/_speaker/enforcers', enrollmentLimit, async (c) => {
     const input = enforcerSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
     const enforcer: Enforcer = { id: rid(), ...input, status: 'pending' }
     enforcers.set(enforcer.id, enforcer)
@@ -530,7 +663,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     void notify(`Enforcer ${enforcer.name} wants to register`, `enforcer-${enforcer.id}`)
     return c.json({ id: enforcer.id, status: enforcer.status }, 201)
   })
-  app.post('/_speaker/sessions', async (c) => {
+  app.post('/_speaker/sessions', enrollmentLimit, async (c) => {
     const input = sessionEnrollmentSchema.parse(await c.req.json())
     const session: Session = { id: rid(), ...input, status: 'pending', expiresAt: null }
     sessions.set(session.id, session)
@@ -681,42 +814,38 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     audit('bundle_deleted', { bundle: id })
     return c.redirect('/admin?section=bundles', 303)
   })
-  const pendingIdentity = <T extends { status: string }>(store: Map<string, T>, id: string) => {
+  const identity = <T>(store: Map<string, T>, id: string) => {
     const item = store.get(id)
-    if (item?.status !== 'pending') throw new HTTPException(409, { message: 'Not pending' })
+    if (!item) throw new HTTPException(404, { message: 'Unknown identity' })
     return item
   }
   admin.post('/enforcers/:id/approve', async (c) => {
-    pendingIdentity(enforcers, c.req.param('id')).status = 'approved'
+    moveIdentity('enforcer', identity(enforcers, c.req.param('id')), 'approve')
     await saveList('enforcers.json', enforcers)
     return redirect(c)
   })
   // Deny works on pending and approved enforcers; a denied enforcer's subjects stop authenticating.
   admin.post('/enforcers/:id/deny', async (c) => {
-    const enforcer = enforcers.get(c.req.param('id'))
-    if (!enforcer) throw new HTTPException(404, { message: 'Unknown enforcer' })
-    enforcer.status = 'denied'
+    const enforcer = identity(enforcers, c.req.param('id'))
+    moveIdentity('enforcer', enforcer, 'deny')
     sockets.get(enforcer.id)?.close(1008, 'denied')
     await saveList('enforcers.json', enforcers)
-    audit('enforcer_denied', { enforcer: enforcer.id })
     return redirect(c)
   })
   admin.post('/sessions/:id/approve', async (c) => {
     const { duration, permanent } = decisionSchema.parse(await fields(c))
-    const session = pendingIdentity(sessions, c.req.param('id'))
-    session.status = 'approved'
+    const session = identity(sessions, c.req.param('id'))
+    moveIdentity('session', session, 'approve')
     session.expiresAt = expiry(permanent ? 'permanent' : duration)
     await saveList('sessions.json', sessions)
     return redirect(c)
   })
   admin.post('/sessions/:id/deny', async (c) => {
-    const session = sessions.get(c.req.param('id'))
-    if (!session) throw new HTTPException(404, { message: 'Unknown session' })
-    session.status = 'denied'
+    const session = identity(sessions, c.req.param('id'))
+    moveIdentity('session', session, 'deny')
     await saveList('sessions.json', sessions)
     await removeLeases((lease) => lease.subjectId === session.id)
     for (const [key, request] of pending) if (request.subjectId === session.id) pending.delete(key)
-    audit('session_denied', { session: session.id })
     return redirect(c)
   })
   // Browser forms and JSON clients share exactly the same approval/revocation implementation.
@@ -829,7 +958,45 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         throw new HTTPException(400, { message: 'Unknown provider' })
     }
     const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
-    return c.json({ id: request.id, status: requestStatus(request) }, 201)
+    return c.json({ id: request.id, status: request.status }, 201)
+  })
+  // Hosts the caller may ask SSH access to, and the login users each accepts.
+  app.get('/_speaker/ssh/hosts', (c) => {
+    subjectOf(c)
+    if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
+    return c.json({ hosts: ssh.hosts, maxDuration: config.SSH_MAX_DURATION })
+  })
+  app.post('/_speaker/ssh', async (c) => {
+    const caller = subjectOf(c)
+    if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
+    const input = sshRequestSchema
+      .extend({ reason: z.string().trim().min(1).max(500), duration: durationSchema })
+      .parse(await c.req.json())
+    const host = Object.hasOwn(ssh.hosts, input.host) ? ssh.hosts[input.host] : undefined
+    if (!host) throw new HTTPException(400, { message: 'Unknown SSH host' })
+    if (!host.users.includes(input.user)) throw new HTTPException(400, { message: 'User not allowed on this host' })
+    if (durations[input.duration] > durations[config.SSH_MAX_DURATION])
+      throw new HTTPException(400, { message: `SSH access is limited to ${config.SSH_MAX_DURATION}` })
+    const { reason, duration, ...order } = input
+    const keyFingerprint = await fingerprint(order.publicKey)
+    if (!keyFingerprint) throw new HTTPException(400, { message: 'Public key could not be parsed' })
+    const request = createRequest(
+      caller.id,
+      [{ kind: 'ssh', ref: principalOf(input.user, input.host) }],
+      undefined,
+      reason,
+      duration,
+      undefined,
+      undefined,
+      {
+        ...order,
+        hostname: host.hostname,
+        port: host.port,
+        fingerprint: keyFingerprint,
+        maxDuration: config.SSH_MAX_DURATION,
+      },
+    )
+    return c.json({ id: request.id, status: request.status }, 201)
   })
   app.get('/_speaker/requests/:id', (c) => {
     const request = pending.get(c.req.param('id')),
@@ -840,7 +1007,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         ? subjects.get(request.subjectId)?.enforcer === caller.enforcer.id
         : caller.id === request.subjectId)
     if (!request || !mine) throw new HTTPException(404, { message: 'Request not found' })
-    return c.json({ id: request.id, status: requestStatus(request) })
+    const certificate =
+      request.status === 'approved' && request.ssh && request.certificate && request.expiresAt
+        ? {
+            certificate: request.certificate,
+            expiresAt: new Date(request.expiresAt).toISOString(),
+            ssh: { hostname: request.ssh.hostname, port: request.ssh.port, user: request.ssh.user },
+          }
+        : {}
+    return c.json({ id: request.id, status: request.status, ...certificate })
   })
   app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
   app.all('*', async (c) => {
@@ -914,7 +1089,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       duplex: 'half',
       redirect: 'manual',
       signal: c.req.raw.signal,
-    } as RequestInit).catch(() => undefined)
+    } as RequestInit).catch((error: Error) => {
+      audit('upstream_failed', { provider: providerId, error: String(error), cause: String(error.cause ?? '') })
+      return undefined
+    })
     audit('proxy_request', {
       subject: caller.id,
       provider: providerId,
@@ -932,7 +1110,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
 }
 
 if (import.meta.main) {
-  const config = readConfig()
+  const config = (() => {
+    try {
+      return readConfig()
+    } catch (error) {
+      if (!(error instanceof z.ZodError)) throw error
+      console.error(`speaker: fix the environment and restart:\n${z.prettifyError(error)}`)
+      process.exit(1)
+    }
+  })()
   const app = await createApp(config)
   serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0', websocket: { server: wss } }, (info) =>
     audit('listening', { port: info.port }),

@@ -172,6 +172,9 @@ importers:
       hono:
         specifier: ^4.13.16
         version: 4.13.16
+      hono-rate-limiter:
+        specifier: 0.5.4
+        version: 0.5.4(hono@4.13.16)
       write-file-atomic:
         specifier: ^8.0.0
         version: 8.0.0
@@ -577,6 +580,15 @@ packages:
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
+
+  hono-rate-limiter@0.5.4:
+    resolution: {integrity: sha512-P3/cscAmz1hA+MuM+Hn9gP/EyO2zWv2aXIFkVYuLZkPzrPa4oaWdVCS94vyDlsNBgeMnE/Hr2+LznIKQxrF0ng==}
+    peerDependencies:
+      hono: ^4.10.8
+      unstorage: ^1.17.3
+    peerDependenciesMeta:
+      unstorage:
+        optional: true
 
   hono@4.13.16:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
@@ -1126,6 +1138,10 @@ snapshots:
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
+
+  hono-rate-limiter@0.5.4(hono@4.13.16):
+    dependencies:
+      hono: 4.13.16
 
   hono@4.13.16: {}
 
