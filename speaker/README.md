@@ -202,8 +202,18 @@ Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh
 <sub>AI-written</sub>
 
 Give agents the public setup guide at `https://your-speaker-host/skill.md`; it is served without authentication
-so a new agent can bootstrap. It explains session enrollment, provider guides, and approval requests. Keep
-`/admin` protected and give the agent its Speaker token through its credential settings.
+so a new agent can bootstrap. It is short: inline sh and PowerShell setup (a token kept in a curl header file,
+nothing to install), the call form, and pointers to `/_speaker/help/<topic>` for the rest. `/`, `/llms.txt` and
+`/.well-known/speaker.json` say the same without a token; providers and policies stay behind auth. Keep `/admin`
+protected.
+{.ai}
+
+- A call sent with `Speaker-Wait: 60` (and `Speaker-Reason`) waits for your decision and is forwarded once approved.
+- Every agent 401 and 403 carries a `next` step and a `tell_user` line with the approval link.
+- A session works only from the address it enrolled from: the first `X-Forwarded-For` hop, so the reverse proxy
+  must set that header and speaker must not be reachable around it.
+- Agents extend their own grants up to three times, each by at most the span you approved; larger extensions
+  come to you as a new request. A denial stands for 15 minutes without re-asking you.
 {.ai}
 
 <!-- author: ai -->

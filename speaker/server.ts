@@ -1,12 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { serve, upgradeWebSocket } from '@hono/node-server'
-import { type Context, Hono } from 'hono'
+import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { basicAuth } from 'hono/basic-auth'
-import { bearerAuth } from 'hono/bearer-auth'
 import { csrf } from 'hono/csrf'
+import { etag } from 'hono/etag'
 import { HTTPException } from 'hono/http-exception'
 import { NONCE, secureHeaders } from 'hono/secure-headers'
 import type { WSContext } from 'hono/ws'
@@ -56,6 +56,10 @@ const durations = {
   '30d': 2_592_000_000,
   '90d': 7_776_000_000,
 }
+// An agent may extend a grant itself this many times, each by at most the span the owner approved.
+const autoExtensions = 3
+// A denied request is answered as denied, without asking the owner again, for this long.
+const deniedCooldown = durations['15m']
 // An `always` policy grants a session access without a request, for at most this long after its approval.
 const alwaysLimit = durations['90d']
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
@@ -99,7 +103,12 @@ const providerSchema = z.object({
   mcp: z.boolean().optional(),
 })
 const kinds = ['credential', 'secret', 'site', 'folder', 'mcp', 'extension'] as const
-const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
+// SHA-256 of the empty string: what a setup that never wrote its token file sends.
+const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+const hashSchema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/, 'tokenHash must be 64 lowercase hex characters (SHA-256 of the token)')
+  .refine((value) => value !== emptyHash, 'tokenHash is the hash of an empty token; write the token first')
 const statusSchema = z.enum(identityStates)
 const capabilitySchema = z.object({ kind: z.string(), ref: z.string().trim().min(1).max(500) })
 const bundleMembersSchema = z.array(capabilitySchema.extend({ kind: z.enum(kinds) }))
@@ -133,6 +142,12 @@ const sessionSchema = z.object({
   status: statusSchema,
   expiresAt: z.string().nullable(),
   approvedAt: z.string().optional(),
+  // Address the session enrolled from; its token is refused from anywhere else.
+  source: z.string().max(100).optional(),
+  enrolledAt: z.string().optional(),
+  // Span the owner approved, and how many times the agent extended it without asking.
+  grantedMs: z.number().int().positive().optional(),
+  extensions: z.number().int().nonnegative().optional(),
 })
 const requestInputSchema = z
   .object({
@@ -152,6 +167,8 @@ const leaseSchema = z.object({
   kind: z.string(),
   ref: z.string(),
   expiresAt: z.string().nullable(),
+  grantedMs: z.number().int().positive().optional(),
+  extensions: z.number().int().nonnegative().optional(),
 })
 const usageSchema = z.object({
   uses: z.number().int().nonnegative(),
@@ -197,6 +214,7 @@ export type Pending = {
   certificate?: string
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
+  decidedAt?: number
 }
 export type View = {
   enforcers: EnforcerView[]
@@ -270,6 +288,14 @@ const save = (path: string, value: unknown) => writeFile(path, JSON.stringify(va
 export async function createApp(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
+  const helpDir = new URL('./skill/help/', import.meta.url)
+  const help = new Map(
+    await Promise.all(
+      (await readdir(helpDir))
+        .filter((name) => name.endsWith('.md'))
+        .map(async (name) => [name.slice(0, -3), await readFile(new URL(name, helpDir), 'utf8')] as const),
+    ),
+  )
   const secretPath = (id: string) => join(dataDir, 'secrets', id)
   await mkdir(join(dataDir, 'secrets'), { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
@@ -677,7 +703,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
             next.delete(key)
             replaced.add(key)
           }
-        const lease = { id: rid(), subjectId: request.subjectId, kind, ref, expiresAt }
+        const lease: Lease = { id: rid(), subjectId: request.subjectId, kind, ref, expiresAt }
+        if (duration !== 'permanent') lease.grantedMs = durations[duration]
         next.set(lease.id, lease)
         request.leaseIds.push(lease.id)
       }
@@ -724,6 +751,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return serial(() => {
       const request = decidable(id, 'deny')
       move(request, 'deny')
+      request.decidedAt = Date.now()
       void logEvent('request_denied', request.subjectId, {
         requestId: id,
         capability: request.bundle ?? request.members,
@@ -781,15 +809,18 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     for (const [id, request] of pending)
       if (['expired', 'revoked', 'superseded'].includes(request.status)) pending.delete(id)
     // SSH requests carry a fresh public key each time, so they never merge.
-    const existing = [...pending.values()].find(
-      (r) =>
-        !sshOrder &&
-        !r.ssh &&
-        r.subjectId === subjectId &&
-        r.bundle === bundle &&
-        JSON.stringify(r.members) === JSON.stringify(members) &&
-        r.status === 'pending',
+    const matches = (r: Pending) =>
+      !sshOrder &&
+      !r.ssh &&
+      r.subjectId === subjectId &&
+      r.bundle === bundle &&
+      JSON.stringify(r.members) === JSON.stringify(members)
+    // A recent denial stands: answer with it instead of asking the owner again.
+    const denied = [...pending.values()].find(
+      (r) => matches(r) && r.status === 'denied' && Date.now() - (r.decidedAt ?? r.createdAt) < deniedCooldown,
     )
+    if (denied) return denied
+    const existing = [...pending.values()].find((r) => matches(r) && r.status === 'pending')
     if (existing) {
       if (reason) Object.assign(existing, { reason, duration })
       return existing
@@ -830,7 +861,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
 
   const app = new Hono<Env>()
   app.onError((error, c) => {
-    if (error instanceof HTTPException) return error.getResponse()
+    if (error instanceof HTTPException) {
+      // Agent routes answer in JSON; admin pages keep their plain-text messages.
+      if (error.res || c.req.path.startsWith('/admin')) return error.getResponse()
+      return c.json({ error: error.message || 'request_failed' }, error.status)
+    }
     if (error instanceof IllegalTransition) return c.json({ error: 'conflict', message: error.message }, 409)
     if (error instanceof z.ZodError)
       return c.json(
@@ -845,29 +880,54 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return c.json({ error: 'internal_error' }, 500)
   })
 
+  const base = config.PUBLIC_URL.replace(/\/$/, '')
+  const tellUser = (anchor: string) => `Ask the owner to approve at ${base}/admin#${anchor}`
+  // The caller's address: the first X-Forwarded-For hop (speaker runs behind the owner's reverse proxy), else the
+  // socket; in-process app.fetch callers have neither and share 'unknown'.
+  const sourceOf = (c: Context) =>
+    (
+      c.req.header('x-forwarded-for')?.split(',')[0].trim() ||
+      (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ||
+      'unknown'
+    ).replace(/^::ffff:/, '')
+  // Every agent-facing 401 names its cause and the next step, and points at the skill.
+  const unauthorized = (c: Context, error: string, fields: Record<string, string>) => {
+    c.header('www-authenticate', 'Bearer realm="speaker"')
+    c.header('link', '</skill.md>; rel="help"')
+    return c.json({ error, ...fields, help: '/skill.md' }, 401)
+  }
+  const enroll = 'Enroll a new session with a new token: GET /_speaker/help/setup'
   // Resolves a bearer token to an enforcer, a live session, or a subject of an approved enforcer.
-  const unauthorized = { message: { error: 'unauthorized' } }
-  const auth = bearerAuth<Env>({
-    verifyToken: (token, c) => {
-      const digest = hash(token)
-      const byToken = <T extends { tokenHash: string }>(items: Map<string, T>) =>
-        [...items.values()].find((item) => same(item.tokenHash, digest))
-      const enforcer = byToken(enforcers),
-        session = byToken(sessions),
-        subject = byToken(subjects)
-      const parent = subject && enforcers.get(subject.enforcer)
-      if (enforcer?.status === 'approved') c.set('caller', { role: 'enforcer', enforcer })
-      else if (session && liveSession(session))
-        c.set('caller', { role: 'subject', id: session.id, kinds: ['credential'] })
-      else if (subject && parent?.status === 'approved')
-        c.set('caller', { role: 'subject', id: subject.id, kinds: ['credential', ...parent.kinds] })
-      else return false
-      return true
-    },
-    noAuthenticationHeader: unauthorized,
-    invalidAuthenticationHeader: unauthorized,
-    invalidToken: unauthorized,
-  })
+  const auth: MiddlewareHandler<Env> = async (c, next) => {
+    const token = /^Bearer +(\S+) *$/i.exec(c.req.header('authorization') ?? '')?.[1]
+    if (!token) return unauthorized(c, 'unauthorized', { next: 'Send Authorization: Bearer <token>. ' + enroll })
+    const digest = hash(token)
+    const byToken = <T extends { tokenHash: string }>(items: Map<string, T>) =>
+      [...items.values()].find((item) => same(item.tokenHash, digest))
+    const enforcer = byToken(enforcers),
+      session = byToken(sessions),
+      subject = byToken(subjects)
+    const parent = subject && enforcers.get(subject.enforcer)
+    if (enforcer?.status === 'approved') c.set('caller', { role: 'enforcer', enforcer })
+    else if (session) {
+      if (session.source && session.source !== sourceOf(c))
+        return unauthorized(c, 'source_mismatch', { next: `This token works only from ${session.source}. ${enroll}` })
+      if (session.status === 'pending')
+        return unauthorized(c, 'session_pending', {
+          next: `GET /_speaker/sessions/${session.id}?wait=60`,
+          tell_user: tellUser(`session-${session.id}`),
+        })
+      if (session.status === 'denied')
+        return unauthorized(c, 'session_denied', { next: 'Stop: the owner denied this session.' })
+      if (!liveSession(session)) return unauthorized(c, 'session_expired', { next: enroll })
+      c.set('caller', { role: 'subject', id: session.id, kinds: ['credential'] })
+    } else if (subject && parent?.status === 'approved')
+      c.set('caller', { role: 'subject', id: subject.id, kinds: ['credential', ...parent.kinds] })
+    else if (enforcer?.status === 'pending')
+      return unauthorized(c, 'enforcer_pending', { tell_user: tellUser(`enforcer-${enforcer.id}`) })
+    else return unauthorized(c, 'unknown_token', { next: enroll })
+    await next()
+  }
   const enforcerOf = (c: Context<Env>) => {
     const caller = c.get('caller')
     if (caller.role !== 'enforcer') throw new HTTPException(403, { message: 'Enforcer token required' })
@@ -894,12 +954,38 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
   if (ssh) app.get('/_speaker/ssh/ca.pub', (c) => c.text(`${ssh.caPublicKey}\n`))
-  app.get('/skill.md', (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
-  for (const route of ['/skill.md', '/SKILL.md'])
-    app.get(route, (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
-  // Holds a status read for up to `?wait=` seconds (max 60) until `settled` turns true, so agents poll once.
-  const settle = async (c: Context<Env>, settled: () => boolean) => {
-    const until = Date.now() + Math.min(Number(c.req.query('wait')) || 0, 60) * 1000
+  // Public discovery: what speaker is and where the instructions are. Providers and policies stay behind auth.
+  const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
+  app.use('/skill.md', etag())
+  app.use('/SKILL.md', etag())
+  app.use('/_speaker/help/*', etag())
+  for (const route of ['/skill.md', '/SKILL.md']) app.get(route, (c) => c.text(skill, 200, markdown))
+  app.get('/_speaker/help/:topic', (c) => {
+    const text = help.get(c.req.param('topic'))
+    if (text === undefined)
+      return c.json({ error: 'unknown_help_topic', topics: [...help.keys()].map((t) => `/_speaker/help/${t}`) }, 404)
+    return c.text(text, 200, markdown)
+  })
+  const intro = [
+    'speaker: owner-approved access to homelab APIs. Agents never get upstream keys.',
+    'agents: read /skill.md. More: /_speaker/help/<topic>',
+    'humans: /admin',
+    '',
+  ].join('\n')
+  app.get('/', (c) =>
+    c.req.header('accept')?.includes('text/html')
+      ? c.html(
+          '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
+        )
+      : c.text(intro),
+  )
+  app.get('/llms.txt', (c) => c.text(intro))
+  app.get('/.well-known/speaker.json', (c) =>
+    c.json({ version: 2, skill: '/skill.md', help: '/_speaker/help/<topic>', auth: 'bearer', admin: '/admin' }),
+  )
+  // Holds a call for up to `?wait=` seconds (or `seconds`; max 60) until `settled` turns true, so agents poll once.
+  const settle = async (c: Context<Env>, settled: () => boolean, seconds = Number(c.req.query('wait'))) => {
+    const until = Date.now() + Math.min(seconds || 0, 60) * 1000
     while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
   // Resolves a capability or bundle request body to its members, refusing kinds the caller may not request.
@@ -913,21 +999,17 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         throw new HTTPException(400, { message: 'Credential ref must be <provider>.read or <provider>.write' })
       if (kind === 'credential' && !Object.hasOwn(providers, ref.split('.')[0]))
         throw new HTTPException(400, { message: 'Unknown provider' })
+      if (kind === 'credential' && secrets.get(ref.split('.')[0]) === undefined)
+        throw new HTTPException(400, { message: 'provider_not_configured' })
     }
     return members
   }
+  // Agents see only providers that have a key; the rest cannot serve a call.
   const providerList = () =>
     Object.fromEntries(
-      Object.entries(providers).map(([id, provider]) => [
-        id,
-        {
-          auth: provider.auth.type,
-          policy: provider.policy,
-          mcp: Boolean(provider.mcp),
-          secretConfigured: secrets.get(id) !== undefined,
-          hasGuide: Boolean(provider.guide),
-        },
-      ]),
+      Object.entries(providers)
+        .filter(([id]) => secrets.get(id) !== undefined)
+        .map(([id, provider]) => [id, { policy: provider.policy, ...(provider.mcp ? { mcp: true } : {}) }]),
     )
   if (config.PUBLIC_PROVIDERS) app.get('/_speaker/providers', (c) => c.json(providerList()))
   app.get(
@@ -974,7 +1056,16 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const { request: wanted, ...input } = sessionEnrollmentSchema.parse(await c.req.json())
     // Validate the optional first request before storing anything; a session may request credentials only.
     const members = wanted ? membersFor(wanted, ['credential']) : undefined
-    const session: Session = { id: rid(), ...input, status: 'pending', expiresAt: null }
+    if ([...sessions.values()].some((s) => s.tokenHash === input.tokenHash))
+      throw new HTTPException(409, { message: 'token_in_use: make a new token for a new session' })
+    const session: Session = {
+      id: rid(),
+      ...input,
+      status: 'pending',
+      expiresAt: null,
+      source: sourceOf(c),
+      enrolledAt: new Date().toISOString(),
+    }
     sessions.set(session.id, session)
     await saveList('sessions.json', sessions)
     audit('session_enrolled', { session: session.id, label: session.label, llmName: session.llmName })
@@ -982,7 +1073,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       wanted && members ? createRequest(session.id, members, wanted.bundle, wanted.reason, wanted.duration) : undefined
     if (request) request.atEnrollment = true
     else void notify(`Session "${session.label}" (${session.llmName}) wants access`, `session-${session.id}`)
-    return c.json({ id: session.id, ...(request ? { requestId: request.id } : {}) }, 201)
+    return c.json(
+      {
+        id: session.id,
+        ...(request ? { requestId: request.id } : {}),
+        next: `GET /_speaker/sessions/${session.id}?wait=60`,
+        tell_user: tellUser(`session-${session.id}`),
+      },
+      201,
+    )
   })
   app.get('/_speaker/sessions/:id', async (c) => {
     const session = sessions.get(c.req.param('id'))
@@ -1213,6 +1312,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     moveIdentity('session', session, 'approve')
     session.expiresAt = expiry(permanent ? 'permanent' : duration)
     session.approvedAt = new Date().toISOString()
+    session.grantedMs = permanent || duration === 'permanent' ? undefined : durations[duration]
     await saveList('sessions.json', sessions)
     // The session card showed its first request; approving the session grants that too, for the duration asked.
     for (const request of [...pending.values()])
@@ -1289,7 +1389,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       `- Read (GET, HEAD, OPTIONS): ${access('read')}`,
       `- Write (other methods): ${access('write')}`,
       ...(session ? [`- Your session is approved ${until(session.expiresAt)}.`] : []),
-      '- `403 approval_required` carries a `requestId`: wait with `GET /_speaker/requests/<id>?wait=60`, then retry once it is `approved`. `403 denied` is final.',
+      '- Without access, send the call with `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`): speaker asks the owner and answers the call once approved. Otherwise a `403` names the `next` step. `denied` is final.',
+      '- Running out of time: `POST /_speaker/requests/<id>/extend` with `{"duration":"15m"}`.',
       ...(provider.mcp
         ? [
             `- MCP server (streamable HTTP) at \`$SPEAKER_URL/${name}\`. Listing tools and read-only tools count as read; other tool calls count as write.`,
@@ -1343,7 +1444,19 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     const members = membersFor(input, kindsOf(caller))
     const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
-    return c.json({ id: request.id, status: request.status }, 201)
+    const status = request.status
+    return c.json(
+      {
+        id: request.id,
+        status,
+        ...(status === 'pending'
+          ? { next: `GET /_speaker/requests/${request.id}?wait=60`, tell_user: tellUser(`request-${request.id}`) }
+          : status === 'denied'
+            ? { next: 'Stop: the owner denied this recently.' }
+            : {}),
+      },
+      201,
+    )
   })
   // Hosts the caller may ask SSH access to, and the login users each accepts.
   app.get('/_speaker/ssh/hosts', (c) => {
@@ -1401,8 +1514,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const caller = subjectOf(c)
     return c.json([...pending.values()].filter((r) => r.subjectId === caller.id).map(requestReply))
   })
-  app.get('/_speaker/requests/:id', async (c) => {
-    const request = pending.get(c.req.param('id')),
+  const ownRequest = (c: Context<Env>) => {
+    const request = pending.get(c.req.param('id') ?? ''),
       caller = c.get('caller')
     const mine =
       request &&
@@ -1410,6 +1523,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         ? subjects.get(request.subjectId)?.enforcer === caller.enforcer.id
         : caller.id === request.subjectId)
     if (!request || !mine) throw new HTTPException(404, { message: 'Request not found' })
+    return request
+  }
+  app.get('/_speaker/requests/:id', async (c) => {
+    const request = ownRequest(c)
     await settle(c, () => request.status !== 'pending')
     const certificate =
       request.status === 'approved' && request.ssh && request.certificate && request.expiresAt
@@ -1420,6 +1537,62 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           }
         : {}
     return c.json({ ...requestReply(request), ...certificate })
+  })
+  const extendInput = async (c: Context) =>
+    z.object({ duration: durationSchema }).parse(await c.req.json().catch(() => ({}))).duration
+  // Extends an approved request's leases from now. Small extensions (at most the span the owner approved, a few
+  // times) need no owner; a larger one files a new request for the same access.
+  app.post('/_speaker/requests/:id/extend', async (c) => {
+    const request = ownRequest(c),
+      duration = await extendInput(c)
+    if (request.status !== 'approved' || request.ssh)
+      return c.json({ error: 'not_extendable', next: 'Request the access again (POST /_speaker/requests)' }, 409)
+    if (request.expiresAt === null) return c.json({ status: 'approved', expiresAt: null })
+    const owned = request.leaseIds.map((id) => leases.get(id)).filter((lease): lease is Lease => Boolean(lease))
+    const wanted = durations[duration]
+    if (owned.some((l) => l.grantedMs === undefined || wanted > l.grantedMs || (l.extensions ?? 0) >= autoExtensions)) {
+      const again = createRequest(request.subjectId, request.members, request.bundle, 'extend access', duration)
+      return c.json(
+        {
+          status: again.status,
+          requestId: again.id,
+          next: `GET /_speaker/requests/${again.id}?wait=60`,
+          tell_user: tellUser(`request-${again.id}`),
+        },
+        202,
+      )
+    }
+    await serial(async () => {
+      const next = new Map(leases)
+      const end = Math.max(Date.now() + wanted, request.expiresAt ?? 0)
+      for (const lease of owned)
+        next.set(lease.id, {
+          ...lease,
+          expiresAt: new Date(end).toISOString(),
+          extensions: (lease.extensions ?? 0) + 1,
+        })
+      await commitLeases(next)
+      // The lifecycle sweep expires the approval at request.expiresAt, so it moves with its leases.
+      request.expiresAt = end
+    })
+    const expiresAt = new Date(request.expiresAt).toISOString()
+    void logEvent('lease_extended', request.subjectId, { requestId: request.id, expiresAt })
+    return c.json({ status: 'approved', expiresAt })
+  })
+  // A session extends itself the same way; beyond the automatic limit it enrolls again.
+  app.post('/_speaker/sessions/:id/extend', async (c) => {
+    const caller = subjectOf(c),
+      session = sessions.get(c.req.param('id'))
+    if (!session || session.id !== caller.id) throw new HTTPException(404, { message: 'Session not found' })
+    const wanted = durations[await extendInput(c)]
+    if (session.expiresAt === null) return c.json({ status: 'approved', expiresAt: null })
+    if (session.grantedMs === undefined || wanted > session.grantedMs || (session.extensions ?? 0) >= autoExtensions)
+      return c.json({ error: 'extension_needs_approval', next: enroll }, 403)
+    session.expiresAt = new Date(Math.max(Date.now() + wanted, Date.parse(session.expiresAt))).toISOString()
+    session.extensions = (session.extensions ?? 0) + 1
+    await saveList('sessions.json', sessions)
+    void logEvent('session_extended', session.id, { expiresAt: session.expiresAt })
+    return c.json({ status: 'approved', expiresAt: session.expiresAt })
   })
   app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
   app.all('*', async (c) => {
@@ -1444,20 +1617,38 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     const capability = `${providerId}.${group}`
     const rule = ruleFor(provider, group, caller.id)
-    if (rule === 'deny') return c.json({ error: 'denied' }, 403)
+    if (rule === 'deny')
+      return c.json({ error: 'denied', capability, next: 'Stop: the owner blocks this; do not request it.' }, 403)
     const secret = secrets.get(providerId)
-    if (secret === undefined) return c.json({ error: 'provider_credential_missing' }, 503)
+    if (secret === undefined) return c.json({ error: 'provider_not_configured' }, 503)
     if (rule === 'approval' && !hasLease(caller.id, 'credential', capability)) {
       const request = createRequest(
         caller.id,
         [{ kind: 'credential', ref: capability }],
         undefined,
-        '',
+        c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
         '15m',
         method,
         detail ? `${path} · ${detail}` : path,
       )
-      return c.json({ error: 'approval_required', capability, requestId: request.id }, 403)
+      // `Speaker-Wait: <seconds>` holds this call until the owner decides, then forwards it: one call, no retry.
+      await settle(c, () => request.status !== 'pending', Number(c.req.header('speaker-wait')))
+      if (request.status === 'denied')
+        return c.json(
+          { error: 'denied', capability, requestId: request.id, next: 'Stop: the owner denied this request.' },
+          403,
+        )
+      if (!hasLease(caller.id, 'credential', capability))
+        return c.json(
+          {
+            error: 'approval_required',
+            capability,
+            requestId: request.id,
+            next: `GET /_speaker/requests/${request.id}?wait=60, then repeat this call (or repeat it with Speaker-Wait: 60)`,
+            tell_user: tellUser(`request-${request.id}`),
+          },
+          403,
+        )
     }
     const lease = rule === 'approval' ? matchingLease(caller.id, 'credential', capability) : undefined
     const target = upstreamUrl(provider, secret, parts, incoming.search)
@@ -1480,7 +1671,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .filter(Boolean)
     for (const name of [...headers.keys()])
       if (
-        /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*)$/i.test(name) ||
+        /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*|speaker-.*)$/i.test(
+          name,
+        ) ||
         hopHeaders.includes(name) ||
         connectionHeaders.includes(name)
       )

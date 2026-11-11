@@ -544,3 +544,112 @@ test('the access log lists proxied calls per identity, with no lease for an alwa
   assert.match(page, /always/)
   assert.doesNotMatch(page, /k=hidden|127\.0\.0\.1:\d+\/base/)
 })
+
+const enroll = (f: Fixture, token: string, headers: Record<string, string> = {}) =>
+  f.call('/_speaker/sessions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify({ label: 'agent', llmName: 'Test LLM', tokenHash: sha(token), duration: '1h' }),
+  })
+const firstRequest = async (f: Fixture, token: string) =>
+  (await (await f.call('/notes/x', { headers: bearer(token) })).json()) as { requestId: string }
+
+test('enrollment refuses the empty-token hash and a reused token, and 401s say what to do next', async (t) => {
+  const f = await setup(t)
+  assert.equal((await enroll(f, '')).status, 400)
+  const first = (await (await enroll(f, 'tok')).json()) as { id: string; next: string; tell_user: string }
+  assert.equal(first.next, `GET /_speaker/sessions/${first.id}?wait=60`)
+  assert.match(first.tell_user, new RegExp(`/admin#session-${first.id}$`))
+  assert.equal((await enroll(f, 'tok')).status, 409)
+  const pending = await f.call('/notes/x', { headers: bearer('tok') })
+  assert.equal(pending.status, 401)
+  assert.equal(pending.headers.get('www-authenticate'), 'Bearer realm="speaker"')
+  assert.equal(pending.headers.get('link'), '</skill.md>; rel="help"')
+  assert.equal(((await pending.json()) as { error: string }).error, 'session_pending')
+  const unknown = (await (await f.call('/notes/x', { headers: bearer('nope') })).json()) as { error: string }
+  assert.equal(unknown.error, 'unknown_token')
+})
+
+test('Speaker-Wait holds a call until approval and then returns the upstream response', async (t) => {
+  const f = await setup(t)
+  await approvedSession(f, 'tok')
+  const held = f.call('/notes/doc', {
+    headers: { ...bearer('tok'), 'speaker-wait': '10', 'speaker-reason': 'read doc' },
+  })
+  let listed: { id: string }[] = []
+  while (!listed.length) {
+    await sleep(100)
+    listed = (await (await f.call('/_speaker/requests', { headers: bearer('tok') })).json()) as { id: string }[]
+  }
+  assert.equal((await f.owner(`/api/requests/${listed[0].id}/approve`, { duration: '15m' })).status, 200)
+  const response = await held
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), { ok: true })
+  assert.equal(f.calls.at(-1)?.headers['speaker-wait'], undefined)
+  assert.equal(f.calls.at(-1)?.headers['speaker-reason'], undefined)
+})
+
+test('a denied request stays denied instead of asking the owner again', async (t) => {
+  const f = await setup(t)
+  await approvedSession(f, 'tok')
+  const { requestId } = await firstRequest(f, 'tok')
+  assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
+  const again = (await (await f.call('/notes/x', { headers: bearer('tok') })).json()) as { error: string }
+  assert.equal(again.error, 'denied')
+})
+
+test('providers without a key are hidden from agents and cannot be requested', async (t) => {
+  const f = await setup(t)
+  await approvedSession(f, 'tok')
+  const list = (await (await f.call('/_speaker/providers', { headers: bearer('tok') })).json()) as object
+  assert.ok('notes' in list)
+  assert.ok(!('karakeep' in list))
+  const refused = await f.call('/_speaker/requests', {
+    method: 'POST',
+    headers: bearer('tok'),
+    body: JSON.stringify({ capability: { kind: 'credential', ref: 'karakeep.read' }, reason: 'r' }),
+  })
+  assert.equal(refused.status, 400)
+  assert.equal(((await refused.json()) as { error: string }).error, 'provider_not_configured')
+})
+
+test('an agent extends its grant itself within the approved span, and asks the owner beyond it', async (t) => {
+  const f = await setup(t)
+  await approvedSession(f, 'tok')
+  const { requestId } = await firstRequest(f, 'tok')
+  await f.owner(`/api/requests/${requestId}/approve`, { duration: '30m' })
+  const extend = (duration: string) =>
+    f.call(`/_speaker/requests/${requestId}/extend`, {
+      method: 'POST',
+      headers: bearer('tok'),
+      body: JSON.stringify({ duration }),
+    })
+  const small = await extend('15m')
+  assert.equal(small.status, 200)
+  assert.equal(((await small.json()) as { status: string }).status, 'approved')
+  const large = await extend('1h')
+  assert.equal(large.status, 202)
+  assert.equal(((await large.json()) as { status: string }).status, 'pending')
+})
+
+test('a session token works only from the address it enrolled from', async (t) => {
+  const f = await setup(t)
+  const from = (ip: string) => ({ 'x-forwarded-for': ip })
+  const { id } = (await (await enroll(f, 'tok', from('100.64.0.7'))).json()) as { id: string }
+  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
+  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7') } })
+  assert.equal(home.status, 200)
+  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.9') } })
+  assert.equal(away.status, 401)
+  assert.equal(((await away.json()) as { error: string }).error, 'source_mismatch')
+})
+
+test('public discovery answers without a token and keeps providers private', async (t) => {
+  const f = await setup(t)
+  assert.match(await (await f.call('/')).text(), /read \/skill\.md/)
+  assert.match(await (await f.call('/llms.txt')).text(), /humans: \/admin/)
+  const known = (await (await f.call('/.well-known/speaker.json')).json()) as Record<string, unknown>
+  assert.equal(known.skill, '/skill.md')
+  assert.ok(!('providers' in known))
+  assert.ok((await f.call('/skill.md')).headers.get('etag'))
+})
