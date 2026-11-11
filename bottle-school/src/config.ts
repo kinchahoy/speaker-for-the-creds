@@ -92,9 +92,9 @@ export const validateConfig = (data: unknown): Config => {
     !/^[^:]+:\d{1,5}$/.test(config.localModel.upstream) ||
     +upstreamPort < 1 ||
     +upstreamPort > 65_535 ||
-    !(upstreamHost === "localhost" || (isIPv4(upstreamHost) && lan.check(upstreamHost)))
+    !(upstreamHost === "localhost" || (isIPv4(upstreamHost) && (lan.check(upstreamHost) || tailscale.check(upstreamHost))))
   )
-    throw new Error("localModel.upstream must be one loopback or RFC1918 IPv4 host:port endpoint");
+    throw new Error("localModel.upstream must be one loopback, RFC1918, or Tailscale IPv4 host:port endpoint");
   if (
     new Set(config.localModel.models.map((entry) => entry.id)).size !==
     config.localModel.models.length

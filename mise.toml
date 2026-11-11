@@ -2,6 +2,10 @@
 node = "26.11.1"
 pnpm = "10.18.3"
 
+# Host-specific bottle-school settings (model endpoint, speaker URL, VMM). Gitignored; see bottle-school/.env.example.
+[env]
+_.file = "bottle-school/.env"
+
 [tasks.install]
 description = "Install both packages' dependencies"
 run = ["pnpm -C speaker install", "pnpm -C bottle-school install"]
@@ -50,7 +54,7 @@ dir = "bottle-school"
 run = "node src/cli.ts"
 
 [tasks.setup]
-description = "Create bottle-school/config.json and its directories (env: LLM_UPSTREAM=host:port LLM_MODEL=id)"
+description = "Create bottle-school/config.json and its directories from bottle-school/.env"
 dir = "bottle-school"
 run = "node setup.ts"
 

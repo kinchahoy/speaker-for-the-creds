@@ -21,15 +21,20 @@ Run these commands from the repository root:
 
 ```sh
 mise run install
-cp bottle-school/config.example.json bottle-school/config.json
+cp bottle-school/.env.example bottle-school/.env   # set LLM_UPSTREAM, LLM_MODEL, SPEAKER_URL
+mise run setup
+mise run doctor
 ```
 
-Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json`, `bottle-school/catalog.json`, and `bottle-school/secrets.env.example` into `configRoot` as `templates.json`, `catalog.json`, and `secrets.env`. Protect secrets with mode 600. The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
+Host-specific values (model endpoint, speaker URL, VM backend) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
+{.ai}
+
+To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json`, `bottle-school/catalog.json`, and `bottle-school/secrets.env.example` into `configRoot` as `templates.json`, `catalog.json`, and `secrets.env`. Protect secrets with mode 600. The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability.
-- `localModel.upstream` names one loopback or RFC1918 IPv4 `host:port`, such as the MI60 server's inference endpoint. The validator does not accept a Tailscale model address.
+- `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.
 - `shareRoots` defines the host folders a lease may expose. Begin with no sensitive shares and one task.
 - `PI_V2_CONFIG` selects the service configuration; `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
@@ -50,10 +55,32 @@ mise run bottle
 The guest build imports an Ubuntu rootfs through Gondolin. Its tool selections live in `guest/apt-packages.txt`, `guest/mise-config.toml`, and `guest/python/requirements.in`. The build installs current tool releases except explicitly pinned packages; it refreshes Docker layers daily. Set `PI_GUEST_BROWSER=1` when running the build to add Python Playwright and headless Chromium. Builds need internet access and several GiB of disk space.
 {.ai}
 
-The default backend is QEMU. Install `qemu-system-x86` (with `qemu-utils` for `qemu-img`) on the host.
+<!-- author: ai -->
+
+## VM backends: QEMU and Krun
+
+<sub>AI-written</sub>
+
+`PI_V2_VMM` selects Gondolin's VMM for both the guest build and the service. It defaults to `qemu`. An image built for one backend does not run under the other, so rebuild after you switch.
 {.ai}
 
-Krun is optional and experimental. Set `PI_V2_VMM=krun` for both the build and the service (`PI_V2_VMM=krun mise run guest-build pi-v5-guest`, then `PI_V2_VMM=krun mise run bottle`). On x86_64 the build then requires a Krun ELF kernel at `.runtime/krun/vmlinux` or the path named by `KRUN_VMLINUX`; `start.sh` also selects a runner at `.runtime/krun-runner/bin/gondolin-krun-runner` when present. These host-specific artifacts are local prerequisites, not bundled binaries. An image built for one backend does not run under the other.
+**QEMU (default, supported).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). The build uses Gondolin's stock Alpine `linux-virt` kernel and initramfs. Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
+{.ai}
+
+**Krun (experimental, unverified).** Set `PI_V2_VMM=krun` in `bottle-school/.env`, then run `mise run guest-build pi-v5-guest` and `mise run bottle`. On x86_64 this path needs local artifacts that the repository does not ship:
+{.ai}
+
+- An uncompressed ELF kernel (`vmlinux`) at `.runtime/krun/vmlinux` or `KRUN_VMLINUX`. libkrun's x86_64 path boots an ELF kernel directly, not the bzImage that Gondolin's build produces. `guest/patch-krun-assets.mjs` swaps that ELF kernel into the image's `krunKernel` slot. It also writes a trailer-only cpio as `krunInitrd`, because libkrun's ELF path rejects a zero-byte initrd. Then it re-checksums the manifest.
+- Optionally, a Gondolin Krun runner at `.runtime/krun-runner/bin/gondolin-krun-runner`. `start.sh` exports it as `GONDOLIN_KRUN_RUNNER` when present; otherwise Gondolin uses its published runner. `guest/build.json` pins `krunfwVersion` `v5.2.1`.
+{.ai}
+
+QEMU became the default because no host has completed a verified end-to-end Krun run. The repository records no root cause. To investigate:
+{.ai}
+
+1. Is a kernel config known to work with libkrun available? libkrunfw's own kernel is a candidate, but it is embedded in the library and must be extracted or rebuilt as an ELF `vmlinux`. It also needs the virtio drivers that Gondolin's init and rootfs expect, built in.
+2. Does the published Gondolin runner work with `krunfwVersion` `v5.2.1` on this host, or only the local runner?
+3. Do Gondolin's networking and HTTP hooks (credential substitution, egress policy) behave the same under Krun's network path as under QEMU?
+4. Does the v5 rootfs (over 2 GiB) mount, and do VM start-up times beat QEMU's enough to justify the extra moving parts?
 {.ai}
 
 From another terminal, launch and inspect a task:
