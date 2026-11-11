@@ -363,6 +363,9 @@ export const bootGuest = async (
   const vm = await VM.create({
     sandbox: {
       vmm: process.env.PI_V2_VMM === "krun" ? "krun" : "qemu",
+      // QEMU microvm loads the initrd at the top of guest RAM, where a large guest initramfs overwrites the ACPI
+      // DSDT and the kernel hangs after "ACPI: Core revision". q35 places firmware tables where the initrd cannot reach.
+      ...(process.env.PI_V2_VMM === "krun" ? {} : { machineType: "q35" }),
       console: "none",
       imagePath: config.guestImage,
     },

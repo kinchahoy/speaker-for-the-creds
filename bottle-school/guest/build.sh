@@ -43,6 +43,8 @@ ASSETS=$(mktemp -d "${TMPDIR:-/tmp}/pi-v3-assets.XXXXXX")
 cleanup() { rm -rf "$ASSETS"; }
 trap cleanup EXIT INT TERM
 
+# Gondolin refreshes cached Alpine indexes only on a 404, so a warm cache would keep shipping old kernel packages.
+"$GONDOLIN" build cache update --config "$ROOT/guest/build.json" --arch "$ARCH"
 "$GONDOLIN" build --config "$ROOT/guest/build.json" --arch "$ARCH" --output "$ASSETS"
 # Gondolin's privileged Docker builder writes root-owned assets. The host user must patch and import them.
 if [ ! -w "$ASSETS/manifest.json" ]; then
