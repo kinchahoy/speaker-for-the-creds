@@ -57,23 +57,88 @@ export const speakerClient = (config: Config, token: string) => {
 };
 export type Speaker = ReturnType<typeof speakerClient>;
 
+/** How long the service may run without reaching speaker before it gives up: at startup, and after losing it. */
+export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, maxBackoffMs: 30_000 };
+
+/**
+ * Classifies why speaker can't be used: an auth answer (401/403) is fatal — the token is unknown (speaker data reset or a
+ * different speaker), not yet approved, or denied — while anything else (network error, 5xx) may clear up.
+ */
+const probeSpeaker = async (config: Config, token: string) => {
+  try {
+    const response = await fetch(`${config.speaker.url}/_speaker/bundles`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    await response.body?.cancel();
+    if (response.status === 401 || response.status === 403)
+      return {
+        fatal: true,
+        message:
+          `speaker at ${config.speaker.url} rejects this host's enforcer token (HTTP ${response.status}): it is not ` +
+          `approved yet, was denied, or speaker's data was reset. Approve the enforcer in speaker /admin, or run ` +
+          `"mise run bottle-cli register" again.`,
+      };
+    return { fatal: false, message: `speaker answered HTTP ${response.status}` };
+  } catch (error) {
+    const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
+    return { fatal: false, message: `cannot reach speaker at ${config.speaker.url} (${cause})` };
+  }
+};
+
 /**
  * Holds the enforcer WebSocket. Each snapshot replaces the lease set and request statuses; a closed socket or 30 s without
- * a snapshot clears it. Returns the function that reports the in-effect lease ids.
+ * a snapshot clears it. Reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker
+ * rejects the token, after SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs
+ * of continuous outage. Returns the function that reports the in-effect lease ids.
  */
-export const watchLeases = (config: Config, token: string, onSnapshot: (snapshot: Snapshot) => void) => {
+export const watchLeases = (
+  config: Config,
+  token: string,
+  onSnapshot: (snapshot: Snapshot) => void,
+  onFatal: (message: string) => void,
+) => {
   const url = new URL("/_speaker/enforcers/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   let socket: WebSocket | undefined;
   let lastSnapshot = Date.now();
   let applied = "[]";
+  let connected = false;
+  let downSince = Date.now();
+  let backoff = 5_000;
+  let stopped = false;
+  const fail = (message: string) => {
+    if (stopped) return;
+    stopped = true;
+    onFatal(message);
+  };
+  const retry = async () => {
+    const probe = await probeSpeaker(config, token);
+    if (probe.fatal) return fail(probe.message);
+    const limit = connected ? SPEAKER_LIMITS.outageMs : SPEAKER_LIMITS.firstConnectMs;
+    const down = Date.now() - downSince;
+    if (down >= limit)
+      return fail(
+        `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
+          `Check that speaker is running and that speaker.url is right in the bottle-school config.json.`,
+      );
+    console.error(`${probe.message}; all leases cleared; retrying in ${backoff / 1000} s`);
+    setTimeout(open, backoff);
+    backoff = Math.min(backoff * 2, SPEAKER_LIMITS.maxBackoffMs);
+  };
   const send = () => {
     if (socket?.readyState === WebSocket.OPEN)
       socket.send(`{"type":"applied","leaseIds":${applied}}`);
   };
   const open = () => {
+    if (stopped) return;
+    let opened = false;
     socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } });
     socket.onopen = () => {
+      opened = true;
+      if (!connected) console.log(`speaker connected at ${config.speaker.url}`);
+      connected = true;
+      backoff = 5_000;
       lastSnapshot = Date.now();
       send();
     };
@@ -81,11 +146,10 @@ export const watchLeases = (config: Config, token: string, onSnapshot: (snapshot
       lastSnapshot = Date.now();
       onSnapshot(Snapshot.parse(JSON.parse(String(event.data))));
     };
-    socket.onerror = () => console.error(`speaker connection to ${url.host} failed`);
     socket.onclose = () => {
-      console.error("speaker connection closed; all leases cleared; reconnecting in 5 s");
+      if (opened) downSince = Date.now();
       onSnapshot({ leases: [], requests: [] });
-      setTimeout(open, 5_000);
+      void retry();
     };
   };
   setInterval(() => {

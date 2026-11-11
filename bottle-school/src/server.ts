@@ -197,6 +197,6 @@ if (import.meta.main) {
         await tasks
           .close(task)
           .catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`));
-      process.exit(0);
+      process.exit(process.exitCode ?? 0);
     });
 }

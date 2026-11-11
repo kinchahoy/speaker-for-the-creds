@@ -136,7 +136,17 @@ export class Tasks {
     this.catalog = catalog;
     this.secrets = secrets;
     this.speaker = speakerClient(config, enforcerToken);
-    this.#report = watchLeases(config, enforcerToken, (snapshot) => this.#onSnapshot(snapshot));
+    this.#report = watchLeases(
+      config,
+      enforcerToken,
+      (snapshot) => this.#onSnapshot(snapshot),
+      // Without speaker no lease can apply: stop through the normal shutdown (archives tasks) and exit nonzero.
+      (message) => {
+        console.error(`stopping bottle-school: ${message}`);
+        process.exitCode = 1;
+        process.kill(process.pid, "SIGTERM");
+      },
+    );
   }
 
   list = () => [...this.byId.values()];
