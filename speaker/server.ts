@@ -761,12 +761,35 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ),
     )
   })
+  // Every provider gets a short generated guide for this caller (policy, lease and session expiry in UTC),
+  // followed by the owner's provider-specific guide when one is configured.
   app.get('/_speaker/providers/:name/guide', (c) => {
-    subjectOf(c)
+    const caller = subjectOf(c)
     const name = c.req.param('name')
-    const guide = Object.hasOwn(providers, name) ? providers[name].guide : undefined
-    if (!guide) throw new HTTPException(404, { message: 'No guide for this provider' })
-    return c.text(guide, 200, { 'content-type': 'text/markdown; charset=utf-8' })
+    if (!Object.hasOwn(providers, name)) throw new HTTPException(404, { message: 'Unknown provider' })
+    const provider = providers[name]
+    const until = (expiresAt: string | null) => (expiresAt === null ? 'with no expiry' : `until ${expiresAt} (UTC)`)
+    const access = (group: 'read' | 'write') => {
+      const rule = provider.policy[group]
+      if (rule === 'always') return 'allowed, no request needed.'
+      if (rule === 'deny') return 'denied by the owner; do not request it.'
+      const lease = matchingLease(caller.id, 'credential', `${name}.${group}`)
+      return lease ? `approved ${until(lease.expiresAt)}.` : `needs \`credential ${name}.${group}\`; not approved yet.`
+    }
+    const session = sessions.get(caller.id)
+    const lines = [
+      `# ${name}`,
+      '',
+      `- Call \`$SPEAKER_URL/${name}/<path>\` with \`Authorization: Bearer <your speaker token>\`. Speaker forwards \`<path>\` to the provider's API root and adds the real credential; send no other credentials.`,
+      `- Read (GET, HEAD, OPTIONS): ${access('read')}`,
+      `- Write (other methods): ${access('write')}`,
+      ...(session ? [`- Your session is approved ${until(session.expiresAt)}.`] : []),
+      '- `403 approval_required` carries a `requestId`: poll `GET /_speaker/requests/<id>`, then retry once it is `approved`. `403 denied` is final.',
+      provider.guide
+        ? `\n${provider.guide.trim()}`
+        : '- No provider-specific guide: use the upstream API documentation for paths.',
+    ]
+    return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
   })
   app.post('/_speaker/subjects', async (c) => {
     const enforcer = enforcerOf(c)
@@ -840,7 +863,14 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         ? subjects.get(request.subjectId)?.enforcer === caller.enforcer.id
         : caller.id === request.subjectId)
     if (!request || !mine) throw new HTTPException(404, { message: 'Request not found' })
-    return c.json({ id: request.id, status: requestStatus(request) })
+    const status = requestStatus(request)
+    if (status !== 'approved') return c.json({ id: request.id, status })
+    // Access ends with the earliest member lease; null means none of them expires.
+    const ends = request.members
+      .map((m) => matchingLease(request.subjectId, m.kind, m.ref)?.expiresAt)
+      .filter((end): end is string => typeof end === 'string')
+      .sort()
+    return c.json({ id: request.id, status, expiresAt: ends[0] ?? null })
   })
   app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
   app.all('*', async (c) => {

@@ -113,7 +113,18 @@ test('session enroll, approval, request approval, then the proxy injects the cre
   const body = (await blocked.json()) as { error: string; requestId: string }
   assert.equal(body.error, 'approval_required')
   assert.equal(f.calls.length, 0)
+  const guide = async () =>
+    (await f.call('/_speaker/providers/notes/guide', { headers: bearer('session-token') })).text()
+  assert.match(await guide(), /Read \(GET, HEAD, OPTIONS\): needs `credential notes\.read`; not approved yet\./)
   assert.equal((await f.owner(`/api/requests/${body.requestId}/approve`, { duration: '30m' })).status, 200)
+  const status = (await (
+    await f.call(`/_speaker/requests/${body.requestId}`, { headers: bearer('session-token') })
+  ).json()) as { status: string; expiresAt: string }
+  assert.equal(status.status, 'approved')
+  assert.ok(Date.parse(status.expiresAt) > Date.now())
+  const approved = await guide()
+  assert.ok(approved.includes(`Read (GET, HEAD, OPTIONS): approved until ${status.expiresAt} (UTC).`))
+  assert.match(approved, /Your session is approved until .+ \(UTC\)\./)
   assert.equal((await call()).status, 200)
   assert.equal(f.calls[0].url, '/base/things?q=1')
   assert.equal(f.calls[0].headers.authorization, `Bearer ${upstreamSecret}`)
