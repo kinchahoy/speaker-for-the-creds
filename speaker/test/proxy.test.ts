@@ -98,12 +98,12 @@ async function setup(t: TestContext, bundles: object = {}) {
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
-async function approvedEnforcer(f: Fixture) {
+async function approvedEnforcer(f: Fixture, kinds = ['site']) {
   const tokenHash = sha('enforcer-token')
   const created = await f.call('/_speaker/enforcers', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ name: 'test', kinds: ['site'], tokenHash }),
+    body: JSON.stringify({ name: 'test', kinds, tokenHash }),
   })
   const { id } = (await created.json()) as { id: string }
   assert.equal((await f.ownerForm(`/enforcers/${id}/approve`, {})).status, 303)
@@ -265,19 +265,60 @@ test('bundle listing shows a caller only bundles it may request in full', async 
   assert.deepEqual(await listed('st'), ['notes'])
 })
 
+test('bundles.json accepts the bare member array and the described form, and lists extension bundles to enforcers that declare the kind', async (t) => {
+  const f = await setup(t, {
+    pack: [{ kind: 'site', ref: 'a.example' }],
+    loop: {
+      description: 'Scheduled wake-ups',
+      members: [
+        { kind: 'extension', ref: 'pi-cc-loop' },
+        { kind: 'site', ref: 'b.example' },
+      ],
+    },
+  })
+  const { subject } = await approvedEnforcer(f, ['site', 'extension'])
+  const listed = await (
+    await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${subject.token}` } })
+  ).json()
+  assert.deepEqual(listed, {
+    pack: { members: [{ kind: 'site', ref: 'a.example' }] },
+    loop: {
+      description: 'Scheduled wake-ups',
+      members: [
+        { kind: 'extension', ref: 'pi-cc-loop' },
+        { kind: 'site', ref: 'b.example' },
+      ],
+    },
+  })
+  const made = await requestSite(f, subject.token, { bundle: 'loop', reason: 'schedule', duration: '1d' })
+  assert.equal(made.status, 201)
+})
+
 test('the admin saves and deletes bundles without a restart', async (t) => {
   const f = await setup(t)
   const { subject } = await approvedEnforcer(f)
   const listed = async () =>
     (await (
       await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${subject.token}` } })
-    ).json()) as Record<string, { kind: string; ref: string }[]>
-  const saved = await f.ownerForm('/bundles/save', { id: 'pack', members: 'site a.example\nsite b.example' })
+    ).json()) as Record<string, { description?: string; members: { kind: string; ref: string }[] }>
+  const saved = await f.ownerForm('/bundles/save', {
+    id: 'pack',
+    description: ' Two example sites ',
+    members: 'site a.example\nsite b.example',
+  })
   assert.equal(saved.status, 303)
-  assert.deepEqual((await listed()).pack, [
-    { kind: 'site', ref: 'a.example' },
-    { kind: 'site', ref: 'b.example' },
-  ])
+  assert.deepEqual((await listed()).pack, {
+    description: 'Two example sites',
+    members: [
+      { kind: 'site', ref: 'a.example' },
+      { kind: 'site', ref: 'b.example' },
+    ],
+  })
+  const page = await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()
+  assert.ok(page.includes('Two example sites'))
+  // A blank description is dropped rather than stored.
+  await f.ownerForm('/bundles/save', { id: 'pack', description: '', members: 'site a.example' })
+  assert.deepEqual((await listed()).pack, { members: [{ kind: 'site', ref: 'a.example' }] })
   // Refused input redirects back to the editor with an error code, and saves nothing.
   const refused = await f.ownerForm('/bundles/save', { id: 'bad', members: 'nonsense x' })
   assert.equal(refused.headers.get('location'), '/admin?section=bundles&error=line')

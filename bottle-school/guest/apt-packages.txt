@@ -13,6 +13,8 @@ file
 less
 tree
 procps
+# modprobe/lsmod for loading kernel modules from /lib/modules after boot
+kmod
 xz-utils
 zip
 unzip

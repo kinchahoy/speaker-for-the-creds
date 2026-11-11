@@ -37,18 +37,23 @@ ENV MISE_DATA_DIR=/opt/mise \
     MISE_GLOBAL_CONFIG_FILE=/etc/mise/config.toml \
     MISE_YES=1
 # Symlink every installed tool binary into /usr/local/bin so the guest runs without mise on PATH.
-# Link every npm package with a `pi` manifest into /opt/pi-extensions; pi-launch loads each one.
-# The owner exempted these low-download Pi extensions from aube's reputation checks; OSV malware checks still apply.
+# Always-on Pi extensions are linked into /opt/pi-extensions; pi-launch loads each one in every task.
+# Every other Pi package is linked to /opt/pi-plugins/<name>, the stable path a catalog.json `extensions` entry
+# names; a task loads it only through an approved `extension` lease (or attended mode, for ask-user-question).
+# The owner exempted these low-download Pi extensions (a few hundred to ~1.6k weekly downloads when pinned) from
+# aube's reputation checks; OSV malware checks still apply.
 RUN --mount=type=cache,target=/root/.cache/mise \
     --mount=type=cache,target=/root/.npm \
-    AUBE_ALLOWED_UNPOPULAR_PACKAGES=pi-loop-police,pi-token-speed mise install \
+    AUBE_ALLOWED_UNPOPULAR_PACKAGES=pi-loop-police,pi-token-speed,pi-cc-loop,pi-cc-monitor mise install \
  && for d in $(mise bin-paths); do \
       find "$d" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -exec ln -sf {} /usr/local/bin/ \; ; \
     done \
- && mkdir -p /opt/pi-extensions \
- && for p in /opt/mise/installs/npm-*/*/node_modules/*/package.json; do \
-      if jq -e .pi "$p" >/dev/null; then ln -s "$(dirname "$p")" /opt/pi-extensions/; fi; \
-    done \
+ && link() { dir="$(mise where "npm:$1")/node_modules/$1"; jq -e .pi "$dir/package.json" >/dev/null && ln -s "$dir" "$2/${1##*/}"; } \
+ && mkdir -p /opt/pi-extensions /opt/pi-plugins \
+ && for p in pi-loop-police pi-token-speed; do link "$p" /opt/pi-extensions || exit 1; done \
+ && for p in @juicesharp/rpiv-ask-user-question pi-web-access pi-cc-loop pi-cc-monitor; do link "$p" /opt/pi-plugins || exit 1; done \
+ && ln -s "$(mise where npm:@earendil-works/pi-coding-agent)/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent" /opt/pi-plugins/subagent \
+ && test -f /opt/pi-plugins/subagent/index.ts \
  && mise ls --current > /opt/pi-v2-tool-versions.txt
 
 # uv-managed CPython 3.13 and the default agent environment (glibc lock)

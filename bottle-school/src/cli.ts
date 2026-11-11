@@ -11,6 +11,7 @@ type Task = {
   id: string;
   name: string;
   state: string;
+  attended?: boolean;
   model?: string;
   startedAt?: string;
   sessionId: string;
@@ -35,15 +36,20 @@ then start the service.`,
   run: {
     positional: 0,
     help: `usage: ${SELF} run [--template T] [--name NAME] [--model M] [--prompt TEXT] [--hours H]
+                     [--attended | --unattended]
 
 Starts a task. --template defaults to offline, which needs no speaker bundle approval. With --prompt the
-task runs once and archives when Pi writes /output/DONE. --hours sets the calendar deadline.`,
+task runs once and archives when Pi writes /output/DONE. --hours sets the calendar deadline.
+An attended task expects you at its terminal: Pi may ask you questions there. An unattended task is told
+nobody is watching, so it records assumptions instead of asking. The default is attended without --prompt
+and unattended with it; a template may fix the mode, and a contradicting flag is refused.`,
   },
   ls: {
     positional: 0,
     help: `usage: ${SELF} ls
 
-Lists live tasks with state, pending approvals, age, model, name, and Pi's latest message.`,
+Lists live tasks with state, attended or unattended mode, pending approvals, age, model, name, and Pi's
+latest message.`,
   },
   attach: {
     positional: 1,
@@ -85,6 +91,8 @@ const parseOptions = (args: string[]) => {
         model: { type: "string" },
         prompt: { type: "string" },
         hours: { type: "string" },
+        attended: { type: "boolean" },
+        unattended: { type: "boolean" },
       },
     });
   } catch (error) {
@@ -178,12 +186,14 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     const name = values.name ?? "bottle-school";
     await api("POST", `${config.speaker.url}/_speaker/enforcers`, {
       name,
-      kinds: ["secret", "site", "folder", "mcp"],
+      kinds: ["secret", "site", "folder", "mcp", "extension"],
       tokenHash: createHash("sha256").update(token).digest("hex"),
     });
     console.log(`Registered enforcer "${name}". Approve it in speaker /admin, then start bottle-school.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
+    if (values.attended && values.unattended) throw new UsageError("pass at most one of --attended and --unattended");
+    const attended = values.attended ? true : values.unattended ? false : undefined;
     let hoursValue: number | undefined;
     if (hours !== undefined) {
       hoursValue = Number(hours);
@@ -195,6 +205,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       template,
       model,
       prompt,
+      attended,
       hours: hoursValue,
     });
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
@@ -211,10 +222,11 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       console.log(`No live tasks. Start one with: ${SELF} run --prompt "..."`);
       return;
     }
-    const header = ["ID", "STATE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
+    const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
     const rows = list.map((task) => [
       task.id,
       task.done ? "done" : task.state,
+      task.attended === undefined ? "-" : task.attended ? "attended" : "unattended",
       String(task.pendingRequests.length),
       task.startedAt ? age(task.startedAt) : "-",
       task.model ?? "-",

@@ -97,15 +97,19 @@ From another terminal, launch and inspect a task:
 
 ```sh
 mise run bottle-cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
+mise run bottle-cli run --template research --attended   # you stay at the terminal; Pi may ask you questions
 mise run bottle-cli ls
 mise run bottle-cli attach <id>      # id, unique id prefix, or name
 mise run bottle-cli stop <id>
 mise run bottle-cli help run         # per-command usage (mise intercepts --help after the task name)
 ```
 
-`ls` shows each task's state, pending speaker approvals (with the request id), age, model, name, and Pi's latest message. `run` prints a copy-pasteable `attach` line. Errors print one line and exit 1 (runtime) or 2 (usage).
+`ls` shows each task's state, attended or unattended mode, pending speaker approvals (with the request id), age, model, name, and Pi's latest message. `run` prints a copy-pasteable `attach` line. Errors print one line and exit 1 (runtime) or 2 (usage).
 
 Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when complete. The owner must verify herdr and terminal behavior in a real guest.
+{.ai}
+
+A task is attended (the owner is at its terminal) or unattended (nobody is). Without `--prompt` a task defaults to attended; with one, to unattended. `--attended` or `--unattended` overrides that, and a template's `"attended"` fixes it; a flag that contradicts the template is refused. An attended task loads the ask-user-question extension (`ask_user_question` tool) regardless of its bundle, because it adds presence rather than access. An unattended task does not load it, and its system prompt says that nobody is watching: the agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which the owner answers in speaker. Mode does not change archival: a task with a prompt archives when Pi writes `/output/DONE`, and every task archives at its deadline.
 {.ai}
 
 <!-- author: ai -->
@@ -114,17 +118,49 @@ Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI
 
 <sub>AI-written</sub>
 
-`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, `plugins`, and an optional speaker `bundle` with an optional `bundleDuration` (`15m` to `30d`, default `1d`) for the launch request. The file retains the developer, github-read, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, an optional `attended` that fixes the launch mode, and an optional speaker `bundle` with an optional `bundleDuration` (`15m` to `30d`, default `1d`) for the launch request. The file holds the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
+{.ai}
+
+**Templates vs bundles.** A template is the runtime profile bottle-school owns: VM size, deadline, model-request cap, attended mode, and which bundle to ask for at launch. A bundle is defined in speaker and is everything the agent may use: sites, secrets, folders, MCP servers, and Pi extensions, approved together by one owner decision. To give agents a new ability, add it to a bundle (or let the agent request it); to change how big or how long a task is, edit the template.
+{.ai}
+
+Pi starts before the owner decides on the launch bundle. When an `mcp` or `extension` lease arrives, Pi restarts at its next idle boundary, resumes the same session, and gains the new tools; it does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the bundle's extensions, and if it settles before approval it waits idle until the owner attaches or the deadline passes. Approve the launch bundle promptly for unattended templates such as `loop`.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline; optional `maxModelRequests` caps model request count.
 - `workGiB` is a launch-time free-space check. The owner must enforce work/output quotas through the host filesystem before unattended tasks share a disk with other services.
-- `catalog.json` contains `mcps` and `plugins`. Remote MCP entries name an HTTPS endpoint, advertised tools, write authority, and optional credential. Plugins name reviewed image-local paths.
+- `catalog.json` contains `mcps` and `extensions`. Remote MCP entries name an HTTPS endpoint, advertised tools, write authority, and optional credential. Extension entries name a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), and an optional system-prompt note. An `extension <id>` lease loads one; unknown ids are skipped like other unsupported leases. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
+- The guest image loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions` in every task. Every other Pi package is pinned in `guest/mise-config.toml` and loads only through a lease or, for ask-user-question, attended mode.
 - The shipped MCP entries are Parallel Search (`web_search`, `web_fetch`) and Context7 (`resolve-library-id`, `query-docs`). The owner must review server authority and verify tool names before use. These are whole-server grants; the broker does not filter individual tool arguments.
 - Secrets use `BROKER_SECRET_<NAME>` in `configRoot/secrets.env` or the environment. The guest receives placeholders; a secret lease binds substitution to approved hosts.
 - The guest calls speaker with its subject-token placeholder. Credential-backed homelab APIs pass through speaker's proxy.
 - Each snapshot replaces live leases. The broker checks expiry at use and clears leases when the channel closes or snapshots stop. It skips unsupported refs.
-- Sites, secrets, and folders apply live. MCP configuration changes take effect after Pi restarts at idle. A folder lease exposes a whole configured share, read-only unless its ref ends in `:rw`.
+- Sites, secrets, and folders apply live. MCP and extension changes take effect after Pi restarts at idle. A folder lease exposes a whole configured share, read-only unless its ref ends in `:rw`.
+
+<!-- author: ai -->
+
+## Research and loop presets
+
+<sub>AI-written</sub>
+
+The `research` bundle grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle-school writes the extension's `~/.pi/agent/web-search.json` (copied by `pi-launch` like `settings.json`): search uses only keyless Exa through its hosted MCP endpoint, pages are fetched directly over HTTP, and hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site` lease for its host, so the agent requests hosts beyond Wikipedia and arXiv. The bundle no longer includes `mcp parallel-search`: it duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site lease. The catalog entry remains for explicit requests.
+{.ai}
+
+No search API keys are configured. A keyed provider would use a bottle-school sandbox secret: put `BROKER_SECRET_<NAME>` in `secrets.env`, have `writeGuestConfig` set the provider's key field (for example `exaApiKey`) to that secret's guest placeholder and allow the provider, and approve `secret <NAME>@<provider host>` in speaker. The guest only ever sees the placeholder; Gondolin substitutes the real key for requests to the approved host.
+{.ai}
+
+The `loop` template is unattended, runs at most 24 hours and 300 model requests, and requests the `loop` bundle (pi-cc-loop and pi-cc-monitor) for one day. Pi then wakes itself with `/loop`, cron jobs, `schedule_wakeup`, or `Monitor`. bottle-school never archives a task for being idle, so a self-waking Pi keeps running between wakes; `/output/DONE` or the deadline still ends it. Durable jobs live in `/work/.pi/scheduled_tasks.json`: they survive Pi restarts within the task and disappear with the work directory at archival. Persisting jobs across tasks through a folder lease is future work.
+{.ai}
+
+<!-- author: ai -->
+
+## Upgrading an existing install
+
+<sub>AI-written</sub>
+
+- Templates no longer have `plugins`, and the catalog's `plugins` became `extensions`. Rerun `mise run setup`, or copy `templates.json` and `catalog.json` into `configRoot` again; the old files fail validation at startup.
+- The enforcer must declare the `extension` kind. Speaker fixes an enforcer's kinds at registration, so run `mise run bottle-cli register`, approve the new enforcer in speaker `/admin`, restart bottle-school, and revoke the old enforcer.
+- Rebuild the guest image so `/opt/pi-plugins` exists, and update speaker's `bundles.json` from `speaker/bundles.example.json`.
 
 <!-- author: ai -->
 
@@ -154,7 +190,7 @@ the real value off the guest, but it does not prevent an approved destination fr
 
 <sub>AI-written</sub>
 
-The broker mounts `/input` for leased shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/pi-v2` for trusted read-only configuration. Pi runs as guest root; the image loads only its reviewed extensions and the host's configuration.
+The broker mounts `/input` for leased shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/pi-v2` for trusted read-only configuration. Pi runs as guest root; the image loads only its always-on extensions, the extensions the task's mode and leases select, and the host's configuration.
 {.ai}
 
 At close, the broker stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker subject, and removes the disposable work tree. Each archive contains `artifacts/` and `_control/`. The control directory holds task metadata, lease/policy events, a hashed artifact manifest, the Pi session/transcript, and `trace.jsonl`.

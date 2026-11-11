@@ -50,12 +50,13 @@ On `403` with `approval_required`:
 | `secret` | `<NAME>@<host>[,<host>]` | `GITHUB_TOKEN@api.github.com` |
 | `folder` | `<share>` or `<share>:rw` | `photos:rw` |
 | `mcp` | `<catalog id>` | `context7` |
+| `extension` | `<catalog extension id>` | `pi-web-access` |
 
-Only `credential` works in a direct session. `site`, `secret`, `folder`, and `mcp` work in a sandbox.
+Only `credential` works in a direct session. `site`, `secret`, `folder`, `mcp`, and `extension` work in a sandbox.
 
 ### Bundles
 
-A bundle is a named set of capabilities the owner approves in one decision. `GET /_speaker/bundles` lists those you may request, with their members. When a task needs several of them, request `{"bundle":"<name>","reason":"...","duration":"1h"}` instead of one call per member. A bundle with any member you cannot request is not listed.
+A bundle is a named set of capabilities the owner approves in one decision. `GET /_speaker/bundles` lists those you may request, each with a one-line description and its members. When a task needs several of them, request `{"bundle":"<name>","reason":"...","duration":"1h"}` instead of one call per member. A bundle with any member you cannot request is not listed.
 
 ## SSH to a homelab host
 

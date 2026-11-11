@@ -9,7 +9,6 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "plugins": [],
     "bundle": "developer"
   },
   {
@@ -22,8 +21,22 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "plugins": [],
     "bundle": "github-read"
+  },
+  {
+    "id": "loop",
+    "label": "Scheduled loop (unattended wake-ups and monitors)",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 24,
+      "maxModelRequests": 300
+    },
+    "attended": false,
+    "bundle": "loop",
+    "bundleDuration": "1d"
   },
   {
     "id": "offline",
@@ -34,8 +47,7 @@
       "rootfsGiB": 8,
       "workGiB": 20,
       "maxRuntimeHours": 24
-    },
-    "plugins": []
+    }
   },
   {
     "id": "packages",
@@ -47,12 +59,11 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "plugins": [],
     "bundle": "packages"
   },
   {
     "id": "research",
-    "label": "Public research",
+    "label": "Public research (Exa search and web fetch)",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -60,7 +71,6 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "plugins": [],
     "bundle": "research"
   }
 ]

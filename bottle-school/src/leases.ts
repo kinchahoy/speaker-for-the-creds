@@ -14,19 +14,34 @@ const Limits = z
   })
   .strict();
 
-/** A launch template holds what speaker does not decide: VM limits, Pi plugins, and an optional bundle. */
+/**
+ * A launch template is the runtime profile speaker does not decide: VM limits, attended mode, and the bundle to
+ * request at launch. What the agent may use (sites, secrets, MCP servers, Pi extensions) comes from that bundle.
+ */
 export const Template = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
     label: z.string().min(1).max(120),
     limits: Limits,
-    plugins: z.array(z.string()),
+    /** Forces attended (true) or unattended (false) launches; unset, the launch decides. */
+    attended: z.boolean().optional(),
     bundle: z.string().optional(),
     /** How long the launch bundle is requested for; defaults to 1d. */
     bundleDuration: z.enum(["15m", "30m", "1h", "1d", "7d", "30d"]).optional(),
   })
   .strict();
 export type Template = z.infer<typeof Template>;
+
+/**
+ * Attended means the owner is at the terminal to answer questions. A launch prompt implies the owner walked away;
+ * no prompt implies the owner will attach and type. A template's `attended` overrides that default, and a launch
+ * that contradicts it fails rather than silently losing the owner's choice.
+ */
+export const attendedFor = (template: Template, input: { prompt?: string; attended?: boolean }) => {
+  if (template.attended !== undefined && input.attended !== undefined && input.attended !== template.attended)
+    throw new Error(`template ${template.id} is always ${template.attended ? "attended" : "unattended"}`);
+  return template.attended ?? input.attended ?? input.prompt === undefined;
+};
 
 export const loadTemplates = (path: string) => {
   const templates = z.array(Template).parse(JSON.parse(readFileSync(path, "utf8")));

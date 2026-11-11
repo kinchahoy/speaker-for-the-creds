@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { folderRef, ipv4Destination, loadTemplates, secretRef, speakerRequestAllowed } from "../src/leases.ts";
+import { attendedFor, folderRef, ipv4Destination, loadTemplates, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace-runs.ts";
 
 const roots: string[] = [];
@@ -257,7 +257,7 @@ test("templates load from one file and reject duplicate identities", () => {
   roots.push(join(path, ".."));
   const templates = JSON.parse(readFileSync(new URL("../templates.json", import.meta.url), "utf8"));
   writeFileSync(path, JSON.stringify(templates));
-  assert.deepEqual([...loadTemplates(path).keys()], ["developer", "github-read", "offline", "packages", "research"]);
+  assert.deepEqual([...loadTemplates(path).keys()], ["developer", "github-read", "loop", "offline", "packages", "research"]);
   writeFileSync(path, JSON.stringify([templates[0], templates[0]]));
   assert.throws(() => loadTemplates(path), /repeat an id/);
   writeFileSync(path, JSON.stringify([{ ...templates[0], bundleDuration: "1h" }]));
@@ -270,11 +270,58 @@ test("guest configuration loads the access-and-creds skill alone and the curated
   const config = loadConfig(writeConfig());
   const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
   const directory = join(config.configRoot, "guest");
-  writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen" }, new Map(), [], ["context7"], []);
+  writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, new Map(), [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
   assert.equal(args.filter((arg) => arg === "--skill").length, 1);
   assert.ok(args.includes("/etc/pi-v2/skills/access-and-creds"));
   assert.match(readFileSync(join(directory, "skills/access-and-creds/SKILL.md"), "utf8"), /^name: access-and-creds$/m);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
+});
+
+test("attended defaults to no-prompt launches, follows the launch flag, and a template can force it", () => {
+  const free = Template.parse({
+    id: "free",
+    label: "Free",
+    limits: { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 },
+  });
+  assert.equal(attendedFor(free, {}), true);
+  assert.equal(attendedFor(free, { prompt: "do it" }), false);
+  assert.equal(attendedFor(free, { prompt: "do it", attended: true }), true);
+  assert.equal(attendedFor(free, { attended: false }), false);
+  const forced = { ...free, id: "forced", attended: false };
+  assert.equal(attendedFor(forced, {}), false);
+  assert.equal(attendedFor(forced, { attended: false }), false);
+  assert.throws(() => attendedFor(forced, { attended: true }), /always unattended/);
+});
+
+test("attended mode loads ask-user-question; extension leases load catalog extensions and their tools", () => {
+  const config = loadConfig(writeConfig());
+  const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
+  const write = (attended: boolean, extensions: string[], prompt?: string) => {
+    const directory = join(config.configRoot, `guest-${attended}-${extensions.join("-")}`);
+    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", prompt, attended }, new Map(), [], [], extensions);
+    const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
+    const loaded = args.flatMap((arg, index) => (args[index - 1] === "-e" ? [arg] : []));
+    const tools = args[args.indexOf("--tools") + 1]!.split(",");
+    return { loaded, tools, system: readFileSync(join(directory, "APPEND_SYSTEM.md"), "utf8"), directory };
+  };
+
+  const attended = write(true, []);
+  assert.deepEqual(attended.loaded, ["/etc/pi-v2/extensions/request-capability.ts", "/opt/pi-plugins/rpiv-ask-user-question"]);
+  assert.ok(attended.tools.includes("ask_user_question"));
+  assert.match(attended.system, /## Attended task/);
+
+  const research = write(false, ["pi-web-access"], "Find three sources");
+  assert.deepEqual(research.loaded, ["/etc/pi-v2/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
+  assert.ok(research.tools.includes("web_search") && !research.tools.includes("ask_user_question"));
+  assert.match(research.system, /## Unattended task[\s\S]*Nobody is watching[\s\S]*## Owner prompt\n\nFind three sources$/);
+  const webSearch = JSON.parse(readFileSync(join(research.directory, "web-search.json"), "utf8"));
+  assert.deepEqual(webSearch.webSearch.allowedProviders, ["exa"]);
+  assert.deepEqual(webSearch.fetchRouting, { providers: ["http"], allowRemoteHostedProviders: false });
+
+  const loop = write(false, ["pi-cc-loop", "pi-cc-monitor"]);
+  assert.ok(loop.tools.includes("schedule_wakeup") && loop.tools.includes("Monitor"));
+  assert.match(loop.system, /## Extension pi-cc-loop[\s\S]*maxFires[\s\S]*durable: true/);
+  assert.throws(() => write(false, ["nope"]), /unknown extension nope/);
 });

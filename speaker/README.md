@@ -38,9 +38,12 @@ Open `http://localhost:3000/admin` and sign in with `ADMIN_USER` / `ADMIN_PASSWO
   - The two unauthenticated enrollment routes share a budget of 20 calls per 15 minutes and then return `429`.
 - Requests, sessions, and enforcers move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is
   `pending`, then `approved`, `denied`, or `expired`; an approval later ends as `expired`, `revoked`, or `superseded`.
-- Capabilities have a kind: `credential`, `secret`, `site`, `folder`, or `mcp`.
+- Capabilities have a kind: `credential`, `secret`, `site`, `folder`, `mcp`, or `extension` (a sandbox's
+  catalog Pi extension, such as `pi-web-access`).
   - A session may request only `credential`.
   - A subject may request `credential` plus its enforcer's kinds. Other kinds return `400 unsupported_kind`.
+  - An enforcer declares its kinds when it registers, and they do not change afterwards. To add a kind, register
+    the enforcer again, approve the new registration, and revoke the old one in `/admin`.
 - Requests name one capability or one bundle. The owner approves with a duration and speaker creates one lease
   per member. Only the owner may choose `permanent`.
 - Speaker keeps permanent leases on disk and temporary leases in memory.
@@ -101,9 +104,11 @@ to the configured notification service.
 
 <sub>AI-written</sub>
 
-Define bundles in `DATA_DIR/bundles.json` as `{ "<name>": [{ "kind", "ref" }] }`. Copy
-[bundles.example.json](bundles.example.json) to start. Restart speaker after editing it.
-A request names the bundle and the owner approves all members at once. A caller may request a bundle only if it may request every member kind. `GET /_speaker/bundles` lists those bundles for the caller.
+Define bundles in `DATA_DIR/bundles.json` as `{ "<name>": { "description": "<one line>", "members": [{ "kind", "ref" }] } }`.
+The description is optional, and the older bare form `{ "<name>": [{ "kind", "ref" }] }` still loads. Copy
+[bundles.example.json](bundles.example.json) to start. Restart speaker after editing the file by hand; the `/admin`
+Bundles page edits it live and writes the described form.
+A request names the bundle and the owner approves all members at once. A caller may request a bundle only if it may request every member kind. `GET /_speaker/bundles` lists those bundles for the caller as `{ "<name>": { "description", "members" } }`.
 {.ai}
 
 <!-- author: ai -->

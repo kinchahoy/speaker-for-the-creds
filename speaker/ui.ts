@@ -1,7 +1,7 @@
 import { html, raw } from 'hono/html'
-import type { Capability, LogEntry, Provider, View } from './server.ts'
+import type { Bundle, Capability, LogEntry, Provider, View } from './server.ts'
 
-const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
+const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp', 'extension'] as const
 const input = (name: string, label: string, type = 'text', value = '') =>
   html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
@@ -18,6 +18,7 @@ const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
 <symbol id="i-site" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.200 3 14.800 0 18M12 3c-3 3.200-3 14.800 0 18"/></symbol>
 <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
 <symbol id="i-mcp" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+<symbol id="i-extension" viewBox="0 0 24 24"><path d="M4 8h4a2 2 0 1 1 4 0h4v4a2 2 0 1 1 0 4v4H4z"/></symbol>
 <symbol id="i-enforcer" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.500-3.200 8-8 9-4.800-1-8-4.500-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
 <symbol id="i-session" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
 <symbol id="i-ssh" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13l3 2-3 2"/></symbol>
@@ -194,7 +195,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .inbox .empty{padding:24px 6px}
 .mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}
 .mark.sm{width:24px;height:24px;border-radius:7px}.mark.sm .ic{width:14px;height:14px}
-.k-credential{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-enforcer{--h:250}.k-session{--h:180}
+.k-credential{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-extension{--h:25}.k-enforcer{--h:250}.k-session{--h:180}
 .strip{display:inline-flex;gap:3px}
 .ticket{--tp:18px;background:var(--ticket);border-radius:16px;box-shadow:var(--shadow);padding:var(--tp) var(--tp) 0;min-width:0}
 .t-head{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px}
@@ -279,6 +280,7 @@ const bundleErrors: Record<string, string> = {
   empty: 'Bundle not saved: list at least one member, one per line as "kind ref".',
   line: `Bundle not saved: each line must be "kind ref", with kind one of ${kindNames.join(', ')}.`,
   id: 'Bundle not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
+  description: 'Bundle not saved: keep the description to one line of at most 200 characters.',
 }
 const empty = (title: string, hint: string) => html`<li class="empty"><strong>${title}</strong>${hint}</li>`
 const bundleBlock = (id: string, name: string, list: Capability[], note: unknown = '') =>
@@ -293,7 +295,7 @@ export function adminPage(
   selectedId?: string,
   nonce?: string,
   section = 'approvals',
-  bundles: Record<string, Capability[]> = {},
+  bundles: Record<string, Bundle> = {},
   error?: string,
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
   log?: { entries: LogEntry[]; filter: string },
@@ -346,19 +348,19 @@ export function adminPage(
   const addProvider = selected
     ? ''
     : html`<details><summary>Add provider</summary>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</details>`
-  const bundleForm = (id: string, list: Capability[]) =>
+  const bundleForm = (id: string, bundle: Bundle) =>
     form(
       '/admin/bundles/save',
-      html`${input('id', 'Bundle id', 'text', id)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" required placeholder="credential notes.read">${list.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
+      html`${input('id', 'Bundle id', 'text', id)}${input('description', 'Description (one line, optional)', 'text', bundle.description)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" required placeholder="credential notes.read">${bundle.members.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
       'Save bundle',
       'fields',
     )
-  const bundleEditor = (id: string, list: Capability[]) =>
-    html`<details><summary>${id ? 'Edit members' : 'Add bundle'}</summary>${bundleForm(id, list)}</details>`
-  const bundleList = Object.entries(bundles).map(
-    ([id, list]) =>
-      html`<li data-search="${searchable(id, list.map((m) => `${m.kind} ${m.ref}`).join(' '))}" data-kinds="${[...new Set(list.map((m) => m.kind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div><div class="row-sub">${plural(list.length, 'member', 'members')}, granted together by one approval</div></div><div class="row-act">${form('/admin/bundles/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete bundle ${id}`, `Delete bundle ${id}? Agents can no longer request it. Existing leases stay.`)}</div></div><details id="bundle-${id}"><summary>${strip(list.map((m) => m.kind))}<span class="meta">Members and editing</span></summary>${caps(list)}${bundleForm(id, list)}</details></li>`,
-  )
+  const bundleEditor = (id: string, bundle: Bundle) =>
+    html`<details><summary>${id ? 'Edit members' : 'Add bundle'}</summary>${bundleForm(id, bundle)}</details>`
+  const bundleList = Object.entries(bundles).map(([id, bundle]) => {
+    const list = bundle.members
+    return html`<li data-search="${searchable(id, bundle.description ?? '', list.map((m) => `${m.kind} ${m.ref}`).join(' '))}" data-kinds="${[...new Set(list.map((m) => m.kind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div>${bundle.description ? html`<div class="row-sub">${bundle.description}</div>` : ''}<div class="row-sub">${plural(list.length, 'member', 'members')}, granted together by one approval</div></div><div class="row-act">${form('/admin/bundles/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete bundle ${id}`, `Delete bundle ${id}? Agents can no longer request it. Existing leases stay.`)}</div></div><details id="bundle-${id}"><summary>${strip(list.map((m) => m.kind))}<span class="meta">Members and editing</span></summary>${caps(list)}${bundleForm(id, bundle)}</details></li>`
+  })
   const sections: [string, string, string][] = [
     ['approvals', 'Approvals', 'Sessions, sandboxes and access requests waiting for your yes or no.'],
     ['access', 'Leases', "Access you've granted that is active right now, until it expires or you revoke it."],
@@ -383,7 +385,7 @@ export function adminPage(
         : activeSection === 'providers'
           ? html`${tools(false)}<section class="panel"><h2>Providers</h2>${providerEditor}<ul class="rows">${providerList.length ? providerList : empty('No providers configured', 'Add a provider to let agents request access to an upstream API.')}</ul>${addProvider}</section><p class="muted">Credentials stay on this server.</p>`
           : activeSection === 'bundles'
-            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2>${bundleErrors[error ?? ''] ? html`<p class="notice" role="alert">${bundleErrors[error ?? '']}</p>` : ''}<ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', [])}</section><p class="muted">Changes apply to new requests; requests already pending keep their members.</p>`
+            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2>${bundleErrors[error ?? ''] ? html`<p class="notice" role="alert">${bundleErrors[error ?? '']}</p>` : ''}<ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', { members: [] })}</section><p class="muted">A bundle is what an agent may use; a bottle-school template sets the VM size and attended mode and names the bundle to request at launch. Changes apply to new requests; requests already pending keep their members.</p>`
             : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
   return page(nav, html`${intro}${content}`, nonce ?? '')
 }
