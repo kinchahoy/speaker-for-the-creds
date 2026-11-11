@@ -371,7 +371,11 @@ export const bootGuest = async (
       console: "none",
       // Gondolin's QEMU default plus `quiet`: each serial console byte is a trapped port write, and the kernel's boot
       // log alone cost ~0.3s. Warnings, errors, and panics still reach the console.
-      ...(krun ? {} : { append: `console=${process.arch === "arm64" ? "ttyAMA0" : "ttyS0"} initramfs_async=1 quiet` }),
+      // Krun: Gondolin's default krun command line plus `quiet`, and without the i8042 keyboard controller driver, whose
+      // probe of libkrun's emulated controller takes ~0.25s.
+      append: krun
+        ? "console=hvc0 root=/dev/vda rootfstype=ext4 rw init=/init quiet initcall_blacklist=i8042_init"
+        : `console=${process.arch === "arm64" ? "ttyAMA0" : "ttyS0"} initramfs_async=1 quiet`,
       imagePath: config.guestImage,
     },
     rootfs: { mode: "cow", size: `${limits.rootfsGiB}G` },

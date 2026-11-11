@@ -61,26 +61,35 @@ The guest build imports an Ubuntu rootfs through Gondolin. Its tool selections l
 
 <sub>AI-written</sub>
 
-`PI_V2_VMM` selects Gondolin's VMM for both the guest build and the service. It defaults to `qemu`. An image built for one backend does not run under the other, so rebuild after you switch.
+`PI_V2_VMM` selects Gondolin's VMM for the service (and `mise run doctor`). It defaults to `qemu`. One guest image boots under both backends, so switching needs no rebuild: set `PI_V2_VMM=krun` in `bottle-school/.env` and restart `mise run bottle`.
 {.ai}
 
-**QEMU (default, supported).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). The build uses Gondolin's stock Alpine `linux-virt` kernel and initramfs. Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
+**QEMU (default).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
 {.ai}
 
-**Krun (experimental, unverified).** Set `PI_V2_VMM=krun` in `bottle-school/.env`, then run `mise run guest-build pi-v5-guest` and `mise run bottle`. On x86_64 this path needs local artifacts that the repository does not ship:
+**Krun (libkrun, no QEMU process).** Needs a Krun runner that matches the host CPU:
 {.ai}
 
-- An uncompressed ELF kernel (`vmlinux`) at `.runtime/krun/vmlinux` or `KRUN_VMLINUX`. libkrun's x86_64 path boots an ELF kernel directly, not the bzImage that Gondolin's build produces. `guest/patch-krun-assets.mjs` swaps that ELF kernel into the image's `krunKernel` slot. It also writes a trailer-only cpio as `krunInitrd`, because libkrun's ELF path rejects a zero-byte initrd. Then it re-checksums the manifest.
-- Optionally, a Gondolin Krun runner at `.runtime/krun-runner/bin/gondolin-krun-runner`. `start.sh` exports it as `GONDOLIN_KRUN_RUNNER` when present; otherwise Gondolin uses its published runner. `guest/build.json` pins `krunfwVersion` `v5.2.1`.
+- Linux x86_64: build it once per machine with `mise run krun-runner` (`krun-runner.sh`). Gondolin's published runner is compiled on an AVX-512 machine (Zig targets the build host's CPU) and crashes with an illegal instruction on CPUs without AVX-512, such as Intel Core Ultra. The script builds `host/krun-runner` from the pinned Gondolin tag `v0.13.0` (commit `fcbcef1`) with Zig 0.17 and `-Dcpu=x86_64_v3`, copies the published `libkrun.so.1.17.4` (no AVX-512; the version Gondolin pins) next to it, and fails unless both contain zero `zmm` instructions. It installs into the gitignored `.runtime/krun-runner/`; `start.sh` and `doctor.sh` use it automatically through `GONDOLIN_KRUN_RUNNER`. Rebuild it when you upgrade Gondolin (bump `REF` and `SHA` in the script).
+- macOS and Linux arm64: Gondolin's published runner is used as is (no AVX-512 issue; macOS signs it with the Hypervisor entitlement). Not tested here.
 {.ai}
 
-QEMU became the default because no host has completed a verified end-to-end Krun run. The repository records no root cause. To investigate:
+How one image serves both backends (`guest/boot-assets.mjs`, x86_64): QEMU and libkrun both load the uncompressed ELF `vmlinux` extracted from Alpine's kernel, and both use the trimmed initramfs, which loads `virtio_blk` and `ext4` and then switches to the rootfs and our `rootfs-init.sh`. The manifest's `krunKernel` and `krunInitrd` slots point at those same two files, so the image is no larger. Gondolin's stock Krun slots (libkrunfw's raw kernel plus an empty initrd) are dropped on x86_64: libkrun rejects that raw kernel ("Kernel doesn't fit in RAM"), and Alpine's kernel has no built-in block driver, so an empty initrd cannot mount the root disk. On aarch64 and macOS the stock libkrunfw kernel and empty initrd are kept, since that kernel has the drivers built in. This is untested here.
 {.ai}
 
-1. Is a kernel config known to work with libkrun available? libkrunfw's own kernel is a candidate, but it is embedded in the library and must be extracted or rebuilt as an ELF `vmlinux`. It also needs the virtio drivers that Gondolin's init and rootfs expect, built in.
-2. Does the published Gondolin runner work with `krunfwVersion` `v5.2.1` on this host, or only the local runner?
-3. Do Gondolin's networking and HTTP hooks (credential substitution, egress policy) behave the same under Krun's network path as under QEMU?
-4. Does the v5 rootfs (over 2 GiB) mount, and do VM start-up times beat QEMU's enough to justify the extra moving parts?
+Krun-specific differences: libkrun exposes virtio-mmio devices and a virtio-console multiport (`vport*`), which Gondolin's init and `rootfs-init.sh` already handle; sandboxfs runs over the same `virtio-fs` port as under QEMU, and DHCP, DNS and the HTTPS MITM behave identically. The kernel command line is `console=hvc0 root=/dev/vda rootfstype=ext4 rw init=/init quiet initcall_blacklist=i8042_init` (set in `src/gondolin.ts`); the blacklisted i8042 driver spends ~0.25s probing libkrun's emulated keyboard controller. The kernel prints a harmless `free_init_pages` warning for the initrd under libkrun. To debug a Krun boot, set `console: "stdio"` in the VM options and point `GONDOLIN_KRUN_RUNNER` at a wrapper script that redirects the runner's output to a file.
+{.ai}
+
+Measured on a Core Ultra 7 265K (no AVX-512), 2 vCPU, 2 GiB, the same image, `bootGuest` create to first exec, n=12 each, interleaved, host under a load of ~3:
+{.ai}
+
+| | QEMU | Krun |
+| --- | --- | --- |
+| median / min / max | 0.95 s / 0.73 s / 1.27 s | 1.05 s / 0.78 s / 1.20 s |
+| 200 MB write / read on `/work` (sandboxfs) | 100-157 MB/s / 74-78 MB/s | 75-78 MB/s / 92-107 MB/s |
+| 200 MB write / read on the rootfs disk | 0.9-1.4 GB/s / page cache | 1.1-1.4 GB/s / page cache |
+
+Networking, `getent hosts model.internal`, HTTPS through the MITM (allowed host 200, blocked host 403) from curl, Python, requests and Node, and the sandboxfs mounts all gave identical results under both. `/work` throughput is bounded by the host-side sandboxfs RPC, not the VMM. QEMU stays the default: it is slightly faster to boot here and is the better-exercised path. Krun is a supported alternative; `mise run doctor` with `PI_V2_VMM=krun` checks the runner (present, no AVX-512) and the image's Krun assets.
 {.ai}
 
 From another terminal, launch and inspect a task:

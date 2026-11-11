@@ -1,6 +1,6 @@
 #!/bin/sh
 # Preflight for the bottle-school host (Linux or macOS). Prints one line per check and the fix for anything missing.
-# PI_V2_VMM=krun also checks the Krun kernel.
+# PI_V2_VMM=krun also checks the Krun runner (no AVX-512 instructions) and the image's Krun boot assets.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 os=$(uname -s)
@@ -28,8 +28,15 @@ else
 	check "/dev/kvm readable and writable" "sudo usermod -aG kvm \$USER, then log in again (WSL: wsl --shutdown)" sh -c 'test -r /dev/kvm && test -w /dev/kvm'
 fi
 if [ "${PI_V2_VMM:-qemu}" = krun ]; then
-	[ "$arch" = x86_64 ] && check "Krun ELF kernel" "provide KRUN_VMLINUX or $root/.runtime/krun/vmlinux" test -f "${KRUN_VMLINUX:-$root/.runtime/krun/vmlinux}"
-else
+	# Same runner choice as start.sh: the locally built one, else Gondolin's published package.
+	runner=$root/.runtime/krun-runner/bin/gondolin-krun-runner
+	[ -x "$runner" ] || runner=$(ls "$root"/node_modules/.pnpm/@earendil-works+gondolin-krun-runner-*/node_modules/@earendil-works/*/bin/gondolin-krun-runner 2>/dev/null | head -n 1)
+	check "Krun runner" "mise run krun-runner (README: VM backends)" test -x "$runner"
+	[ "$runner" = "$root/.runtime/krun-runner/bin/gondolin-krun-runner" ] && export GONDOLIN_KRUN_RUNNER="$runner"
+	# The published Linux x86_64 runner is built with AVX-512 and dies with SIGILL on CPUs without it (Zig builds for the build host's CPU).
+	[ "$os" = Linux ] && check "Krun runner has no AVX-512 (zmm) instructions" "mise run krun-runner" sh -c '[ "$(objdump -d "$1" | grep -c zmm)" = 0 ]' sh "$runner"
+fi
+if [ "${PI_V2_VMM:-qemu}" != krun ]; then
 	check "$qemu" "$qemu_fix" command -v "$qemu"
 fi
 config=${PI_V2_CONFIG:-$root/config.json}
@@ -37,6 +44,16 @@ check "config.json (mise run setup)" "mise run setup" test -f "$config"
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
 if [ "$failed" = 0 ]; then
 	image=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).guestImage" "$config")
+	if [ "${PI_V2_VMM:-qemu}" = krun ] && [ "$arch" = x86_64 ]; then
+		# guest/boot-assets.mjs points the Krun slots at the ELF vmlinux and the initramfs; Gondolin's stock raw libkrunfw kernel does not boot.
+		check "guest image $image has Krun boot assets" "mise run guest-build $image" node -e '
+			const { execFileSync } = require("node:child_process"), fs = require("node:fs");
+			const dir = /assetDir: (.*)/.exec(execFileSync(process.argv[1], ["image", "inspect", process.argv[2]], { encoding: "utf8" }))[1];
+			const { assets } = JSON.parse(fs.readFileSync(`${dir}/manifest.json`, "utf8"));
+			const magic = fs.readFileSync(`${dir}/${assets.krunKernel}`).subarray(0, 4).toString("hex");
+			if (magic !== "7f454c46" || fs.statSync(`${dir}/${assets.krunInitrd}`).size < 4096) process.exit(1);
+		' "$root/node_modules/.bin/gondolin" "$image"
+	fi
 	check "guest image $image boots and runs a command" "mise run guest-build $image (see README: VM backends)" \
 		timeout 120 "$root/node_modules/.bin/gondolin" exec --image "$image" --vmm "${PI_V2_VMM:-qemu}" -- true
 fi
