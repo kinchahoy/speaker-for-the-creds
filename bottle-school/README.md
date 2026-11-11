@@ -87,11 +87,14 @@ From another terminal, launch and inspect a task:
 {.ai}
 
 ```sh
-mise run bottle-cli run --template offline --prompt "Write a greeting to /output/greeting.txt"
+mise run bottle-cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
 mise run bottle-cli ls
-mise run bottle-cli attach <id>
+mise run bottle-cli attach <id>      # id, unique id prefix, or name
 mise run bottle-cli stop <id>
+mise run bottle-cli help run         # per-command usage (mise intercepts --help after the task name)
 ```
+
+`ls` shows each task's state, pending speaker approvals (with the request id), age, model, name, and Pi's latest message. `run` prints a copy-pasteable `attach` line. Errors print one line and exit 1 (runtime) or 2 (usage).
 
 Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when complete. The owner must verify herdr and terminal behavior in a real guest.
 {.ai}

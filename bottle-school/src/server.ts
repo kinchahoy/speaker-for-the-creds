@@ -44,6 +44,8 @@ export const startControl = (config: Config, tasks: Tasks) => {
         id: task.id,
         name: task.name,
         state: task.state,
+        model: task.model,
+        startedAt: task.startedAt,
         sessionId: task.guest.sessionId,
         subjectId: task.subjectId,
         pendingRequests: tasks.pendingRequests(task),
