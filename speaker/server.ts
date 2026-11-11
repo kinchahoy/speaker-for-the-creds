@@ -773,7 +773,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     c.header('link', '</skill.md>; rel="help"')
     return c.json({ error, ...fields, help: '/skill.md' }, 401)
   }
-  const enroll = 'Enroll a new session with a new token; see /skill.md'
+  const enroll = 'Enroll a new session with a new token: GET /_speaker/help/setup'
   // Resolves a bearer token to an enforcer, a live session, or a subject of an approved enforcer.
   const auth: MiddlewareHandler<Env> = async (c, next) => {
     const token = /^Bearer +(\S+) *$/i.exec(c.req.header('authorization') ?? '')?.[1]
