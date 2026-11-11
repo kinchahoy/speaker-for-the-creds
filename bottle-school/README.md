@@ -13,7 +13,7 @@ bottle-school runs Pi inside disposable Gondolin micro-VMs. Speaker approves cap
 
 <sub>AI-written</sub>
 
-The Linux host needs hardware virtualization, KVM access, Docker for image builds, `qemu-img`, and `setsid`. On a Debian-family host, install `qemu-utils` and add the service account to the `kvm` group; start a new login session afterward. Run the service as the owner account that holds its configuration and archives.
+The Linux host needs hardware virtualization, KVM access, Docker for image builds, `qemu-system-x86`, `qemu-img`, and `setsid`. On a Debian-family host, install `qemu-system-x86` and `qemu-utils`, and add the service account to the `kvm` group; start a new login session afterward. Run the service as the owner account that holds its configuration and archives.
 {.ai}
 
 Run these commands from the repository root:
@@ -50,10 +50,10 @@ mise run bottle
 The guest build imports an Ubuntu rootfs through Gondolin. Its tool selections live in `guest/apt-packages.txt`, `guest/mise-config.toml`, and `guest/python/requirements.in`. The build installs current tool releases except explicitly pinned packages; it refreshes Docker layers daily. Set `PI_GUEST_BROWSER=1` when running the build to add Python Playwright and headless Chromium. Builds need internet access and several GiB of disk space.
 {.ai}
 
-On x86_64, `guest/build.sh` requires a Krun ELF kernel at `.runtime/krun/vmlinux` or the path named by `KRUN_VMLINUX`. Some hosts also need a compatible runner at `.runtime/krun-runner/bin/gondolin-krun-runner`; `start.sh` selects it when present. These host-specific artifacts are local prerequisites, not bundled binaries. The owner must provision and verify them on a fresh host.
-
-To use QEMU instead of Krun, install `qemu-system-x86` and run both the build and the service with `PI_V2_VMM=qemu` (`PI_V2_VMM=qemu mise run guest-build pi-v5-guest`, then `PI_V2_VMM=qemu mise run bottle`). The build then skips the Krun kernel, and the image runs only under QEMU.
+The default backend is QEMU. Install `qemu-system-x86` (with `qemu-utils` for `qemu-img`) on the host.
 {.ai}
+
+Krun is optional and experimental. Set `PI_V2_VMM=krun` for both the build and the service (`PI_V2_VMM=krun mise run guest-build pi-v5-guest`, then `PI_V2_VMM=krun mise run bottle`). On x86_64 the build then requires a Krun ELF kernel at `.runtime/krun/vmlinux` or the path named by `KRUN_VMLINUX`; `start.sh` also selects a runner at `.runtime/krun-runner/bin/gondolin-krun-runner` when present. These host-specific artifacts are local prerequisites, not bundled binaries. An image built for one backend does not run under the other.
 {.ai}
 
 From another terminal, launch and inspect a task:
@@ -75,7 +75,7 @@ Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI
 
 <sub>AI-written</sub>
 
-`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, `plugins`, and an optional speaker `bundle`. The file retains the developer, github-read, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, `plugins`, and an optional speaker `bundle` with an optional `bundleDuration` (`15m` to `30d`, default `1d`) for the launch request. The file retains the developer, github-read, offline, packages, and research presets. Duplicate IDs fail validation.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline; optional `maxModelRequests` caps model request count.
@@ -137,7 +137,7 @@ Run `mise run check` and `mise run test` from the repository root. The tests cov
 {.ai}
 
 - A missing `qemu-img` or `setsid` stops startup with a clear error.
-- A missing kernel or incompatible Krun runner prevents guest creation.
+- With `PI_V2_VMM=krun`, a missing kernel or incompatible Krun runner prevents guest creation.
 - `speaker.token is missing` means the owner must register the enforcer first.
 - A blocked guest request returns 403; the agent requests the required capability. An expired or revoked grant also blocks subsequent use.
 - The service archives open tasks on SIGINT or SIGTERM. The owner must inspect the archive outcome before discarding recovery files.

@@ -69,5 +69,5 @@ The owner can deploy speaker through [Docker](speaker/README.md#docker--home-ser
 
 <sub>AI-written</sub>
 
-Git ignores `/personal/`, environment files, runtime binaries, dependencies, speaker data, and local bottle-school configuration. The owner must keep these outside any GitHub upload. The repository ships source, dependency locks, build recipes, and examples. mise installs dependencies and builds the guest; the owner provisions any required local Krun kernel or runner separately.
+Git ignores `/personal/`, environment files, runtime binaries, dependencies, speaker data, and local bottle-school configuration. The owner must keep these outside any GitHub upload. The repository ships source, dependency locks, build recipes, and examples. mise installs dependencies and builds the guest; the optional Krun backend needs a local kernel and runner that the owner provisions separately.
 {.ai}

@@ -19,7 +19,7 @@ Send `Authorization: Bearer <token>` on every call. The token is `$SPEAKER_TOKEN
 ### Enroll (direct session only)
 
 1. `mkdir -p -m 700 "$dir" && openssl rand -hex 32 > "$dir/token" && chmod 600 "$dir/token"`, with `dir=${XDG_STATE_HOME:-$HOME/.local/state}/speaker`. Skip steps 1 to 3 when the file exists and its session is still approved.
-2. `tokenHash` is the token's SHA-256: `printf %s "$(cat "$dir/token")" | sha256sum`.
+2. `tokenHash` is the token's SHA-256 as bare hex: `printf %s "$(cat "$dir/token")" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1` (`shasum` is what macOS has).
 3. `POST $SPEAKER_URL/_speaker/sessions` with `{"label":"<task>","llmName":"<your provider and model>","tokenHash":"<hash>","duration":"1h"}`. Give the user the returned `id` and ask them to approve it at `/admin`.
 4. Poll `GET /_speaker/sessions/<id>` until `status` is `approved`. On `denied` or a past `expiresAt`, enroll again.
 

@@ -362,7 +362,7 @@ export const bootGuest = async (
 
   const vm = await VM.create({
     sandbox: {
-      vmm: process.env.PI_V2_VMM === "qemu" ? "qemu" : "krun",
+      vmm: process.env.PI_V2_VMM === "krun" ? "krun" : "qemu",
       console: "none",
       imagePath: config.guestImage,
     },
