@@ -74,15 +74,15 @@ export default function (pi: ExtensionAPI) {
       name: "request_capability",
       label: "Request capability",
       description:
-        "Ask the owner for a lease: a credential, secret, site, folder, or MCP server, or a named bundle. Waits up to 30 minutes for the owner's decision and returns it.",
+        "Ask the owner for a lease: a credential, secret, site, folder, MCP server, or Pi extension, or a named bundle. Waits up to 30 minutes for the owner's decision and returns it.",
       parameters: Type.Object({
         kind: Type.Optional(
-          Type.Union(["credential", "secret", "site", "folder", "mcp"].map((v) => Type.Literal(v))),
+          Type.Union(["credential", "secret", "site", "folder", "mcp", "extension"].map((v) => Type.Literal(v))),
         ),
         ref: Type.Optional(
           Type.String({
             description:
-              "credential: <provider>.read|write. secret: <NAME>@<host>[,<host>]. site: <host> or *.<domain>. folder: <share> or <share>:rw. mcp: <catalog id>.",
+              "credential: <provider>.read|write. secret: <NAME>@<host>[,<host>]. site: <host> or *.<domain>. folder: <share> or <share>:rw. mcp: <catalog id>. extension: <extension catalog id>.",
           }),
         ),
         bundle: Type.Optional(Type.String({ description: "A bundle name, in place of kind and ref" })),

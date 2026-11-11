@@ -15,7 +15,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Config } from "./config.ts";
 import { mintCredentials, type Credential } from "./credentials.ts";
 import { bootGuest, note, shareProvider, type CapturedBody, type Guest, type Live } from "./gondolin.ts";
-import { folderRef, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
+import { attendedFor, folderRef, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
 import { availableModels, mcpHosts, pi, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerClient, watchLeases, type Lease, type Snapshot } from "./speaker.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "./trace-runs.ts";
@@ -37,7 +37,8 @@ export type Task = {
   slug: string;
   state: TaskState;
   templateId: string;
-  plugins: string[];
+  /** The owner answers questions at the terminal; see attendedFor. */
+  attended: boolean;
   model: string;
   token: string;
   subjectId: string;
@@ -54,6 +55,8 @@ export type Task = {
   leases: Lease[];
   /** The MCP servers Pi started with. */
   mcpRunning: string[];
+  /** The catalog extensions Pi started with. */
+  extensionsRunning: string[];
   events: TaskEvent[];
   credentials: Map<string, Credential>;
   live: Live;
@@ -102,6 +105,7 @@ const taskRecord = (
   slug: task.slug,
   state: closeStatus,
   templateId: task.templateId,
+  attended: task.attended,
   subjectId: task.subjectId,
   model: task.model,
   startedAt: task.startedAt,
@@ -171,6 +175,7 @@ export class Tasks {
     template: string;
     model?: string;
     prompt?: string;
+    attended?: boolean;
     hours?: number;
   }): Promise<Task> {
     // Closed and failed-archive tasks stay listed for the owner but no longer hold a slot.
@@ -178,6 +183,7 @@ export class Tasks {
       throw new Error(`already running ${this.config.maxTasks} tasks`);
     const template = this.templates.get(input.template);
     if (!template) throw new Error(`no template ${input.template}`);
+    const attended = attendedFor(template, input);
     const name = input.name ?? template.id;
     const model = input.model ?? `local/${this.config.localModel.models[0]!.id}`;
     if (!availableModels(this.config).some((entry) => entry.id === model))
@@ -200,7 +206,10 @@ export class Tasks {
     mkdirSync(`${outputDir}/_control`, { recursive: true });
 
     const events: TaskEvent[] = [
-      { at: new Date().toISOString(), text: `task launched from template ${template.id}` },
+      {
+        at: new Date().toISOString(),
+        text: `task launched ${attended ? "attended" : "unattended"} from template ${template.id}`,
+      },
     ];
     const live: Live = {
       hosts: [],
@@ -224,11 +233,11 @@ export class Tasks {
         guestConfigDir,
         this.config,
         this.catalog,
-        { name, model, prompt: input.prompt },
+        { name, model, prompt: input.prompt, attended },
         credentials,
         [],
         [],
-        template.plugins,
+        [],
       );
       const guest = await bootGuest(
         this.config,
@@ -257,7 +266,7 @@ export class Tasks {
         slug,
         state: "starting",
         templateId: template.id,
-        plugins: template.plugins,
+        attended,
         prompt: input.prompt,
         model,
         token,
@@ -269,6 +278,7 @@ export class Tasks {
         guestConfigDir,
         leases: [],
         mcpRunning: [],
+        extensionsRunning: [],
         events,
         live,
         guest,
@@ -322,7 +332,8 @@ export class Tasks {
           (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && task.credentials.has(lease.ref.split("@")[0]!)) ||
           (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && Object.hasOwn(this.config.shareRoots, lease.ref.split(":")[0]!)) ||
           (lease.kind === "site" && siteRef.safeParse(lease.ref).success) ||
-          (lease.kind === "mcp" && Object.hasOwn(this.catalog.mcps, lease.ref));
+          (lease.kind === "mcp" && Object.hasOwn(this.catalog.mcps, lease.ref)) ||
+          (lease.kind === "extension" && Object.hasOwn(this.catalog.extensions, lease.ref));
         if (!valid) this.#event(task, `skipped unsupported lease ${lease.id}: ${lease.kind} ${lease.ref}`);
         return valid;
       });
@@ -340,12 +351,16 @@ export class Tasks {
     this.#reportApplied();
   }
 
-  /** An MCP lease is in effect only after Pi restarted with it. */
+  /** An MCP or extension lease is in effect only after Pi restarted with it. */
   #reportApplied() {
     this.#report(
       this.list().flatMap((task) =>
         unexpired(task.leases)
-          .filter((lease) => lease.kind !== "mcp" || task.mcpRunning.includes(lease.ref))
+          .filter(
+            (lease) =>
+              (lease.kind !== "mcp" || task.mcpRunning.includes(lease.ref)) &&
+              (lease.kind !== "extension" || task.extensionsRunning.includes(lease.ref)),
+          )
           .map((lease) => lease.id),
       ),
     );
@@ -355,6 +370,14 @@ export class Tasks {
     this.#leased(task, "mcp")
       .map((lease) => lease.ref)
       .filter((id) => this.catalog.mcps[id] && !task.mcpRunning.includes(id));
+
+  extensionsPending = (task: Task) =>
+    this.#wantedExtensions(task).filter((id) => !task.extensionsRunning.includes(id));
+
+  #wantedMcps = (task: Task) =>
+    [...new Set(this.#leased(task, "mcp").map((lease) => lease.ref))].filter((id) => this.catalog.mcps[id]);
+  #wantedExtensions = (task: Task) =>
+    [...new Set(this.#leased(task, "extension").map((lease) => lease.ref))].filter((id) => this.catalog.extensions[id]);
 
   #leased = (task: Task, kind: string) => unexpired(task.leases).filter((lease) => lease.kind === kind);
 
@@ -385,10 +408,12 @@ export class Tasks {
       task.live.shares.set(share!, { expiresAt, provider: shareProvider(root, mode === "rw") });
     }
 
-    const wanted = this.#leased(task, "mcp").filter((lease) => this.catalog.mcps[lease.ref]);
+    // Pi loads MCP servers and extensions only at start, so a changed set restarts it at the next idle boundary.
+    const differs = (wanted: string[], running: string[]) =>
+      wanted.length !== running.length || wanted.some((id) => !running.includes(id));
     const changed =
-      wanted.length !== task.mcpRunning.length ||
-      wanted.some((lease) => !task.mcpRunning.includes(lease.ref));
+      differs(this.#wantedMcps(task), task.mcpRunning) ||
+      differs(this.#wantedExtensions(task), task.extensionsRunning);
     if (changed && (task.state === "idle" || task.state === "busy")) void this.#restartAtIdle(task);
   }
 
@@ -417,9 +442,8 @@ export class Tasks {
       if (isClosed(task) || task.state === "failed") return;
       task.state = "reconfiguring";
       try {
-        const mcpIds = this.#leased(task, "mcp")
-          .map((lease) => lease.ref)
-          .filter((id) => this.catalog.mcps[id]);
+        const mcpIds = this.#wantedMcps(task);
+        const extensionIds = this.#wantedExtensions(task);
         writeGuestConfig(
           task.guestConfigDir,
           this.config,
@@ -428,11 +452,15 @@ export class Tasks {
           task.credentials,
           task.leases,
           mcpIds,
-          task.plugins,
+          extensionIds,
         );
         await pi.restart(task.guest);
         task.mcpRunning = mcpIds;
-        this.#event(task, `Pi resumed with MCP servers: ${mcpIds.join(", ") || "none"}`);
+        task.extensionsRunning = extensionIds;
+        this.#event(
+          task,
+          `Pi resumed with MCP servers: ${mcpIds.join(", ") || "none"}; extensions: ${extensionIds.join(", ") || "none"}`,
+        );
         task.state = "idle";
       } catch (error) {
         this.#event(task, `Pi restart failed: ${(error as Error).message}`);

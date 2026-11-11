@@ -22,6 +22,8 @@ const NewTask = z
     model: z.string().optional(),
     /** A one-shot launch: the broker submits this prompt once Pi is ready. */
     prompt: z.string().trim().min(1).max(20_000).optional(),
+    /** Whether the owner is at the terminal to answer questions; defaults to attended without a prompt. */
+    attended: z.boolean().optional(),
     /** Calendar hours until the broker archives the task; the template's maxRuntimeHours caps it. */
     hours: z.number().positive().optional(),
   })
@@ -44,12 +46,14 @@ export const startControl = (config: Config, tasks: Tasks) => {
         id: task.id,
         name: task.name,
         state: task.state,
+        attended: task.attended,
         model: task.model,
         startedAt: task.startedAt,
         sessionId: task.guest.sessionId,
         subjectId: task.subjectId,
         pendingRequests: tasks.pendingRequests(task),
         mcpPending: tasks.mcpPending(task),
+        extensionsPending: tasks.extensionsPending(task),
         done: tasks.done(task),
         summary: task.lastMessage,
       })),
@@ -82,16 +86,17 @@ export const startControl = (config: Config, tasks: Tasks) => {
             </p>
             <table>
               <thead>
-                <tr><th>id</th><th>name</th><th>state</th><th>pending requests</th><th>done</th></tr>
+                <tr><th>id</th><th>name</th><th>state</th><th>mode</th><th>pending requests</th><th>done</th></tr>
               </thead>
               <tbody>
                 ${rows.length === 0
-                  ? html`<tr><td colspan="5">No tasks.</td></tr>`
+                  ? html`<tr><td colspan="6">No tasks.</td></tr>`
                   : rows.map(
                       (row) => html`<tr>
                         <td>${row.id}</td>
                         <td>${row.name}</td>
                         <td>${row.state}</td>
+                        <td>${row.attended ? "attended" : "unattended"}</td>
                         <td>${row.pendingRequests}</td>
                         <td>${row.done ? "yes" : "no"}</td>
                       </tr>`,

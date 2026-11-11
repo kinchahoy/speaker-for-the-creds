@@ -21,11 +21,31 @@
       "write": false
     }
   },
-  "plugins": {
-    "subagent@1": {
+  "extensions": {
+    "pi-web-access": {
+      "label": "Web search and fetch (pi-web-access)",
+      "guestPath": "/opt/pi-plugins/pi-web-access",
+      "description": "web_search through keyless Exa (needs site mcp.exa.ai) and fetch_content over plain HTTP (each page host needs a site lease).",
+      "tools": ["web_search", "fetch_content", "get_search_content", "source_check"]
+    },
+    "pi-cc-loop": {
+      "label": "Scheduled wake-ups (pi-cc-loop)",
+      "guestPath": "/opt/pi-plugins/pi-cc-loop",
+      "description": "/loop, cron_create, cron_list, cron_delete, and schedule_wakeup: Pi wakes itself on a schedule while idle.",
+      "tools": ["cron_create", "cron_list", "cron_delete", "schedule_wakeup"],
+      "note": "Scheduled jobs fire only while you are idle. The task stays open between wakes until its deadline or `/output/DONE`.\n- Give every recurring job `maxFires` and the longest interval that still serves the goal; prefer 20-30 minutes for idle checks. Each wake spends model requests from this task's capped budget.\n- Create jobs with `durable: true` (`/loop --durable`). Durable jobs live in `/work/.pi/scheduled_tasks.json` and survive a Pi restart (Pi restarts when leases change), but not the end of this task: the work directory is deleted at archival.\n- Cancel your jobs with `cron_delete` (or `schedule_wakeup` with `stop: true`) before you write `/output/DONE`."
+    },
+    "pi-cc-monitor": {
+      "label": "Background monitors (pi-cc-monitor)",
+      "guestPath": "/opt/pi-plugins/pi-cc-monitor",
+      "description": "Monitor, monitor_list, and monitor_stop: run a background command and wake Pi when it prints.",
+      "tools": ["Monitor", "monitor_list", "monitor_stop"]
+    },
+    "subagent": {
       "label": "Subagents",
       "guestPath": "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/index.ts",
-      "description": "Lets Pi run subagents inside this same VM under this same policy."
+      "description": "Lets Pi run subagents inside this same VM under this same policy.",
+      "tools": ["subagent"]
     }
   }
 }

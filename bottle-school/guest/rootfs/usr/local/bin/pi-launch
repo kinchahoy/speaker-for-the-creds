@@ -2,10 +2,10 @@
 # Starts Pi from the trusted configuration the host mounted read-only at /etc/pi-v2.
 set -eu
 mkdir -p "$HOME/.pi/agent" /work/.pi-session
-cp /etc/pi-v2/models.json /etc/pi-v2/settings.json /etc/pi-v2/APPEND_SYSTEM.md /etc/pi-v2/mcp.json "$HOME/.pi/agent/"
+cp /etc/pi-v2/models.json /etc/pi-v2/settings.json /etc/pi-v2/APPEND_SYSTEM.md /etc/pi-v2/mcp.json /etc/pi-v2/web-search.json "$HOME/.pi/agent/"
 cd /work
 set --
 while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/pi-v2/args
-# Extensions baked into the image (pinned in guest/mise-config.toml)
+# Always-on extensions baked into the image (pinned in guest/mise-config.toml); opt-in ones arrive as -e args
 for extension in /opt/pi-extensions/*; do set -- "$@" -e "$extension"; done
 exec pi "$@"

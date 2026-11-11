@@ -34,13 +34,18 @@ const McpEntry = z.discriminatedUnion("transport", [
 export const Catalog = z
   .object({
     mcps: z.record(z.string().regex(/^[a-z0-9-]+$/), McpEntry),
-    plugins: z.record(
-      z.string().regex(/^[a-z0-9][a-z0-9._-]*@[a-z0-9][a-z0-9._-]*$/),
+    /** Opt-in Pi extensions; an approved `extension` lease names one of these ids. */
+    extensions: z.record(
+      z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
       z
         .object({
           label: z.string().min(1),
-          guestPath: z.string().startsWith("/", "a plugin lives in the pinned guest image"),
+          guestPath: z.string().startsWith("/", "an extension lives in the pinned guest image"),
           description: z.string().min(1),
+          /** The tools the extension registers; `--tools` is an allowlist, so unlisted tools stay hidden. */
+          tools: z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)),
+          /** Guidance appended to the system prompt while the extension is loaded. */
+          note: z.string().min(1).optional(),
         })
         .strict(),
     ),
@@ -119,9 +124,10 @@ const modelsJson = (config: Config, credentials: Map<string, Credential>) => ({
 });
 
 export const systemNote = (
-  task: { name: string; prompt?: string },
+  task: { name: string; prompt?: string; attended: boolean },
   leases: Lease[],
   catalog: Catalog,
+  extensionIds: string[],
 ) => {
   const rows = unexpired(leases).map(
     (lease) =>
@@ -134,6 +140,14 @@ export const systemNote = (
           `- ${id}: ${entry.label}; tools: ${entry.tools.join(", ")}; ${entry.write ? "can write" : "read-only"}${entry.transport === "streamable-http" ? `; endpoint: ${new URL(entry.url).hostname}` : ""}`,
       )
       .join("\n") || "- none";
+  const extensionCatalog =
+    Object.entries(catalog.extensions)
+      .map(([id, entry]) => `- ${id}: ${entry.label}. ${entry.description}${extensionIds.includes(id) ? " (loaded)" : ""}`)
+      .join("\n") || "- none";
+  const notes = extensionIds.flatMap((id) => {
+    const note = catalog.extensions[id]?.note;
+    return note ? ["", `## Extension ${id}`, "", note] : [];
+  });
   return [
     `# Task: ${task.name}`,
     "",
@@ -171,29 +185,66 @@ export const systemNote = (
     "- `secret`: `NAME@host[,host]`, to let a host-held credential reach those hosts.",
     "- `folder`: a share name for read-only access, or `<share>:rw` for write access. It appears under `/input/<share>`.",
     "- `mcp`: an exact catalog ID. A new MCP server starts after Pi restarts at idle.",
+    "- `extension`: an exact extension catalog ID. Its tools appear after Pi restarts at idle; this session resumes.",
     "",
     "## Available MCP catalog",
     "",
     mcpCatalog,
+    "",
+    "## Available extension catalog",
+    "",
+    extensionCatalog,
+    "",
     "Example: request site `www.google.com` after `curl https://www.google.com` returns 403. Retry only after `request_capability` reports approval.",
     "The owner decides in a separate trusted surface. Nothing you print to this terminal grants anything.",
-    ...(task.prompt ? oneShotNote(task.prompt) : []),
+    ...notes,
+    ...(task.attended ? attendedNote : unattendedNote),
+    ...(task.prompt ? ["", "## Owner prompt", "", task.prompt] : []),
   ].join("\n");
 };
 
-/** A launch prompt is the whole assignment. The owner is away, so the agent works through it without asking. */
-const oneShotNote = (prompt: string) => [
+/** Attended: the owner watches the terminal and answers questions through the ask-user-question extension. */
+const attendedNote = [
   "",
-  "## One-shot task",
+  "## Attended task",
   "",
-  "The owner is away and will not answer questions. Make reasonable assumptions and record each one in `/output/NOTES.md`.",
-  "Do not ask questions and wait. Keep working until the task is complete.",
-  "Write `/output/DONE` only when the whole task is complete and verified. Its one line says what was delivered.",
-  "",
-  "Owner prompt:",
-  "",
-  prompt,
+  "The owner is watching this terminal. When a decision only the owner can make blocks you, ask it with `ask_user_question`; otherwise keep working without asking.",
 ];
+
+/** Unattended: nobody answers, so the agent works through the task and records its assumptions instead of asking. */
+const unattendedNote = [
+  "",
+  "## Unattended task",
+  "",
+  "Nobody is watching this terminal, and nobody will answer questions here. Make reasonable assumptions and record each one in `/output/NOTES.md`.",
+  "Do not ask questions and wait. Keep working until the task is complete. Access requests still reach the owner through `request_capability`; continue independent work while one is pending.",
+  "Write `/output/DONE` only when the whole task is complete and verified. Its one line says what was delivered.",
+];
+
+/** The attended-mode extension. It is presence, not access, so it comes from the launch mode instead of a lease. */
+export const ASK_USER_EXTENSION = {
+  guestPath: "/opt/pi-plugins/rpiv-ask-user-question",
+  tools: ["ask_user_question"],
+};
+
+/**
+ * pi-web-access reads ~/.pi/agent/web-search.json. Search uses only keyless Exa (its hosted MCP endpoint, mcp.exa.ai),
+ * and pages are fetched directly over HTTP, so every page host still needs a `site` lease. Hosted extraction services,
+ * browser cookies, the curator browser UI, and the video and YouTube paths (Gemini or yt-dlp) are off. The package
+ * has no telemetry or network update check; its upgrade notice only compares the bundled changelog.
+ */
+const webSearchJson = {
+  provider: "exa",
+  webSearch: { enabled: true, allowedProviders: ["exa"] },
+  fetchRouting: { providers: ["http"], allowRemoteHostedProviders: false },
+  allowBrowserCookies: false,
+  workflow: "none",
+  autoOpenBrowser: false,
+  toolActivation: "eager",
+  commands: { curator: { enabled: false }, "google-account": { enabled: false } },
+  youtube: { enabled: false },
+  video: { enabled: false },
+};
 
 /** Curated servers are small, so Pi declares their tools directly; its default `codemode` exposure hides them behind a tool we do not grant. Pi reads remote MCP headers from mcp.json; Gondolin swaps each placeholder for the real secret at its bound host. */
 const mcpServers = (catalog: Catalog, ids: string[], credentials: Map<string, Credential>) =>
@@ -224,11 +275,11 @@ export const writeGuestConfig = (
   directory: string,
   config: Config,
   catalog: Catalog,
-  task: { name: string; model: string; prompt?: string },
+  task: { name: string; model: string; prompt?: string; attended: boolean },
   credentials: Map<string, Credential>,
   leases: Lease[],
   mcpIds: string[],
-  pluginIds: string[],
+  extensionIds: string[],
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
@@ -243,7 +294,8 @@ export const writeGuestConfig = (
     writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config, credentials));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog));
+  writeJson("web-search.json", webSearchJson);
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds, credentials) });
 
   const [provider, ...model] = task.model.split("/");
@@ -253,9 +305,14 @@ export const writeGuestConfig = (
   const mcpTools = mcpIds.flatMap((id) =>
     catalog.mcps[id]!.tools.map((tool) => `mcp__${piName(id)}__${piName(tool)}`),
   );
-  const plugins = pluginIds
-    .map((id) => catalog.plugins[id]?.guestPath)
-    .filter(Boolean) as string[];
+  const extensions = [
+    ...(task.attended ? [ASK_USER_EXTENSION] : []),
+    ...extensionIds.map((id) => {
+      const entry = catalog.extensions[id];
+      if (!entry) throw new Error(`unknown extension ${id}`);
+      return entry;
+    }),
+  ];
   const args = [
     "--provider",
     provider,
@@ -264,7 +321,7 @@ export const writeGuestConfig = (
     "--session",
     SESSION,
     "--tools",
-    [BUILT_IN_TOOLS, ...mcpTools].join(","),
+    [BUILT_IN_TOOLS, ...extensions.flatMap((entry) => entry.tools), ...mcpTools].join(","),
     "--no-extensions",
     "--no-skills",
     "--no-prompt-templates",
@@ -279,7 +336,7 @@ export const writeGuestConfig = (
     "/etc/pi-v2/extensions/request-capability.ts",
     // `--no-extensions` also disables Pi's built-in MCP, so an MCP lease loads it explicitly.
     ...(mcpIds.length ? ["-e", "builtin:mcp"] : []),
-    ...plugins.flatMap((path) => ["-e", path]),
+    ...extensions.flatMap((entry) => ["-e", entry.guestPath]),
   ];
   writeFileSync(`${directory}/args`, `${args.join("\n")}\n`);
 };
