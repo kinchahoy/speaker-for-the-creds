@@ -9,7 +9,7 @@ const select = (name: string, label: string, values: readonly string[], chosen =
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
-const durations = ['15m', '30m', '1h', '1d', '7d', '30d']
+const durations = ['15m', '30m', '1h', '1d', '7d', '30d', '90d']
 const permanentOverride = html`<label class="override" title="Creates a permanent lease that stays until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
 
 const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
@@ -293,6 +293,7 @@ export function adminPage(
   section = 'approvals',
   bundles: Record<string, Capability[]> = {},
   error?: string,
+  mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
 ) {
   const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
   const activeSection = selected
@@ -302,7 +303,7 @@ export function adminPage(
       : 'approvals'
   const providerList = Object.entries(providers).map(
     ([id, provider]) =>
-      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
+      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}${provider.mcp ? ' · MCP' : ''}${provider.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
   )
   const panels = livePanels(view)
   const identities = [
@@ -323,16 +324,20 @@ export function adminPage(
         identity(
           'session',
           `Session ${s.label}`,
-          html`LLM: ${s.llmName ?? 'not supplied'} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`,
+          html`${who(s)} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`,
           ['credential'],
           `sessions/${s.id}`,
         ),
       ),
   ]
-  const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication', ['bearer', 'header', 'basic'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
+  const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
   const providerEditor = selected
-    ? html`<section class="editor"><h3>Edit provider: ${selectedId}</h3>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</section>`
+    ? html`<section class="editor"><h3>Edit provider: ${selectedId}</h3>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
     : ''
+  function mcpTools(id: string) {
+    const summary = mcpSummary[id]
+    return html`<div class="t-meta">${error === 'tools' ? html`<p class="notice" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<span class="meta">${summary ? `Tools: ${summary.read} read · ${summary.write} write${summary.unannotated ? ` (${summary.unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</span>${form('/admin/providers/tools', input('id', '', 'hidden', id), 'Refresh tools', 'inline')}</div>`
+  }
   const addProvider = selected
     ? ''
     : html`<details><summary>Add provider</summary>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</details>`
@@ -376,7 +381,19 @@ export function adminPage(
   return page(nav, html`${intro}${content}`, nonce ?? '')
 }
 
-export function livePanels({ enforcers, sessions, requests, leases }: View) {
+// One compact line naming who is asking: model, then harness, both as the agent reported them.
+const who = (s: { llmName?: string; harness?: string }) =>
+  [s.llmName ?? 'LLM not supplied', s.harness].filter(Boolean).join(' · ')
+
+export function livePanels({ enforcers, sessions, requests, leases, always }: View) {
+  // A request filed with a still-pending session is shown on that session's card and approved with it.
+  const pendingSessions = new Set(sessions.filter((s) => s.status === 'pending').map((s) => s.id))
+  const firstAsk = (sessionId: string) => {
+    const r = requests.find((q) => q.subjectId === sessionId && q.atEnrollment && q.status === 'pending')
+    return r
+      ? html`<div class="meta">Also asks for ${r.bundle ? `bundle ${r.bundle}` : r.members.map((m) => `${m.kind} ${m.ref}`).join(', ')} for ${r.duration}: ${r.reason}</div>`
+      : ''
+  }
   const decide = (path: string, picker: unknown, subject: string, approve = 'Approve') =>
     html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/deny" aria-label="Deny: ${subject}">Deny</button></div></form>`
   const ticket = (
@@ -409,7 +426,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
           `session ${s.label} ${s.llmName ?? ''}`,
           ['credential'],
           html`${mark('session')}<strong>Session ${s.label}</strong><span class="chip">wants to connect</span>`,
-          html`<div class="t-grant"><div class="meta">LLM: ${s.llmName ?? 'not supplied'} · Can request credential access only</div></div>`,
+          html`<div class="t-grant"><div class="meta">${who(s)}</div>${firstAsk(s.id)}${always.length ? html`<div class="meta">Reads without asking for up to 90 days: ${always.join(', ')}</div>` : ''}</div>`,
           decide(
             `sessions/${s.id}`,
             html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
@@ -418,7 +435,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
         ),
       ),
     ...requests
-      .filter((r) => r.status === 'pending')
+      .filter((r) => r.status === 'pending' && !(r.atEnrollment && pendingSessions.has(r.subjectId)))
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((r) => {
         const note = r.bundle
@@ -428,7 +445,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
           `request-${r.id}`,
           `${r.label} ${r.llmName ?? ''} ${r.enforcer ?? ''} ${r.bundle ?? ''} ${r.reason} ${r.members.map((m) => `${m.kind} ${m.ref}`).join(' ')}`,
           r.members.map((m) => m.kind),
-          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
+          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">${who(r)}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
           html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}`}</div>${
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`

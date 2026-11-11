@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { serve, upgradeWebSocket } from '@hono/node-server'
 import { type Context, Hono } from 'hono'
 import { basicAuth } from 'hono/basic-auth'
@@ -23,7 +24,7 @@ const urlSchema = z.url().refine((value) => {
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
 }, 'Use an HTTP(S) URL without credentials, query, or fragment')
 const ruleSchema = z.enum(['always', 'approval', 'deny'])
-const durationSchema = z.enum(['15m', '30m', '1h', '1d', '7d', '30d']).default('15m')
+const durationSchema = z.enum(['15m', '30m', '1h', '1d', '7d', '30d', '90d']).default('15m')
 const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('15m')
 const durations = {
   '15m': 900_000,
@@ -32,7 +33,23 @@ const durations = {
   '1d': 86_400_000,
   '7d': 604_800_000,
   '30d': 2_592_000_000,
+  '90d': 7_776_000_000,
 }
+// An `always` policy grants a session access without a request, for at most this long after its approval.
+const alwaysLimit = durations['90d']
+// MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
+const mcpReadMethods = new Set([
+  'initialize',
+  'ping',
+  'tools/list',
+  'resources/list',
+  'resources/templates/list',
+  'resources/read',
+  'prompts/list',
+  'prompts/get',
+  'completion/complete',
+  'logging/setLevel',
+])
 const authSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('bearer'), secret: idSchema }),
   z.object({ type: z.literal('basic'), secret: idSchema }),
@@ -49,12 +66,16 @@ const authSchema = z.discriminatedUnion('type', [
           ),
       ),
   }),
+  // The secret is a URL path segment (for example a webhook id) spliced in after the base URL.
+  z.object({ type: z.literal('path'), secret: idSchema }),
 ])
 const providerSchema = z.object({
   baseUrl: urlSchema,
   guide: z.string().max(20_000).optional(),
   auth: authSchema,
   policy: z.object({ read: ruleSchema, write: ruleSchema }),
+  // Streamable-HTTP MCP server: POST bodies are classified by JSON-RPC method and tool annotations.
+  mcp: z.boolean().optional(),
 })
 const kinds = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
@@ -72,14 +93,24 @@ const sessionSchema = z.object({
   id: idSchema,
   label: z.string().trim().min(1).max(200),
   llmName: z.string().trim().min(1).max(120).optional(),
+  harness: z.string().trim().min(1).max(120).optional(),
   tokenHash: hashSchema,
   duration: durationSchema,
   status: statusSchema,
   expiresAt: z.string().nullable(),
+  approvedAt: z.string().optional(),
 })
+const requestInputSchema = z
+  .object({
+    capability: capabilitySchema.optional(),
+    bundle: idSchema.optional(),
+    reason: z.string().trim().min(1).max(500),
+    duration: durationSchema,
+  })
+  .refine((value) => Boolean(value.capability) !== Boolean(value.bundle), 'Send either capability or bundle')
 const sessionEnrollmentSchema = sessionSchema
-  .pick({ label: true, tokenHash: true, duration: true })
-  .extend({ llmName: z.string().trim().min(1).max(120) })
+  .pick({ label: true, tokenHash: true, duration: true, harness: true })
+  .extend({ llmName: z.string().trim().min(1).max(120), request: requestInputSchema.optional() })
 const subjectSchema = z.object({ id: idSchema, label: z.string(), enforcer: idSchema, tokenHash: hashSchema })
 const leaseSchema = z.object({
   id: idSchema,
@@ -112,8 +143,11 @@ export type Pending = {
   subjectId: string
   label: string
   llmName?: string
+  harness?: string
   enforcer?: string
   members: Capability[]
+  // Filed with the session's enrollment; approving the session approves it too.
+  atEnrollment?: boolean
   bundle?: string
   method?: string
   path?: string
@@ -123,7 +157,14 @@ export type Pending = {
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
 }
-export type View = { enforcers: EnforcerView[]; sessions: SessionView[]; requests: Pending[]; leases: LeaseView[] }
+export type View = {
+  enforcers: EnforcerView[]
+  sessions: SessionView[]
+  requests: Pending[]
+  leases: LeaseView[]
+  // Providers any approved session may read without a request (shown when approving a session).
+  always: string[]
+}
 type Caller = { role: 'enforcer'; enforcer: Enforcer } | { role: 'subject'; id: string; kinds: string[] }
 type Env = { Variables: { caller: Caller } }
 const demoSecret = 'speaker-demo-credential-not-for-real-services'
@@ -149,6 +190,11 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
         .regex(/^[a-zA-Z0-9_-]+$/)
         .optional(),
       NTFY_TOKEN: z.string().optional(),
+      // When on, GET /_speaker/providers answers without a token (names, auth type and policy only).
+      PUBLIC_PROVIDERS: z
+        .enum(['0', '1', 'false', 'true'])
+        .default('0')
+        .transform((value) => value === '1' || value === 'true'),
     })
     .refine((value) => Boolean(value.NTFY_URL) === Boolean(value.NTFY_TOPIC), 'Set both NTFY_URL and NTFY_TOPIC')
     .parse(environment)
@@ -235,6 +281,133 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const expiry = (duration: Duration) =>
     duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
   const liveSession = (session: Session) => session.status === 'approved' && unexpired(session)
+  // Sessions approved before approvedAt existed start their `always` window now rather than never ending it.
+  for (const session of sessions.values())
+    if (session.status === 'approved' && !session.approvedAt) session.approvedAt = new Date().toISOString()
+  // When an approved session's `always` access ends: 90 days after approval, or sooner if the session ends first.
+  // Enforcer subjects (sandboxes) are bounded by their task and have no such window.
+  const alwaysEnds = (callerId: string) => {
+    const session = sessions.get(callerId)
+    if (!session?.approvedAt) return null
+    const cap = Date.parse(session.approvedAt) + alwaysLimit
+    return new Date(session.expiresAt === null ? cap : Math.min(cap, Date.parse(session.expiresAt))).toISOString()
+  }
+  // `always` turns into `approval` once the caller's window has passed.
+  const ruleFor = (provider: Provider, group: 'read' | 'write', callerId: string) => {
+    const rule = provider.policy[group]
+    const end = alwaysEnds(callerId)
+    return rule === 'always' && end !== null && Date.parse(end) <= Date.now() ? 'approval' : rule
+  }
+  // The upstream URL for an agent-facing path, or undefined when it would leave the provider's base path.
+  const upstreamUrl = (provider: Provider, secret: string, parts: string[], search: string) => {
+    const base = new URL(provider.baseUrl),
+      target = new URL(base.origin)
+    const prefix = `${base.pathname.replace(/\/$/, '')}/`
+    const rest = parts.join('/')
+    target.pathname =
+      provider.auth.type === 'path'
+        ? `${prefix}${encodeURIComponent(secret)}${parts.length ? `/${rest}` : ''}`
+        : prefix + rest
+    target.search = search
+    return target.origin === base.origin && target.pathname.startsWith(prefix) ? target : undefined
+  }
+  const applyCredential = (provider: Provider, secret: string, headers: Headers) => {
+    if (provider.auth.type === 'path') return
+    if (provider.auth.type === 'header') headers.set(provider.auth.headerName, secret)
+    else
+      headers.set(
+        'authorization',
+        provider.auth.type === 'basic' ? `Basic ${Buffer.from(secret).toString('base64')}` : `Bearer ${secret}`,
+      )
+  }
+  type McpTool = { readOnly: boolean; destructive: boolean; annotated: boolean }
+  const mcpTools = new Map<string, { at: number; tools: Map<string, McpTool> }>()
+  // Lists an MCP provider's tools with speaker's own credentialed session (initialize, tools/list, close).
+  async function listMcpTools(id: string) {
+    const provider = providers[id],
+      secret = secrets.get(id)
+    if (!provider || secret === undefined) throw new Error('MCP provider or credential missing')
+    const url = upstreamUrl(provider, secret, [], '')
+    if (!url) throw new Error('Invalid MCP provider URL')
+    let sessionId: string | undefined
+    let version: string | undefined
+    const rpc = async (body: { id?: number; method: string; params?: object }, method = 'POST') => {
+      const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' })
+      if (sessionId) headers.set('mcp-session-id', sessionId)
+      if (version) headers.set('mcp-protocol-version', version)
+      applyCredential(provider, secret, headers)
+      const response = await fetch(url, {
+        method,
+        headers,
+        body: method === 'POST' ? JSON.stringify({ jsonrpc: '2.0', ...body }) : undefined,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!response.ok) throw new Error(`MCP ${body.method} returned ${response.status}`)
+      sessionId = response.headers.get('mcp-session-id') ?? sessionId
+      const text = await response.text()
+      if (body.id === undefined || !text) return undefined
+      const messages = response.headers.get('content-type')?.includes('text/event-stream')
+        ? text
+            .split('\n')
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => JSON.parse(line.slice(5)))
+        : [JSON.parse(text)]
+      return messages.find((message) => message.id === body.id)?.result
+    }
+    const init = await rpc({
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'speaker', version: '1' } },
+    })
+    version = init?.protocolVersion
+    await rpc({ method: 'notifications/initialized' })
+    const tools = new Map<string, McpTool>()
+    let cursor: string | undefined
+    do {
+      const page = await rpc({ id: 2, method: 'tools/list', params: cursor ? { cursor } : {} })
+      for (const tool of page?.tools ?? [])
+        tools.set(tool.name, {
+          readOnly: tool.annotations?.readOnlyHint === true,
+          destructive: tool.annotations?.destructiveHint === true,
+          annotated: Boolean(tool.annotations),
+        })
+      cursor = page?.nextCursor
+    } while (cursor)
+    if (sessionId) await rpc({ method: 'session/close' }, 'DELETE').catch(() => undefined)
+    mcpTools.set(id, { at: Date.now(), tools })
+    audit('mcp_tools_listed', { provider: id, tools: tools.size })
+    return tools
+  }
+  // Cached tool annotations, refreshed every 10 minutes or when an unknown tool is called (at most every 30s).
+  async function mcpTool(id: string, name: string) {
+    const cached = mcpTools.get(id)
+    const age = cached ? Date.now() - cached.at : Number.POSITIVE_INFINITY
+    if (age > 600_000 || (!cached?.tools.has(name) && age > 30_000))
+      await listMcpTools(id).catch(() => audit('mcp_tools_failed', { provider: id }))
+    return mcpTools.get(id)?.tools.get(name)
+  }
+  // Classifies one MCP POST body: protocol housekeeping and read-only tools are reads; anything else is a write.
+  async function mcpAccess(id: string, body: string) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return { group: 'write' as const, detail: 'unparseable MCP body' }
+    }
+    const notes: string[] = []
+    for (const message of Array.isArray(parsed) ? parsed : [parsed]) {
+      const method = (message as { method?: unknown })?.method
+      if (typeof method !== 'string' || method.startsWith('notifications/') || mcpReadMethods.has(method)) continue
+      const name = (message as { params?: { name?: unknown } }).params?.name
+      if (method === 'tools/call' && typeof name === 'string') {
+        const tool = await mcpTool(id, name)
+        if (tool?.readOnly) continue
+        notes.push(`${name}${tool ? (tool.destructive ? ' (destructive)' : '') : ' (unknown tool)'}`)
+      } else notes.push(method)
+    }
+    return { group: notes.length ? ('write' as const) : ('read' as const), detail: notes.join(', ') }
+  }
 
   const snapshot = (enforcerId: string) => ({
     type: 'snapshot',
@@ -275,12 +448,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const matchingLease = (subjectId: string, kind: string, ref: string) =>
     [...leases.values()].find((l) => unexpired(l) && l.subjectId === subjectId && l.kind === kind && l.ref === ref)
   const hasLease = (subjectId: string, kind: string, ref: string) => Boolean(matchingLease(subjectId, kind, ref))
-  const recordUse = async (leaseId: string, subjectId: string) => {
+  // Counts a proxied call for the caller (and its enforcer), and for the lease when one authorized it.
+  // `always` calls have no lease but still count as the identity's use.
+  const recordUse = async (leaseId: string | undefined, subjectId: string) => {
     const now = Date.now()
     for (const [map, id] of [
       [leaseUsage, leaseId],
       [identityUsage, subjectId],
     ] as const) {
+      if (id === undefined) continue
       const previous = useStats(map, id)
       map.set(id, { uses: previous.uses + 1, lastUsedAt: now })
     }
@@ -295,9 +471,16 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     serial(() => commitLeases(new Map([...leases].filter(([, lease]) => !matches(lease)))))
   const owner = (subjectId: string) => {
     const subject = subjects.get(subjectId)
-    if (subject) return { label: subject.label, llmName: undefined, enforcer: enforcers.get(subject.enforcer)?.name }
+    if (subject)
+      return {
+        label: subject.label,
+        llmName: undefined,
+        harness: undefined,
+        enforcer: enforcers.get(subject.enforcer)?.name,
+      }
     const session = sessions.get(subjectId)
-    if (session) return { label: session.label, llmName: session.llmName, enforcer: undefined }
+    if (session)
+      return { label: session.label, llmName: session.llmName, harness: session.harness, enforcer: undefined }
     throw new HTTPException(404, { message: 'Unknown subject' })
   }
   const requestStatus = (request: Pending) => {
@@ -320,6 +503,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       const { label, llmName } = owner(lease.subjectId)
       return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
     }),
+    always: Object.entries(providers)
+      .filter(([, provider]) => provider.policy.read === 'always')
+      .map(([id]) => id),
   })
   function pendingRequest(id: string) {
     const request = pending.get(id)
@@ -489,7 +675,41 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   }
 
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
-  app.get('/skill.md', (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
+  for (const route of ['/skill.md', '/SKILL.md'])
+    app.get(route, (c) => c.text(skill, 200, { 'content-type': 'text/markdown; charset=utf-8' }))
+  // Holds a status read for up to `?wait=` seconds (max 60) until `settled` turns true, so agents poll once.
+  const settle = async (c: Context<Env>, settled: () => boolean) => {
+    const until = Date.now() + Math.min(Number(c.req.query('wait')) || 0, 60) * 1000
+    while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
+  }
+  // Resolves a capability or bundle request body to its members, refusing kinds the caller may not request.
+  const membersFor = (input: z.infer<typeof requestInputSchema>, allowedKinds: string[]) => {
+    const members = input.bundle ? bundles[input.bundle] : input.capability ? [input.capability] : undefined
+    if (!members) throw new HTTPException(404, { message: 'Unknown bundle' })
+    for (const { kind, ref } of members) {
+      if (!allowedKinds.includes(kind))
+        throw new HTTPException(400, { res: Response.json({ error: 'unsupported_kind', kind }, { status: 400 }) })
+      if (kind === 'credential' && !/^[a-zA-Z0-9_-]+\.(read|write)$/.test(ref))
+        throw new HTTPException(400, { message: 'Credential ref must be <provider>.read or <provider>.write' })
+      if (kind === 'credential' && !Object.hasOwn(providers, ref.split('.')[0]))
+        throw new HTTPException(400, { message: 'Unknown provider' })
+    }
+    return members
+  }
+  const providerList = () =>
+    Object.fromEntries(
+      Object.entries(providers).map(([id, provider]) => [
+        id,
+        {
+          auth: provider.auth.type,
+          policy: provider.policy,
+          mcp: Boolean(provider.mcp),
+          secretConfigured: secrets.get(id) !== undefined,
+          hasGuide: Boolean(provider.guide),
+        },
+      ]),
+    )
+  if (config.PUBLIC_PROVIDERS) app.get('/_speaker/providers', (c) => c.json(providerList()))
   app.get(
     '/_speaker/enforcers/ws',
     auth,
@@ -531,17 +751,23 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return c.json({ id: enforcer.id, status: enforcer.status }, 201)
   })
   app.post('/_speaker/sessions', async (c) => {
-    const input = sessionEnrollmentSchema.parse(await c.req.json())
+    const { request: wanted, ...input } = sessionEnrollmentSchema.parse(await c.req.json())
+    // Validate the optional first request before storing anything; a session may request credentials only.
+    const members = wanted ? membersFor(wanted, ['credential']) : undefined
     const session: Session = { id: rid(), ...input, status: 'pending', expiresAt: null }
     sessions.set(session.id, session)
     await saveList('sessions.json', sessions)
     audit('session_enrolled', { session: session.id, label: session.label, llmName: session.llmName })
-    void notify(`Session "${session.label}" (${session.llmName}) wants access`, `session-${session.id}`)
-    return c.json({ id: session.id }, 201)
+    const request =
+      wanted && members ? createRequest(session.id, members, wanted.bundle, wanted.reason, wanted.duration) : undefined
+    if (request) request.atEnrollment = true
+    else void notify(`Session "${session.label}" (${session.llmName}) wants access`, `session-${session.id}`)
+    return c.json({ id: session.id, ...(request ? { requestId: request.id } : {}) }, 201)
   })
-  app.get('/_speaker/sessions/:id', (c) => {
+  app.get('/_speaker/sessions/:id', async (c) => {
     const session = sessions.get(c.req.param('id'))
     if (!session) throw new HTTPException(404, { message: 'Session not found' })
+    await settle(c, () => session.status !== 'pending')
     return c.json({ status: session.status, expiresAt: session.expiresAt })
   })
   app.all('/_demo-upstream/*', async (c) => {
@@ -605,6 +831,20 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         c.req.query('section'),
         bundles,
         c.req.query('error'),
+        Object.fromEntries(
+          [...mcpTools].map(([id, { at, tools }]) => {
+            const list = [...tools.values()]
+            return [
+              id,
+              {
+                at,
+                read: list.filter((tool) => tool.readOnly).length,
+                write: list.filter((tool) => !tool.readOnly).length,
+                unannotated: list.filter((tool) => !tool.annotated).length,
+              },
+            ]
+          }),
+        ),
       ),
     ),
   )
@@ -616,12 +856,13 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .object({
         id: idSchema,
         baseUrl: urlSchema,
-        authType: z.enum(['bearer', 'header', 'basic']),
+        authType: z.enum(['bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),
         guide: z.string().optional(),
         read: ruleSchema,
         write: ruleSchema,
+        mcp: z.literal('on').optional(),
       })
       .parse(await fields(c))
     const provider = providerSchema.parse({
@@ -629,16 +870,30 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       guide: input.guide?.trim() || undefined,
       auth: { type: input.authType, secret: input.id, headerName: input.headerName },
       policy: { read: input.read, write: input.write },
+      mcp: input.mcp ? true : undefined,
     })
     if (input.secret) {
       if (/[\r\n]/.test(input.secret)) throw new HTTPException(400, { message: 'Credential must be a single line' })
+      if (input.authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(input.secret))
+        throw new HTTPException(400, { message: 'A path credential must be one URL path segment' })
       await writeFile(secretPath(input.id), input.secret, { mode: 0o600 })
       secrets.set(input.id, input.secret)
     }
     providers[input.id] = provider
+    mcpTools.delete(input.id)
     await save(providersFile, providers)
     audit('provider_saved', { provider: input.id })
     return c.redirect('/admin?section=providers', 303)
+  })
+  // Lists an MCP provider's tools now, so the editor shows how they classify (read-only vs write).
+  admin.post('/providers/tools', async (c) => {
+    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    if (!providers[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP provider' })
+    const ok = await listMcpTools(id).then(
+      () => true,
+      () => false,
+    )
+    return c.redirect(`/admin?section=providers&provider=${id}${ok ? '' : '&error=tools'}`, 303)
   })
   admin.post('/providers/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
@@ -706,7 +961,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const session = pendingIdentity(sessions, c.req.param('id'))
     session.status = 'approved'
     session.expiresAt = expiry(permanent ? 'permanent' : duration)
+    session.approvedAt = new Date().toISOString()
     await saveList('sessions.json', sessions)
+    // The session card showed its first request; approving the session grants that too, for the duration asked.
+    for (const request of [...pending.values()])
+      if (request.subjectId === session.id && request.atEnrollment && requestStatus(request) === 'pending')
+        await approve(request.id, request.duration)
     return redirect(c)
   })
   admin.post('/sessions/:id/deny', async (c) => {
@@ -747,19 +1007,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   app.use('*', auth)
   app.get('/_speaker/providers', (c) => {
     subjectOf(c)
-    return c.json(
-      Object.fromEntries(
-        Object.entries(providers).map(([id, provider]) => [
-          id,
-          {
-            auth: provider.auth.type,
-            policy: provider.policy,
-            secretConfigured: secrets.get(id) !== undefined,
-            hasGuide: Boolean(provider.guide),
-          },
-        ]),
-      ),
-    )
+    return c.json(providerList())
   })
   // Every provider gets a short generated guide for this caller (policy, lease and session expiry in UTC),
   // followed by the owner's provider-specific guide when one is configured.
@@ -770,8 +1018,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const provider = providers[name]
     const until = (expiresAt: string | null) => (expiresAt === null ? 'with no expiry' : `until ${expiresAt} (UTC)`)
     const access = (group: 'read' | 'write') => {
-      const rule = provider.policy[group]
-      if (rule === 'always') return 'allowed, no request needed.'
+      const rule = ruleFor(provider, group, caller.id)
+      if (rule === 'always') {
+        const end = alwaysEnds(caller.id)
+        return `allowed without a request${end === null ? '' : ` until ${end} (UTC)`}.`
+      }
       if (rule === 'deny') return 'denied by the owner; do not request it.'
       const lease = matchingLease(caller.id, 'credential', `${name}.${group}`)
       return lease ? `approved ${until(lease.expiresAt)}.` : `needs \`credential ${name}.${group}\`; not approved yet.`
@@ -784,7 +1035,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       `- Read (GET, HEAD, OPTIONS): ${access('read')}`,
       `- Write (other methods): ${access('write')}`,
       ...(session ? [`- Your session is approved ${until(session.expiresAt)}.`] : []),
-      '- `403 approval_required` carries a `requestId`: poll `GET /_speaker/requests/<id>`, then retry once it is `approved`. `403 denied` is final.',
+      '- `403 approval_required` carries a `requestId`: wait with `GET /_speaker/requests/<id>?wait=60`, then retry once it is `approved`. `403 denied` is final.',
+      ...(provider.mcp
+        ? [
+            `- MCP server (streamable HTTP) at \`$SPEAKER_URL/${name}\`. Listing tools and read-only tools count as read; other tool calls count as write.`,
+          ]
+        : []),
       provider.guide
         ? `\n${provider.guide.trim()}`
         : '- No provider-specific guide: use the upstream API documentation for paths.',
@@ -819,18 +1075,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     )
   })
   app.post('/_speaker/requests', async (c) => {
-    const input = z
-      .object({
-        subjectId: idSchema.optional(),
-        capability: capabilitySchema.optional(),
-        bundle: idSchema.optional(),
-        reason: z.string().trim().min(1).max(500),
-        duration: durationSchema,
-      })
-      .refine((value) => Boolean(value.capability) !== Boolean(value.bundle), 'Send either capability or bundle')
-      .parse(await c.req.json())
+    const input = requestInputSchema.and(z.object({ subjectId: idSchema.optional() })).parse(await c.req.json())
     const caller = c.get('caller')
-    const allowedKinds = kindsOf(caller)
     let subjectId: string
     if (caller.role === 'enforcer') {
       if (!input.subjectId || subjects.get(input.subjectId)?.enforcer !== caller.enforcer.id)
@@ -841,20 +1087,29 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         throw new HTTPException(403, { message: 'A session or subject requests only for itself' })
       subjectId = caller.id
     }
-    const members = input.bundle ? bundles[input.bundle] : input.capability ? [input.capability] : undefined
-    if (!members) throw new HTTPException(404, { message: 'Unknown bundle' })
-    for (const { kind, ref } of members) {
-      if (!allowedKinds.includes(kind))
-        throw new HTTPException(400, { res: Response.json({ error: 'unsupported_kind', kind }, { status: 400 }) })
-      if (kind === 'credential' && !/^[a-zA-Z0-9_-]+\.(read|write)$/.test(ref))
-        throw new HTTPException(400, { message: 'Credential ref must be <provider>.read or <provider>.write' })
-      if (kind === 'credential' && !Object.hasOwn(providers, ref.split('.')[0]))
-        throw new HTTPException(400, { message: 'Unknown provider' })
-    }
+    const members = membersFor(input, kindsOf(caller))
     const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
     return c.json({ id: request.id, status: requestStatus(request) }, 201)
   })
-  app.get('/_speaker/requests/:id', (c) => {
+  // Status of one request; once approved it carries when the access ends (earliest member lease, null = never).
+  const requestReply = (request: Pending) => {
+    const status = requestStatus(request)
+    const what = request.bundle
+      ? `bundle ${request.bundle}`
+      : request.members.map((m) => `${m.kind} ${m.ref}`).join(', ')
+    if (status !== 'approved') return { id: request.id, what, status }
+    const ends = request.members
+      .map((m) => matchingLease(request.subjectId, m.kind, m.ref)?.expiresAt)
+      .filter((end): end is string => typeof end === 'string')
+      .sort()
+    return { id: request.id, what, status, expiresAt: ends[0] ?? null }
+  }
+  // A session or subject lists its own requests, so it can see what is pending or granted without re-asking.
+  app.get('/_speaker/requests', (c) => {
+    const caller = subjectOf(c)
+    return c.json([...pending.values()].filter((r) => r.subjectId === caller.id).map(requestReply))
+  })
+  app.get('/_speaker/requests/:id', async (c) => {
     const request = pending.get(c.req.param('id')),
       caller = c.get('caller')
     const mine =
@@ -863,14 +1118,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         ? subjects.get(request.subjectId)?.enforcer === caller.enforcer.id
         : caller.id === request.subjectId)
     if (!request || !mine) throw new HTTPException(404, { message: 'Request not found' })
-    const status = requestStatus(request)
-    if (status !== 'approved') return c.json({ id: request.id, status })
-    // Access ends with the earliest member lease; null means none of them expires.
-    const ends = request.members
-      .map((m) => matchingLease(request.subjectId, m.kind, m.ref)?.expiresAt)
-      .filter((end): end is string => typeof end === 'string')
-      .sort()
-    return c.json({ id: request.id, status, expiresAt: ends[0] ?? null })
+    await settle(c, () => requestStatus(request) !== 'pending')
+    return c.json(requestReply(request))
   })
   app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
   app.all('*', async (c) => {
@@ -879,10 +1128,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     if (!Object.hasOwn(providers, providerId)) return c.json({ error: 'unknown_provider' }, 404)
     const provider = providers[providerId],
       caller = subjectOf(c),
-      method = c.req.method
-    const group = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'read' : 'write'
+      method = c.req.method,
+      path = `/${parts.join('/')}`
+    // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
+    let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
+    let group: 'read' | 'write' = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'read' : 'write'
+    let detail = ''
+    if (provider.mcp && method === 'DELETE') group = 'read'
+    if (provider.mcp && method === 'POST') {
+      if (Number(c.req.header('content-length') ?? 0) > 1_048_576) return c.json({ error: 'mcp_body_too_large' }, 413)
+      const text = await c.req.text()
+      if (Buffer.byteLength(text) > 1_048_576) return c.json({ error: 'mcp_body_too_large' }, 413)
+      body = text
+      ;({ group, detail } = await mcpAccess(providerId, text))
+    }
     const capability = `${providerId}.${group}`
-    const rule = provider.policy[group]
+    const rule = ruleFor(provider, group, caller.id)
     if (rule === 'deny') return c.json({ error: 'denied' }, 403)
     const secret = secrets.get(providerId)
     if (secret === undefined) return c.json({ error: 'provider_credential_missing' }, 503)
@@ -894,19 +1155,14 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         '',
         '15m',
         method,
-        `/${parts.join('/')}`,
+        detail ? `${path} · ${detail}` : path,
       )
       return c.json({ error: 'approval_required', capability, requestId: request.id }, 403)
     }
     const lease = rule === 'approval' ? matchingLease(caller.id, 'credential', capability) : undefined
-    const base = new URL(provider.baseUrl),
-      target = new URL(base.origin)
-    const prefix = `${base.pathname.replace(/\/$/, '')}/`
-    target.pathname = prefix + parts.join('/')
-    target.search = incoming.search
-    if (target.origin !== base.origin || !target.pathname.startsWith(prefix))
-      return c.json({ error: 'invalid_provider_url' }, 400)
-    if (lease) await recordUse(lease.id, caller.id)
+    const target = upstreamUrl(provider, secret, parts, incoming.search)
+    if (!target) return c.json({ error: 'invalid_provider_url' }, 400)
+    await recordUse(lease?.id, caller.id)
     const headers = new Headers(c.req.raw.headers)
     const hopHeaders = [
       'connection',
@@ -930,32 +1186,32 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       )
         headers.delete(name)
     headers.set('accept-encoding', 'identity')
-    if (provider.auth.type === 'header') headers.set(provider.auth.headerName, secret)
-    else
-      headers.set(
-        'authorization',
-        provider.auth.type === 'basic' ? `Basic ${Buffer.from(secret).toString('base64')}` : `Bearer ${secret}`,
-      )
+    applyCredential(provider, secret, headers)
     const start = Date.now()
     const upstream = await fetch(target, {
       method,
       headers,
-      body: ['GET', 'HEAD'].includes(method) ? undefined : c.req.raw.body,
+      body,
       duplex: 'half',
       redirect: 'manual',
       signal: c.req.raw.signal,
     } as RequestInit).catch(() => undefined)
+    // Log the agent-facing path: a path-auth upstream URL contains the secret.
     audit('proxy_request', {
       subject: caller.id,
       provider: providerId,
       method,
-      path: target.pathname,
+      path,
+      ...(detail ? { mcp: detail } : {}),
       status: upstream?.status ?? 502,
       latencyMs: Date.now() - start,
     })
     if (!upstream) return c.json({ error: 'upstream_unavailable' }, 502)
     const responseHeaders = new Headers(upstream.headers)
     for (const name of [...hopHeaders, 'content-encoding', 'content-length']) responseHeaders.delete(name)
+    const location = responseHeaders.get('location')
+    if (provider.auth.type === 'path' && location?.includes(secret))
+      responseHeaders.set('location', location.replaceAll(secret, '<redacted>'))
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
   })
   return app
