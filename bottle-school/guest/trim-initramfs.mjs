@@ -9,8 +9,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readManifest, reseal } from "./assets.mjs";
 
-// Matches the modprobe lines in Gondolin's initramfs /init, plus the virtio vsock transport.
-const KEEP = ["virtio_blk", "ext4", "virtio_rng", "virtio_net", "fuse", "vmw_vsock_virtio_transport"];
+// Matches the modprobe lines in Gondolin's initramfs /init, plus the virtio vsock transport and af_packet: the kernel
+// autoloads af_packet for udhcpc's raw socket, and the Ubuntu rootfs has no modprobe, so it must load before switch_root.
+const KEEP = ["virtio_blk", "ext4", "virtio_rng", "virtio_net", "fuse", "vmw_vsock_virtio_transport", "af_packet"];
 
 const [assetDirectory] = process.argv.slice(2);
 if (!assetDirectory) throw new Error("usage: node trim-initramfs.mjs <asset-directory>");
