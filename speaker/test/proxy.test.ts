@@ -418,6 +418,7 @@ async function approvedSession(f: Fixture, token: string) {
   })
   const { id } = (await enrolled.json()) as { id: string }
   assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
+  return id
 }
 
 test('an always read needs no lease, counts as a use, and the guide says until when', async (t) => {
@@ -481,4 +482,24 @@ test('an MCP provider classifies tool calls by their read-only hints', async (t)
     path: string
   }[]
   assert.match(requests[0].path, /delete_automation \(destructive\)/)
+})
+
+test('the access log lists proxied calls per identity, with no lease for an always call', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/providers/save', {
+    id: 'open',
+    baseUrl: `${f.upstreamOrigin}/base`,
+    authType: 'bearer',
+    secret: 's',
+    read: 'always',
+    write: 'approval',
+  })
+  const id = await approvedSession(f, 'log-token')
+  for (const path of ['/open/first', '/open/second'])
+    assert.equal((await f.call(`${path}?k=hidden`, { headers: bearer('log-token') })).status, 200)
+  const page = await (await f.call(`/admin/log?identity=${id}`, { headers: ownerHeaders })).text()
+  assert.match(page, /GET \/first/)
+  assert.match(page, /GET \/second/)
+  assert.match(page, /always/)
+  assert.doesNotMatch(page, /k=hidden|127\.0\.0\.1:\d+\/base/)
 })
