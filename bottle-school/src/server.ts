@@ -2,6 +2,7 @@ import { gcSessions } from "@earendil-works/gondolin";
 import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { html } from "hono/html";
 import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
@@ -37,23 +38,68 @@ export const startControl = (config: Config, tasks: Tasks) => {
     await next();
   });
 
-  app.get("/api/state", async (context) =>
-    context.json({
-      tasks: await Promise.all(
-        tasks.list().map(async (task) => ({
-          id: task.id,
-          name: task.name,
-          state: task.state,
-          sessionId: task.guest.sessionId,
-          subjectId: task.subjectId,
-          pendingRequests: tasks.pendingRequests(task),
-          mcpPending: tasks.mcpPending(task),
-          done: tasks.done(task),
-          summary: task.lastMessage,
-        })),
-      ),
-    }),
-  );
+  const listTasks = () =>
+    Promise.all(
+      tasks.list().map(async (task) => ({
+        id: task.id,
+        name: task.name,
+        state: task.state,
+        sessionId: task.guest.sessionId,
+        subjectId: task.subjectId,
+        pendingRequests: tasks.pendingRequests(task),
+        mcpPending: tasks.mcpPending(task),
+        done: tasks.done(task),
+        summary: task.lastMessage,
+      })),
+    );
+
+  app.get("/api/state", async (context) => context.json({ tasks: await listTasks() }));
+  app.get("/", async (context) => {
+    const rows = await listTasks();
+    return context.html(
+      html`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <meta http-equiv="refresh" content="10" />
+            <title>bottle-school</title>
+            <style>
+              body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 960px; }
+              table { border-collapse: collapse; width: 100%; }
+              th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #ccc; }
+              code { background: #f3f3f3; padding: 0.1rem 0.3rem; }
+            </style>
+          </head>
+          <body>
+            <h1>bottle-school</h1>
+            <p>
+              Read-only status page. Launch a task with
+              <code>mise run bottle-cli run --template &lt;id&gt; --prompt "..."</code>.
+              Raw state: <a href="/api/state">/api/state</a>
+            </p>
+            <table>
+              <thead>
+                <tr><th>id</th><th>name</th><th>state</th><th>pending requests</th><th>done</th></tr>
+              </thead>
+              <tbody>
+                ${rows.length === 0
+                  ? html`<tr><td colspan="5">No tasks.</td></tr>`
+                  : rows.map(
+                      (row) => html`<tr>
+                        <td>${row.id}</td>
+                        <td>${row.name}</td>
+                        <td>${row.state}</td>
+                        <td>${row.pendingRequests}</td>
+                        <td>${row.done ? "yes" : "no"}</td>
+                      </tr>`,
+                    )}
+              </tbody>
+            </table>
+          </body>
+        </html>`,
+    );
+  });
   app.post("/api/tasks", validator("json", (body) => NewTask.parse(body)), async (context) =>
     context.json({ id: (await tasks.create(context.req.valid("json"))).id }),
   );
