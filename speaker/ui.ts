@@ -428,6 +428,22 @@ const who = (s: { llmName?: string; harness?: string }) =>
   [s.llmName ?? 'LLM not supplied', s.harness].filter(Boolean).join(' · ')
 
 export function livePanels({ enforcers, sessions, requests, leases, always }: View) {
+  // Flags a session whose agent (same label, model and harness) already enrolled in the 30 minutes before it.
+  const twin = (s: View['sessions'][number]) => {
+    const at = Date.parse(s.enrolledAt ?? '')
+    const earlier = sessions.filter(
+      (o) =>
+        o.id !== s.id &&
+        o.label === s.label &&
+        o.llmName === s.llmName &&
+        o.harness === s.harness &&
+        at - Date.parse(o.enrolledAt ?? '') > 0 &&
+        at - Date.parse(o.enrolledAt ?? '') < 1_800_000,
+    )
+    if (!earlier.length) return ''
+    const minutes = Math.round((at - Math.max(...earlier.map((o) => Date.parse(o.enrolledAt ?? '')))) / 60_000)
+    return html` <span class="chip warn">same agent enrolled ${minutes} min earlier</span>`
+  }
   // A request filed with a still-pending session is shown on that session's card and approved with it.
   const pendingSessions = new Set(sessions.filter((s) => s.status === 'pending').map((s) => s.id))
   const firstAsk = (sessionId: string) => {
@@ -468,7 +484,7 @@ export function livePanels({ enforcers, sessions, requests, leases, always }: Vi
           `session ${s.label} ${s.llmName ?? ''}`,
           ['credential'],
           html`${mark('session')}<strong>Session ${s.label}</strong><span class="chip">wants to connect</span>`,
-          html`<div class="t-grant"><div class="meta">${who(s)}</div>${firstAsk(s.id)}${always.length ? html`<div class="meta">Reads without asking for up to 90 days: ${always.join(', ')}</div>` : ''}</div>`,
+          html`<div class="t-grant"><div class="meta">${who(s)}</div><div class="meta">from ${s.source ?? 'unknown address'} · key ${s.tokenHash.slice(0, 8)}${twin(s)}</div>${firstAsk(s.id)}${always.length ? html`<div class="meta">Reads without asking for up to 90 days: ${always.join(', ')}</div>` : ''}</div>`,
           decide(
             `sessions/${s.id}`,
             html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
