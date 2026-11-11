@@ -77,11 +77,24 @@ const providerSchema = z.object({
   // Streamable-HTTP MCP server: POST bodies are classified by JSON-RPC method and tool annotations.
   mcp: z.boolean().optional(),
 })
-const kinds = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
+const kinds = ['credential', 'secret', 'site', 'folder', 'mcp', 'extension'] as const
 const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
 const statusSchema = z.enum(['pending', 'approved', 'denied'])
 const capabilitySchema = z.object({ kind: z.string(), ref: z.string().trim().min(1).max(500) })
-const bundlesSchema = z.record(idSchema, z.array(capabilitySchema.extend({ kind: z.enum(kinds) })))
+const bundleMembersSchema = z.array(capabilitySchema.extend({ kind: z.enum(kinds) }))
+const bundleDescriptionSchema = z
+  .string()
+  .trim()
+  .max(200)
+  .regex(/^[^\r\n]*$/)
+  .optional()
+// bundles.json maps a name to `{ description, members }`; the older bare members array is still accepted.
+const bundlesSchema = z.record(
+  idSchema,
+  z
+    .union([bundleMembersSchema, z.object({ description: bundleDescriptionSchema, members: bundleMembersSchema })])
+    .transform((value) => (Array.isArray(value) ? { members: value } : value)),
+)
 const enforcerSchema = z.object({
   id: idSchema,
   name: z.string().trim().min(1).max(100),
@@ -129,6 +142,7 @@ const usageStoreSchema = z.object({
 })
 export type Provider = z.infer<typeof providerSchema>
 export type Capability = z.infer<typeof capabilitySchema>
+export type Bundle = z.infer<typeof bundlesSchema>[string]
 export type Enforcer = z.infer<typeof enforcerSchema>
 export type Session = z.infer<typeof sessionSchema>
 export type Lease = z.infer<typeof leaseSchema>
@@ -755,7 +769,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   }
   // Resolves a capability or bundle request body to its members, refusing kinds the caller may not request.
   const membersFor = (input: z.infer<typeof requestInputSchema>, allowedKinds: string[]) => {
-    const members = input.bundle ? bundles[input.bundle] : input.capability ? [input.capability] : undefined
+    const members = input.bundle ? bundles[input.bundle]?.members : input.capability ? [input.capability] : undefined
     if (!members) throw new HTTPException(404, { message: 'Unknown bundle' })
     for (const { kind, ref } of members) {
       if (!allowedKinds.includes(kind))
@@ -1013,18 +1027,21 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const bundleFile = file('bundles.json')
   admin.post('/bundles/save', async (c) => {
     const back = (error: string) => c.redirect(`/admin?section=bundles&error=${error}`, 303)
-    const input = z.object({ id: idSchema, members: z.string() }).safeParse(await fields(c))
+    const form = await fields(c)
+    const input = z.object({ id: idSchema, members: z.string() }).safeParse(form)
     if (!input.success) return back('id')
+    const description = bundleDescriptionSchema.safeParse(form.description ?? '')
+    if (!description.success) return back('description')
     const lines = input.data.members
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-    const parsed = z
-      .array(capabilitySchema.extend({ kind: z.enum(kinds) }))
-      .safeParse(lines.map((line) => ({ kind: line.split(/\s+/)[0], ref: line.replace(/^\S+\s*/, '') })))
+    const parsed = bundleMembersSchema.safeParse(
+      lines.map((line) => ({ kind: line.split(/\s+/)[0], ref: line.replace(/^\S+\s*/, '') })),
+    )
     if (!lines.length) return back('empty')
     if (!parsed.success) return back('line')
-    bundles[input.data.id] = parsed.data
+    bundles[input.data.id] = { ...(description.data ? { description: description.data } : {}), members: parsed.data }
     await save(bundleFile, bundles)
     audit('bundle_saved', { bundle: input.data.id })
     return c.redirect('/admin?section=bundles', 303)
@@ -1176,7 +1193,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const allowed = kindsOf(c.get('caller'))
     return c.json(
       Object.fromEntries(
-        Object.entries(bundles).filter(([, members]) => members.every((m) => allowed.includes(m.kind))),
+        Object.entries(bundles).filter(([, bundle]) => bundle.members.every((m) => allowed.includes(m.kind))),
       ),
     )
   })
