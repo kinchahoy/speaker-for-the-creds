@@ -360,14 +360,18 @@ export const bootGuest = async (
     });
   };
 
+  const krun = process.env.PI_V2_VMM === "krun";
   const vm = await VM.create({
     sandbox: {
-      vmm: process.env.PI_V2_VMM === "krun" ? "krun" : "qemu",
-      // q35, not Gondolin's microvm default: microvm loads the initrd at the top of guest RAM, where an oversized
-      // initramfs overwrites the ACPI DSDT (guest/trim-initramfs.mjs now prevents that). With the trimmed image both
-      // boot; q35 measured as fast or faster (create+exec 3.3-4.1s vs 3.8-4.7s), since guest userland dominates boot.
-      ...(process.env.PI_V2_VMM === "krun" ? {} : { machineType: "q35" }),
+      vmm: krun ? "krun" : "qemu",
+      // Gondolin's QEMU default is microvm (no PCI/SATA/firmware probing). patches/gondolin-0.13.0.patch adds `rtc=on`
+      // (without an RTC the guest kernel stalls ~1.6s in rtc_cmos) and boots it with qboot, which loads the image's PVH
+      // vmlinux without in-guest decompression. The initramfs must stay small (guest/boot-assets.mjs) or microvm's
+      // initrd overwrites the ACPI tables.
       console: "none",
+      // Gondolin's QEMU default plus `quiet`: each serial console byte is a trapped port write, and the kernel's boot
+      // log alone cost ~0.3s. Warnings, errors, and panics still reach the console.
+      ...(krun ? {} : { append: `console=${process.arch === "arm64" ? "ttyAMA0" : "ttyS0"} initramfs_async=1 quiet` }),
       imagePath: config.guestImage,
     },
     rootfs: { mode: "cow", size: `${limits.rootfsGiB}G` },

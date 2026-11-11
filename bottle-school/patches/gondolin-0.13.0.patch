@@ -1,6 +1,8 @@
+diff --git a/dist/src/qemu/contracts.d.ts b/dist/src/qemu/contracts.d.ts
+index 6e16f8ad199233f01b0a340d69147225eae61859..f469fc3f5936778b32f09b626b7b7cee25c95bcd 100644
 --- a/dist/src/qemu/contracts.d.ts
 +++ b/dist/src/qemu/contracts.d.ts
-@@ -32,6 +32,19 @@
+@@ -32,6 +32,19 @@ export type HttpHooks = {
      onRequest?: HttpOnRequestHook;
      /** response rewrite hook */
      onResponse?: (response: Response, request: Request) => Promise<Response | void> | Response | void;
@@ -20,16 +22,11 @@
  };
  export type DnsMode = "open" | "trusted" | "synthetic";
  export type SyntheticDnsHostMappingMode = "single" | "per-host";
-@@ -123,4 +136,4 @@
-     settleFlowResume(key: string, err?: Error): void;
-     abortTcpSession(key: string, session: TSession, reason: string): void;
- };
--//# sourceMappingURL=contracts.d.ts.map
-\ No newline at end of file
-+//# sourceMappingURL=contracts.d.ts.map
+diff --git a/dist/src/qemu/http.js b/dist/src/qemu/http.js
+index 1ad74a445c941203d773f2213577e8e52468ceb4..af2cb1ef5570ea99478687f918c830d932422083 100644
 --- a/dist/src/qemu/http.js
 +++ b/dist/src/qemu/http.js
-@@ -928,11 +928,26 @@
+@@ -928,11 +928,26 @@ export async function fetchHookRequestAndRespond(backend, options) {
                  protocol,
              })
              : null;
@@ -61,7 +58,7 @@
          // Avoid duplicate Content-Length when Fetch derives framing for buffered bodies.
          // Remove it from a copy so redirects and hooks keep the measured length.
          const fetchHeaders = { ...currentRequest.headers };
-@@ -956,11 +971,12 @@
+@@ -956,11 +971,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
              });
          }
          catch (err) {
@@ -75,7 +72,7 @@
                  backend.emitDebug(`http bridge fetch failed ${currentRequest.method} ${currentUrl.toString()} (${message})`);
              }
              throw err;
-@@ -1052,12 +1068,23 @@
+@@ -1052,12 +1068,23 @@ export async function fetchHookRequestAndRespond(backend, options) {
              };
              hookResponse = await applyResponseHooks(backend, hookResponse, currentRequest);
              sendHttpResponse(write, normalizeHookResponseForGuest(hookResponse, currentRequest.method), httpVersion);
@@ -99,7 +96,7 @@
              try {
                  if (contentEncoding || !hasValidLength) {
                      delete responseHeaders["content-length"];
-@@ -1068,7 +1095,7 @@
+@@ -1068,7 +1095,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
                              statusText: response.statusText || "OK",
                              headers: responseHeaders,
                          }, httpVersion);
@@ -108,7 +105,7 @@
                      }
                      else {
                          delete responseHeaders["transfer-encoding"];
-@@ -1077,7 +1104,7 @@
+@@ -1077,7 +1104,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
                              statusText: response.statusText || "OK",
                              headers: responseHeaders,
                          }, httpVersion);
@@ -117,7 +114,7 @@
                      }
                  }
                  else {
-@@ -1088,10 +1115,16 @@
+@@ -1088,10 +1115,16 @@ export async function fetchHookRequestAndRespond(backend, options) {
                          statusText: response.statusText || "OK",
                          headers: responseHeaders,
                      }, httpVersion);
@@ -135,7 +132,7 @@
                  if (originKey) {
                      evictSharedDispatcher(backend, originKey);
                  }
-@@ -1107,6 +1140,12 @@
+@@ -1107,6 +1140,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
                  const elapsed = Date.now() - responseStart;
                  backend.emitDebug(`http bridge body complete ${requestLabel} ${streamedBytes} bytes in ${elapsed}ms`);
              }
@@ -148,7 +145,7 @@
              return;
          }
          const maxResponseBytes = backend.http.maxHttpResponseBodyBytes;
-@@ -1143,6 +1182,7 @@
+@@ -1143,6 +1182,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
              const elapsed = Date.now() - responseStart;
              backend.emitDebug(`http bridge body complete ${requestLabel} ${hookResponse.body.length} bytes in ${elapsed}ms`);
          }
@@ -156,7 +153,7 @@
          return;
      }
  }
-@@ -1218,7 +1258,7 @@
+@@ -1218,7 +1258,7 @@ async function handleWebSocketUpgrade(backend, key, request, session, options, h
          hookRequest,
      }, options, httpVersion);
  }
@@ -165,7 +162,7 @@
      const reader = body.getReader();
      let total = 0;
      try {
-@@ -1229,6 +1269,7 @@
+@@ -1229,6 +1269,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
              if (!value || value.length === 0)
                  continue;
              total += value.length;
@@ -173,7 +170,7 @@
              const sizeLine = Buffer.from(`${value.length.toString(16)}\r\n`);
              write(sizeLine);
              write(Buffer.from(value));
-@@ -1244,7 +1285,7 @@
+@@ -1244,7 +1285,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
      write(Buffer.from("0\r\n\r\n"));
      return total;
  }
@@ -182,7 +179,7 @@
      const reader = body.getReader();
      let total = 0;
      try {
-@@ -1255,6 +1296,7 @@
+@@ -1255,6 +1296,7 @@ async function sendStreamBody(body, write, waitForWritable) {
              if (!value || value.length === 0)
                  continue;
              total += value.length;
@@ -190,7 +187,7 @@
              write(Buffer.from(value));
              if (waitForWritable) {
                  await waitForWritable();
-@@ -1616,6 +1658,12 @@
+@@ -1616,6 +1658,12 @@ async function applyResponseHooks(backend, response, request) {
          maxBodyBytes: backend.http.maxHttpResponseBodyBytes,
      });
  }
@@ -203,10 +200,66 @@
  function normalizeHookResponseForGuest(response, requestMethod) {
      const status = response.status;
      const isHead = requestMethod.toUpperCase() === "HEAD";
-@@ -1655,4 +1703,4 @@
-         return Number(url.port);
-     return protocol === "https" ? 443 : 80;
+diff --git a/dist/src/qemu/img.js b/dist/src/qemu/img.js
+index 1bc06e96c41f60ca86e1b35ac03fecdce98de392..426a170c74fd4444a1560b1586f44f8e5a151d17 100644
+--- a/dist/src/qemu/img.js
++++ b/dist/src/qemu/img.js
+@@ -9,8 +9,13 @@ function tmpDir() {
+     return process.platform === "darwin" ? "/tmp" : os.tmpdir();
  }
--//# sourceMappingURL=http.js.map
-\ No newline at end of file
-+//# sourceMappingURL=http.js.map
+ /** Ensure `qemu-img` can be invoked. */
++// Checked once per process: each `qemu-img --version` is a ~20ms blocking spawn, and every VM start calls this twice.
++let qemuImgChecked = false;
+ export function ensureQemuImgAvailable() {
++    if (qemuImgChecked)
++        return;
+     execFileSync("qemu-img", ["--version"], { stdio: "ignore" });
++    qemuImgChecked = true;
+ }
+ export function inferDiskFormatFromPath(diskPath) {
+     const lower = diskPath.toLowerCase();
+diff --git a/dist/src/sandbox/controller.js b/dist/src/sandbox/controller.js
+index ef338eba792077892e221d2925acd2aa45162bd0..cd3733e0438f662dd0234e8e15cbff3e07dab086 100644
+--- a/dist/src/sandbox/controller.js
++++ b/dist/src/sandbox/controller.js
+@@ -449,7 +449,10 @@ function buildQemuArgs(config) {
+         //
+         // Ensure this is enabled explicitly as older QEMU versions may default it off.
+         // Also keep ISA serial enabled so the kernel console can use ttyS0.
+-        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on");
++        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on,rtc=on");
++        // qboot (shipped with QEMU) loads the kernel ~0.1s faster than the SeaBIOS microvm build and, unlike it,
++        // boots a PVH ELF vmlinux directly, which skips in-guest kernel decompression.
++        args.push("-bios", "qboot.rom");
+     }
+     else {
+         args.push("-machine", machineType);
+diff --git a/dist/src/vm/core.js b/dist/src/vm/core.js
+index 695466253922ef916486a4c7acdaf665f525efed..424159f5a889a3539164cf503e80ed51a09c8bf5 100644
+--- a/dist/src/vm/core.js
++++ b/dist/src/vm/core.js
+@@ -25,6 +25,7 @@ import { MountRouterProvider, listMountPaths, normalizeMountMap, normalizeMountP
+ import { VmFsController } from "./fs.js";
+ import { ExecProcess, createExecSession, finishExecSession, rejectExecSession, resolveOutputMode, applyOutputChunk, normalizeCommand, toAsyncIterable, } from "../exec.js";
+ import { errorMessage } from "../utils/error.js";
++const checkedVmmPaths = new Set();
+ const MAX_REQUEST_ID = 0xffffffff;
+ const DEFAULT_STDIN_CHUNK = 32 * 1024;
+ const DEFAULT_VM_START_TIMEOUT_MS = 120000;
+@@ -853,9 +854,13 @@ fi
+             throw new Error("sandbox server is not available");
+         }
+         const vmmPath = server.getVmmPath();
+-        execFileSync(vmmPath, ["--version"], { stdio: "ignore" });
+-        if (server.getVmmBackend() === "krun") {
+-            assertMacHypervisorEntitlement(vmmPath);
++        // Checked once per process and binary: `qemu-system-* --version` is a ~40ms blocking spawn per VM start.
++        if (!checkedVmmPaths.has(vmmPath)) {
++            execFileSync(vmmPath, ["--version"], { stdio: "ignore" });
++            if (server.getVmmBackend() === "krun") {
++                assertMacHypervisorEntitlement(vmmPath);
++            }
++            checkedVmmPaths.add(vmmPath);
+         }
+         this.vmmChecked = true;
+     }
