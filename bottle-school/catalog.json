@@ -43,7 +43,7 @@
     },
     "subagent": {
       "label": "Subagents",
-      "guestPath": "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/index.ts",
+      "guestPath": "/opt/pi-plugins/subagent/index.ts",
       "description": "Lets Pi run subagents inside this same VM under this same policy.",
       "tools": ["subagent"]
     }

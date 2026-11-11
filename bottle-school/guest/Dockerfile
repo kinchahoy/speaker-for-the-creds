@@ -52,6 +52,8 @@ RUN --mount=type=cache,target=/root/.cache/mise \
  && mkdir -p /opt/pi-extensions /opt/pi-plugins \
  && for p in pi-loop-police pi-token-speed; do link "$p" /opt/pi-extensions || exit 1; done \
  && for p in @juicesharp/rpiv-ask-user-question pi-web-access pi-cc-loop pi-cc-monitor; do link "$p" /opt/pi-plugins || exit 1; done \
+ && ln -s "$(mise where npm:@earendil-works/pi-coding-agent)/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent" /opt/pi-plugins/subagent \
+ && test -f /opt/pi-plugins/subagent/index.ts \
  && mise ls --current > /opt/pi-v2-tool-versions.txt
 
 # uv-managed CPython 3.13 and the default agent environment (glibc lock)
