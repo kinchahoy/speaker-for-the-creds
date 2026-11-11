@@ -1,6 +1,6 @@
 ---
 name: access-and-creds
-description: Get owner-approved access through speaker: authenticated homelab APIs and HTTP MCP servers (for example Obsidian notes), plus network sites, secrets, folders, and MCP servers inside a sandbox. Use when a task needs a service you have no credential for, or a call returns 403.
+description: "Get owner-approved access through speaker: authenticated homelab APIs and HTTP MCP servers (for example Obsidian notes), plus network sites, secrets, folders, and MCP servers inside a sandbox. Use when a task needs a service you have no credential for, or a call returns 403."
 ---
 
 # Access and credentials
