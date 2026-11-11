@@ -5,6 +5,11 @@
 //    "ACPI: Core revision". The rootfs keeps the full module tree.
 // 2. Kernel (x86_64): replace the bzImage with the uncompressed vmlinux ELF it wraps. QEMU (with qboot, see
 //    patches/gondolin-0.13.0.patch) enters it through its PVH note, which skips ~0.2s of in-guest decompression.
+// 3. Krun (x86_64): the same two files also fill the manifest's krunKernel and krunInitrd slots, so one image boots under
+//    both backends. libkrun loads an ELF kernel directly; Gondolin's stock krunKernel (libkrunfw's raw kernel) fails
+//    there with "Kernel doesn't fit in RAM". Alpine's kernel has virtio_blk and ext4 as modules, so Krun needs the same
+//    trimmed initramfs (a trailer-only initrd cannot mount the root disk). aarch64/macOS keeps Gondolin's stock
+//    libkrunfw kernel and empty initrd, whose kernel has those drivers built in.
 // Usage: node boot-assets.mjs <asset-directory>
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -89,6 +94,11 @@ const extractPvhKernel = () => {
 	writeFileSync(join(assets, name), vmlinux);
 	rmSync(join(assets, manifest.assets.kernel));
 	manifest.assets.kernel = name;
+	// Krun shares the files with QEMU. Drop the stock krun boot files from the output.
+	rmSync(join(assets, manifest.assets.krunKernel), { force: true });
+	rmSync(join(assets, manifest.assets.krunInitrd), { force: true });
+	manifest.assets.krunKernel = name;
+	manifest.assets.krunInitrd = manifest.assets.initramfs;
 	console.log(`replaced bzImage (${bzImage.length} bytes) with PVH vmlinux ${name} (${vmlinux.length} bytes)`);
 };
 
