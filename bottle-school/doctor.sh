@@ -32,5 +32,12 @@ if [ "${PI_V2_VMM:-qemu}" = krun ]; then
 else
 	check "$qemu" "$qemu_fix" command -v "$qemu"
 fi
-check "config.json (mise run setup)" "mise run setup" test -f "${PI_V2_CONFIG:-$root/config.json}"
+config=${PI_V2_CONFIG:-$root/config.json}
+check "config.json (mise run setup)" "mise run setup" test -f "$config"
+# Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
+if [ "$failed" = 0 ]; then
+	image=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).guestImage" "$config")
+	check "guest image $image boots and runs a command" "mise run guest-build $image (see README: VM backends)" \
+		timeout 120 "$root/node_modules/.bin/gondolin" exec --image "$image" --vmm "${PI_V2_VMM:-qemu}" -- true
+fi
 [ "$failed" = 0 ] && echo "all checks passed" || { echo "some checks failed" >&2; exit 1; }

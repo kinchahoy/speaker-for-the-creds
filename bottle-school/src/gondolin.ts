@@ -363,8 +363,9 @@ export const bootGuest = async (
   const vm = await VM.create({
     sandbox: {
       vmm: process.env.PI_V2_VMM === "krun" ? "krun" : "qemu",
-      // QEMU microvm loads the initrd at the top of guest RAM, where a large guest initramfs overwrites the ACPI
-      // DSDT and the kernel hangs after "ACPI: Core revision". q35 places firmware tables where the initrd cannot reach.
+      // q35, not Gondolin's microvm default: microvm loads the initrd at the top of guest RAM, where an oversized
+      // initramfs overwrites the ACPI DSDT (guest/trim-initramfs.mjs now prevents that). With the trimmed image both
+      // boot; q35 measured as fast or faster (create+exec 3.3-4.1s vs 3.8-4.7s), since guest userland dominates boot.
       ...(process.env.PI_V2_VMM === "krun" ? {} : { machineType: "q35" }),
       console: "none",
       imagePath: config.guestImage,

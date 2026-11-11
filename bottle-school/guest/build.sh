@@ -50,6 +50,8 @@ trap cleanup EXIT INT TERM
 if [ ! -w "$ASSETS/manifest.json" ]; then
   docker run --rm -v "$ASSETS:/assets" alpine:3.23 chown -R "$(id -u):$(id -g)" /assets
 fi
+# Keep only the modules /init loads: a full-module initramfs is slow and breaks QEMU microvm boots (see the script).
+node "$ROOT/guest/trim-initramfs.mjs" "$ASSETS"
 if [ "$ARCH" = "x86_64" ] && [ "$KRUN" = 1 ]; then
   node "$ROOT/guest/patch-krun-assets.mjs" "$ASSETS" "$VMLINUX"
 fi
