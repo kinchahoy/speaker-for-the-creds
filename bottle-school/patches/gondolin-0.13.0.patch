@@ -1,5 +1,5 @@
 diff --git a/dist/src/qemu/contracts.d.ts b/dist/src/qemu/contracts.d.ts
-index 6e16f8ad199233f01b0a340d69147225eae61859..80729839e300567dad5fc7b7c44b8fba2c464fba 100644
+index 6e16f8ad199233f01b0a340d69147225eae61859..f469fc3f5936778b32f09b626b7b7cee25c95bcd 100644
 --- a/dist/src/qemu/contracts.d.ts
 +++ b/dist/src/qemu/contracts.d.ts
 @@ -32,6 +32,19 @@ export type HttpHooks = {
@@ -23,7 +23,7 @@ index 6e16f8ad199233f01b0a340d69147225eae61859..80729839e300567dad5fc7b7c44b8fba
  export type DnsMode = "open" | "trusted" | "synthetic";
  export type SyntheticDnsHostMappingMode = "single" | "per-host";
 diff --git a/dist/src/qemu/http.js b/dist/src/qemu/http.js
-index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195146d9fb8 100644
+index 1ad74a445c941203d773f2213577e8e52468ceb4..af2cb1ef5570ea99478687f918c830d932422083 100644
 --- a/dist/src/qemu/http.js
 +++ b/dist/src/qemu/http.js
 @@ -928,11 +928,26 @@ export async function fetchHookRequestAndRespond(backend, options) {
@@ -200,16 +200,66 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
  function normalizeHookResponseForGuest(response, requestMethod) {
      const status = response.status;
      const isHead = requestMethod.toUpperCase() === "HEAD";
+diff --git a/dist/src/qemu/img.js b/dist/src/qemu/img.js
+index 1bc06e96c41f60ca86e1b35ac03fecdce98de392..426a170c74fd4444a1560b1586f44f8e5a151d17 100644
+--- a/dist/src/qemu/img.js
++++ b/dist/src/qemu/img.js
+@@ -9,8 +9,13 @@ function tmpDir() {
+     return process.platform === "darwin" ? "/tmp" : os.tmpdir();
+ }
+ /** Ensure `qemu-img` can be invoked. */
++// Checked once per process: each `qemu-img --version` is a ~20ms blocking spawn, and every VM start calls this twice.
++let qemuImgChecked = false;
+ export function ensureQemuImgAvailable() {
++    if (qemuImgChecked)
++        return;
+     execFileSync("qemu-img", ["--version"], { stdio: "ignore" });
++    qemuImgChecked = true;
+ }
+ export function inferDiskFormatFromPath(diskPath) {
+     const lower = diskPath.toLowerCase();
 diff --git a/dist/src/sandbox/controller.js b/dist/src/sandbox/controller.js
-index ef338eba792077892e221d2925acd2aa45162bd0..0861a14e3f548834162e2a66a6846dab2ea6fd2d 100644
+index ef338eba792077892e221d2925acd2aa45162bd0..cd3733e0438f662dd0234e8e15cbff3e07dab086 100644
 --- a/dist/src/sandbox/controller.js
 +++ b/dist/src/sandbox/controller.js
-@@ -449,7 +449,7 @@ function buildQemuArgs(config) {
+@@ -449,7 +449,10 @@ function buildQemuArgs(config) {
          //
          // Ensure this is enabled explicitly as older QEMU versions may default it off.
          // Also keep ISA serial enabled so the kernel console can use ttyS0.
 -        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on");
 +        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on,rtc=on");
++        // qboot (shipped with QEMU) loads the kernel ~0.1s faster than the SeaBIOS microvm build and, unlike it,
++        // boots a PVH ELF vmlinux directly, which skips in-guest kernel decompression.
++        args.push("-bios", "qboot.rom");
      }
      else {
          args.push("-machine", machineType);
+diff --git a/dist/src/vm/core.js b/dist/src/vm/core.js
+index 695466253922ef916486a4c7acdaf665f525efed..424159f5a889a3539164cf503e80ed51a09c8bf5 100644
+--- a/dist/src/vm/core.js
++++ b/dist/src/vm/core.js
+@@ -25,6 +25,7 @@ import { MountRouterProvider, listMountPaths, normalizeMountMap, normalizeMountP
+ import { VmFsController } from "./fs.js";
+ import { ExecProcess, createExecSession, finishExecSession, rejectExecSession, resolveOutputMode, applyOutputChunk, normalizeCommand, toAsyncIterable, } from "../exec.js";
+ import { errorMessage } from "../utils/error.js";
++const checkedVmmPaths = new Set();
+ const MAX_REQUEST_ID = 0xffffffff;
+ const DEFAULT_STDIN_CHUNK = 32 * 1024;
+ const DEFAULT_VM_START_TIMEOUT_MS = 120000;
+@@ -853,9 +854,13 @@ fi
+             throw new Error("sandbox server is not available");
+         }
+         const vmmPath = server.getVmmPath();
+-        execFileSync(vmmPath, ["--version"], { stdio: "ignore" });
+-        if (server.getVmmBackend() === "krun") {
+-            assertMacHypervisorEntitlement(vmmPath);
++        // Checked once per process and binary: `qemu-system-* --version` is a ~40ms blocking spawn per VM start.
++        if (!checkedVmmPaths.has(vmmPath)) {
++            execFileSync(vmmPath, ["--version"], { stdio: "ignore" });
++            if (server.getVmmBackend() === "krun") {
++                assertMacHypervisorEntitlement(vmmPath);
++            }
++            checkedVmmPaths.add(vmmPath);
+         }
+         this.vmmChecked = true;
+     }
