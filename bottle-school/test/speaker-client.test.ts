@@ -24,7 +24,7 @@ test("watchLeases receives approved leases and reports applied ids to speaker", 
     server.close();
     await rm(dataDir, { recursive: true, force: true });
   });
-  // watchLeases reconnects forever; unref its timers so the test process can exit.
+  // watchLeases retries on timers; unref them so the test process can exit.
   const realSetTimeout = globalThis.setTimeout;
   globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => realSetTimeout(...args).unref()) as typeof setTimeout;
   t.after(() => {
@@ -54,8 +54,19 @@ test("watchLeases receives approved leases and reports applied ids to speaker", 
   await assert.rejects(speaker.createSubject("pi"), /401/);
   await ownerPost(`/enforcers/${id}/approve`);
 
+  // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
+  const fatal: string[] = [];
+  watchLeases(config, "unknown-token", () => {}, (message) => fatal.push(message));
+  await until(() => fatal.length === 1);
+  assert.match(fatal[0], /rejects this host's enforcer token \(HTTP 401\).*bottle-cli register/);
+
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchLeases(config, token, (snapshot) => snapshots.push(snapshot));
+  const reportApplied = watchLeases(
+    config,
+    token,
+    (snapshot) => snapshots.push(snapshot),
+    (message) => assert.fail(`unexpected fatal speaker error: ${message}`),
+  );
   const subject = await speaker.createSubject("pi");
   const request = await speaker.request({
     subjectId: subject.id,

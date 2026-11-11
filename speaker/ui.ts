@@ -1,5 +1,5 @@
 import { html, raw } from 'hono/html'
-import type { Capability, Provider, View } from './server.ts'
+import type { Capability, LogEntry, Provider, View } from './server.ts'
 
 const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
 const input = (name: string, label: string, type = 'text', value = '') =>
@@ -9,11 +9,11 @@ const select = (name: string, label: string, values: readonly string[], chosen =
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
-const durations = ['15m', '30m', '1h', '1d', '7d', '30d']
+const durations = ['15m', '30m', '1h', '1d', '7d', '30d', '90d']
 const permanentOverride = html`<label class="override" title="Creates a permanent lease that stays until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
 
 const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
-<symbol id="i-credential" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
+<symbol id="i-brand" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3.2"/><path d="m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700"/></symbol><symbol id="i-credential" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
 <symbol id="i-secret" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
 <symbol id="i-site" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.200 3 14.800 0 18M12 3c-3 3.200-3 14.800 0 18"/></symbol>
 <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
@@ -169,7 +169,7 @@ h1{font-size:1.45rem;line-height:1.2;font-weight:800;letter-spacing:-.03em;margi
 .refresh{color:oklch(100% 0 0);font-size:.88rem;min-height:44px;display:inline-flex;align-items:center}
 .nav{display:flex;gap:4px;margin-top:6px;overflow-x:auto;scrollbar-width:none}
 .nav::after,.chips::after{content:"";flex:0 0 28px}.nav a{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 16px;border-radius:12px 12px 0 0;color:oklch(92% .035 268);text-decoration:none;font-weight:650;white-space:nowrap}
-.nav a:hover{background:oklch(100% 0 0/.12)}.nav a[aria-current=page]{background:var(--bg);color:var(--ink)}
+.nav .sep{flex:none;width:1px;margin:12px 6px;background:oklch(100% 0 0/.3)}h1 em{font-style:italic;font-weight:700}.intro{margin:12px 0 0}.nav a:hover{background:oklch(100% 0 0/.12)}.nav a[aria-current=page]{background:var(--bg);color:var(--ink)}
 .count{min-width:22px;padding:1px 7px;border-radius:99px;background:oklch(86% .16 85);color:oklch(25% .06 85);font-size:.78rem;font-weight:800;text-align:center}
 main{max-width:1120px;margin:auto;padding:20px 20px 72px}
 h2{display:flex;align-items:center;gap:10px;font-size:1.3rem;line-height:1.25;font-weight:750;letter-spacing:-.02em;margin:0 0 14px}
@@ -185,6 +185,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:22px;align-items:start}
 .inbox{background:var(--region);border-radius:18px;padding:20px;min-width:0}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;min-width:0}
+.log{width:100%;border-collapse:collapse;font-size:.9rem}.log th{text-align:left;color:var(--dim);font-weight:600}.log th,.log td{padding:6px 10px 6px 0;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
 .rows{list-style:none;margin:0;padding:0}
 .rows>li{padding:12px 0;border-top:1px solid var(--line)}.rows>li:first-child{border-top:0}
 .rows[data-nomatch]::after{content:"Nothing matches this filter.";display:block;padding:14px 0;color:var(--dim)}
@@ -251,8 +252,8 @@ input,select,textarea{font-size:1rem}.pick{flex-basis:100%}.go{flex-basis:100%}.
 .t-age{margin-left:0;flex-basis:100%}h2{font-size:1.2rem}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 `
-const page = (title: string, nav: unknown, body: unknown, nonce: string) =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${title}</title><style>${raw(css)}</style></head><body>${raw(sprite)}<header class="top"><div class="top-in"><div class="bar"><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-credential"></use></svg></span><h1>${title}</h1><p id="live-status" role="status">Connecting…</p><a class="refresh" href="/admin">Refresh</a></div>${nav}</div></header><main>${body}</main><dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Are you sure?</h2><p id="confirm-text"></p><div class="dlg-actions"><button value="cancel" autofocus>Keep</button><button value="ok" id="confirm-ok" class="ok">Confirm</button></div></form></dialog><script nonce="${nonce}">${raw(liveScript)}</script></body></html>`
+const page = (nav: unknown, body: unknown, nonce: string) =>
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3Erect%7Bfill:%231c2b8f%7D.s%7Bfill:none;stroke:%23fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round%7D@media(prefers-color-scheme:dark)%7Brect%7Bfill:%239aa8ff%7D.s%7Bstroke:%2310143a%7D%7D%3C/style%3E%3Crect width='32' height='32' rx='8'/%3E%3Cg class='s' transform='translate(4 4) scale(1)'%3E%3Ccircle cx='7' cy='14' r='3.2'/%3E%3Cpath d='m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700'/%3E%3C/g%3E%3C/svg%3E"><style>${raw(css)}</style></head><body>${raw(sprite)}<header class="top"><div class="top-in"><div class="bar"><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-brand"></use></svg></span><h1>Speaker for the <em>creds</em></h1><p id="live-status" role="status">Connecting…</p><a class="refresh" href="/admin">Refresh</a></div>${nav}</div></header><main>${body}</main><dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Are you sure?</h2><p id="confirm-text"></p><div class="dlg-actions"><button value="cancel" autofocus>Keep</button><button value="ok" id="confirm-ok" class="ok">Confirm</button></div></form></dialog><script nonce="${nonce}">${raw(liveScript)}</script></body></html>`
 
 const mark = (kind: string, small = false) =>
   html`<span class="mark k-${kind} ${small ? 'sm' : ''}"><svg class="ic" aria-hidden="true"><use href="#i-${kind}"></use></svg></span>`
@@ -262,8 +263,8 @@ const cap = (m: Capability) =>
   html`<li class="cap">${mark(m.kind)}<div><code>${m.ref}</code><span class="meta">${m.kind}</span></div></li>`
 const caps = (list: Capability[]) => html`<ul class="caps">${list.map(cap)}</ul>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
-const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }) =>
-  html`${plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
+const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }, query = '') =>
+  html`${query && uses ? html`<a href="/admin/log?${query}" title="Show who used this, when and what for">${plural(uses, 'use', 'uses')}</a>` : plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
 const chips = { active: ['good', 'active'], granted: ['warn', 'granted'], waiting: ['warn', 'waiting for enforcer'] }
 const notices = {
   disabled: '',
@@ -294,16 +295,20 @@ export function adminPage(
   section = 'approvals',
   bundles: Record<string, Capability[]> = {},
   error?: string,
+  mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
+  log?: { entries: LogEntry[]; filter: string },
 ) {
   const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
   const activeSection = selected
     ? 'providers'
-    : ['access', 'identities', 'providers', 'bundles'].includes(section)
-      ? section
-      : 'approvals'
+    : log
+      ? 'log'
+      : ['access', 'identities', 'providers', 'bundles'].includes(section)
+        ? section
+        : 'approvals'
   const providerList = Object.entries(providers).map(
     ([id, provider]) =>
-      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
+      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}${provider.mcp ? ' · MCP' : ''}${provider.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a><a href="/admin/log?provider=${encodeURIComponent(id)}" aria-label="Access log for provider ${id}">Log</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
   )
   const panels = livePanels(view)
   const identities = [
@@ -313,7 +318,7 @@ export function adminPage(
         identity(
           'enforcer',
           `Enforcer ${e.name}`,
-          html`${e.kinds.join(', ')} · ${activity(e)}`,
+          html`${e.kinds.join(', ')} · ${activity(e, `identity=${encodeURIComponent(e.id)}`)}`,
           [...e.kinds],
           `enforcers/${e.id}`,
         ),
@@ -324,16 +329,20 @@ export function adminPage(
         identity(
           'session',
           `Session ${s.label}`,
-          html`LLM: ${s.llmName ?? 'not supplied'} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`,
+          html`${who(s)} · ${activity(s, `identity=${encodeURIComponent(s.id)}`)} · ${s.expiresAt ?? 'until revoked'}`,
           ['credential'],
           `sessions/${s.id}`,
         ),
       ),
   ]
-  const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication', ['bearer', 'header', 'basic'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
+  const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
   const providerEditor = selected
-    ? html`<section class="editor"><h3>Edit provider: ${selectedId}</h3>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</section>`
+    ? html`<section class="editor"><h3>Edit provider: ${selectedId}</h3>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
     : ''
+  function mcpTools(id: string) {
+    const summary = mcpSummary[id]
+    return html`<div class="t-meta">${error === 'tools' ? html`<p class="notice" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<span class="meta">${summary ? `Tools: ${summary.read} read · ${summary.write} write${summary.unannotated ? ` (${summary.unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</span>${form('/admin/providers/tools', input('id', '', 'hidden', id), 'Refresh tools', 'inline')}</div>`
+  }
   const addProvider = selected
     ? ''
     : html`<details><summary>Add provider</summary>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</details>`
@@ -350,20 +359,24 @@ export function adminPage(
     ([id, list]) =>
       html`<li data-search="${searchable(id, list.map((m) => `${m.kind} ${m.ref}`).join(' '))}" data-kinds="${[...new Set(list.map((m) => m.kind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div><div class="row-sub">${plural(list.length, 'member', 'members')}, granted together by one approval</div></div><div class="row-act">${form('/admin/bundles/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete bundle ${id}`, `Delete bundle ${id}? Agents can no longer request it. Existing leases stay.`)}</div></div><details id="bundle-${id}"><summary>${strip(list.map((m) => m.kind))}<span class="meta">Members and editing</span></summary>${caps(list)}${bundleForm(id, list)}</details></li>`,
   )
-  const nav = html`<nav class="nav" aria-label="Admin sections">${[
-    ['approvals', 'Approvals'],
-    ['access', 'Leases'],
-    ['identities', 'Identities'],
-    ['providers', 'Providers'],
-    ['bundles', 'Bundles'],
-  ].map(
-    ([id, label]) =>
-      html`<a href="/admin?section=${id}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
+  const sections: [string, string, string][] = [
+    ['approvals', 'Approvals', 'Sessions, sandboxes and access requests waiting for your yes or no.'],
+    ['access', 'Leases', "Access you've granted that is active right now, until it expires or you revoke it."],
+    ['identities', 'Identities', 'Agent sessions and sandboxes you have approved; revoke one to cut it off.'],
+    ['providers', 'Providers', 'Upstream APIs Speaker proxies, with their stored credentials and read/write rules.'],
+    ['bundles', 'Bundles', 'Named sets of capabilities an agent can request with a single approval.'],
+    ['log', 'Log', 'Log: recent calls and decisions, newest first.'],
+  ]
+  const nav = html`<nav class="nav" aria-label="Admin sections">${sections.map(
+    ([id, label, tip], i) =>
+      html`${i === 1 || i === 3 || i === 5 ? html`<span class="sep" aria-hidden="true"></span>` : ''}<a href="${id === 'log' ? '/admin/log' : `/admin?section=${id}`}" title="${tip}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
   )}</nav>`
+  const intro = html`<p class="muted intro">${sections.find(([id]) => id === activeSection)?.[2]}</p>`
   const tools = (withKinds: boolean) =>
     html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, ref or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
-  const content =
-    activeSection === 'access'
+  const content = log
+    ? logPanel(log.entries, log.filter)
+    : activeSection === 'access'
       ? html`${tools(true)}<section class="panel wide"><div id="leases">${raw(panels.leases)}</div></section>`
       : activeSection === 'identities'
         ? html`${tools(false)}<section class="panel"><h2>Approved identities</h2><ul class="rows">${identities.length ? identities : empty('No approved identities', 'Enforcers and sessions appear here after you approve them, and can be revoked.')}</ul></section>`
@@ -372,10 +385,56 @@ export function adminPage(
           : activeSection === 'bundles'
             ? html`${tools(false)}<section class="panel"><h2>Bundles</h2>${bundleErrors[error ?? ''] ? html`<p class="notice" role="alert">${bundleErrors[error ?? '']}</p>` : ''}<ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', [])}</section><p class="muted">Changes apply to new requests; requests already pending keep their members.</p>`
             : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
-  return page('Speaker', nav, content, nonce ?? '')
+  return page(nav, html`${intro}${content}`, nonce ?? '')
 }
 
-export function livePanels({ enforcers, sessions, requests, leases }: View) {
+const ago = (iso: string) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000))
+  return seconds < 60
+    ? `${seconds}s ago`
+    : seconds < 3600
+      ? `${Math.floor(seconds / 60)}m ago`
+      : seconds < 86400
+        ? `${Math.floor(seconds / 3600)}h ago`
+        : `${Math.floor(seconds / 86400)}d ago`
+}
+const logWhat = (e: LogEntry) => {
+  if (e.event === 'proxy')
+    return html`<code>${e.method} ${e.path}</code> <span class="meta">${e.provider}${e.mcp ? ` · ${e.mcp}` : ''}</span>`
+  const list = Array.isArray(e.capability)
+    ? (e.capability as Capability[]).map((m) => `${m.kind} ${m.ref}`).join(', ')
+    : String(e.capability ?? '')
+  return html`<code>${list}</code>${e.reason ? html` <span class="meta">${String(e.reason)}</span>` : ''}`
+}
+const logResult = (e: LogEntry) =>
+  e.event === 'proxy'
+    ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.leaseId ? 'lease' : String(e.rule)}</span>`
+    : e.expiresAt === undefined
+      ? ''
+      : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
+const logPanel = (entries: LogEntry[], filter: string) =>
+  html`<section class="panel wide"><h2>Log ${filter ? html`<span class="meta">${filter} · <a href="/admin/log">show all</a></span>` : ''}</h2>${
+    entries.length
+      ? html`<table class="log"><thead><tr><th>Time</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
+          (e) =>
+            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.llmName, e.harness].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
+        )}</tbody></table>`
+      : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen.')}</ul>`
+  }</section>`
+
+// One compact line naming who is asking: model, then harness, both as the agent reported them.
+const who = (s: { llmName?: string; harness?: string }) =>
+  [s.llmName ?? 'LLM not supplied', s.harness].filter(Boolean).join(' · ')
+
+export function livePanels({ enforcers, sessions, requests, leases, always }: View) {
+  // A request filed with a still-pending session is shown on that session's card and approved with it.
+  const pendingSessions = new Set(sessions.filter((s) => s.status === 'pending').map((s) => s.id))
+  const firstAsk = (sessionId: string) => {
+    const r = requests.find((q) => q.subjectId === sessionId && q.atEnrollment && q.status === 'pending')
+    return r
+      ? html`<div class="meta">Also asks for ${r.bundle ? `bundle ${r.bundle}` : r.members.map((m) => `${m.kind} ${m.ref}`).join(', ')} for ${r.duration}: ${r.reason}</div>`
+      : ''
+  }
   const decide = (path: string, picker: unknown, subject: string, approve = 'Approve') =>
     html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/deny" aria-label="Deny: ${subject}">Deny</button></div></form>`
   const ticket = (
@@ -408,7 +467,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
           `session ${s.label} ${s.llmName ?? ''}`,
           ['credential'],
           html`${mark('session')}<strong>Session ${s.label}</strong><span class="chip">wants to connect</span>`,
-          html`<div class="t-grant"><div class="meta">LLM: ${s.llmName ?? 'not supplied'} · Can request credential access only</div></div>`,
+          html`<div class="t-grant"><div class="meta">${who(s)}</div>${firstAsk(s.id)}${always.length ? html`<div class="meta">Reads without asking for up to 90 days: ${always.join(', ')}</div>` : ''}</div>`,
           decide(
             `sessions/${s.id}`,
             html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
@@ -417,7 +476,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
         ),
       ),
     ...requests
-      .filter((r) => r.status === 'pending')
+      .filter((r) => r.status === 'pending' && !(r.atEnrollment && pendingSessions.has(r.subjectId)))
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((r) => {
         const ssh = r.ssh
@@ -431,7 +490,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
           `request-${r.id}`,
           `${r.label} ${r.llmName ?? ''} ${r.enforcer ?? ''} ${r.bundle ?? ''} ${r.reason} ${r.members.map((m) => `${m.kind} ${m.ref}`).join(' ')}`,
           r.members.map((m) => m.kind),
-          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">LLM: ${r.llmName}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
+          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">${who(r)}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
           html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}${ssh}`}</div>${
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
@@ -459,7 +518,7 @@ export function livePanels({ enforcers, sessions, requests, leases }: View) {
   )
   const leaseList = ordered.map((l) => {
     const [tone, state] = chips[l.state]
-    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
+    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l, `lease=${encodeURIComponent(l.id)}`) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
   })
   return {
     pending: items.length,

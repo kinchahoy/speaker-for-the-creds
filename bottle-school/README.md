@@ -21,15 +21,20 @@ Run these commands from the repository root:
 
 ```sh
 mise run install
-cp bottle-school/config.example.json bottle-school/config.json
+cp bottle-school/.env.example bottle-school/.env   # set LLM_UPSTREAM, LLM_MODEL, SPEAKER_URL
+mise run setup
+mise run doctor
 ```
 
-Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json`, `bottle-school/catalog.json`, and `bottle-school/secrets.env.example` into `configRoot` as `templates.json`, `catalog.json`, and `secrets.env`. Protect secrets with mode 600. The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
+Host-specific values (model endpoint, speaker URL, VM backend) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
+{.ai}
+
+To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json`, `bottle-school/catalog.json`, and `bottle-school/secrets.env.example` into `configRoot` as `templates.json`, `catalog.json`, and `secrets.env`. Protect secrets with mode 600. The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability.
-- `localModel.upstream` names one loopback or RFC1918 IPv4 `host:port`, such as the MI60 server's inference endpoint. The validator does not accept a Tailscale model address.
+- `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.
 - `shareRoots` defines the host folders a lease may expose. Begin with no sensitive shares and one task.
 - `PI_V2_CONFIG` selects the service configuration; `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
@@ -50,21 +55,55 @@ mise run bottle
 The guest build imports an Ubuntu rootfs through Gondolin. Its tool selections live in `guest/apt-packages.txt`, `guest/mise-config.toml`, and `guest/python/requirements.in`. The build installs current tool releases except explicitly pinned packages; it refreshes Docker layers daily. Set `PI_GUEST_BROWSER=1` when running the build to add Python Playwright and headless Chromium. Builds need internet access and several GiB of disk space.
 {.ai}
 
-The default backend is QEMU. Install `qemu-system-x86` (with `qemu-utils` for `qemu-img`) on the host.
+<!-- author: ai -->
+
+## VM backends: QEMU and Krun
+
+<sub>AI-written</sub>
+
+`PI_V2_VMM` selects Gondolin's VMM for the service (and `mise run doctor`). It defaults to `qemu`. One guest image boots under both backends, so switching needs no rebuild: set `PI_V2_VMM=krun` in `bottle-school/.env` and restart `mise run bottle`.
 {.ai}
 
-Krun is optional and experimental. Set `PI_V2_VMM=krun` for both the build and the service (`PI_V2_VMM=krun mise run guest-build pi-v5-guest`, then `PI_V2_VMM=krun mise run bottle`). On x86_64 the build then requires a Krun ELF kernel at `.runtime/krun/vmlinux` or the path named by `KRUN_VMLINUX`; `start.sh` also selects a runner at `.runtime/krun-runner/bin/gondolin-krun-runner` when present. These host-specific artifacts are local prerequisites, not bundled binaries. An image built for one backend does not run under the other.
+**QEMU (default).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
+{.ai}
+
+**Krun (libkrun, no QEMU process).** Needs a Krun runner that matches the host CPU:
+{.ai}
+
+- Linux x86_64: build it once per machine with `mise run krun-runner` (`krun-runner.sh`). Gondolin's published runner is compiled on an AVX-512 machine (Zig targets the build host's CPU) and crashes with an illegal instruction on CPUs without AVX-512, such as Intel Core Ultra. The script builds `host/krun-runner` from the pinned Gondolin tag `v0.13.0` (commit `fcbcef1`) with Zig 0.17 and `-Dcpu=x86_64_v3`, copies the published `libkrun.so.1.17.4` (no AVX-512; the version Gondolin pins) next to it, and fails unless both contain zero `zmm` instructions. It installs into the gitignored `.runtime/krun-runner/`; `start.sh` and `doctor.sh` use it automatically through `GONDOLIN_KRUN_RUNNER`. Rebuild it when you upgrade Gondolin (bump `REF` and `SHA` in the script).
+- macOS and Linux arm64: Gondolin's published runner is used as is (no AVX-512 issue; macOS signs it with the Hypervisor entitlement). Not tested here.
+{.ai}
+
+How one image serves both backends (`guest/boot-assets.mjs`, x86_64): QEMU and libkrun both load the uncompressed ELF `vmlinux` extracted from Alpine's kernel, and both use the trimmed initramfs, which loads `virtio_blk` and `ext4` and then switches to the rootfs and our `rootfs-init.sh`. The manifest's `krunKernel` and `krunInitrd` slots point at those same two files, so the image is no larger. Gondolin's stock Krun slots (libkrunfw's raw kernel plus an empty initrd) are dropped on x86_64: libkrun rejects that raw kernel ("Kernel doesn't fit in RAM"), and Alpine's kernel has no built-in block driver, so an empty initrd cannot mount the root disk. On aarch64 and macOS the stock libkrunfw kernel and empty initrd are kept, since that kernel has the drivers built in. This is untested here.
+{.ai}
+
+Krun-specific differences: libkrun exposes virtio-mmio devices and a virtio-console multiport (`vport*`), which Gondolin's init and `rootfs-init.sh` already handle; sandboxfs runs over the same `virtio-fs` port as under QEMU, and DHCP, DNS and the HTTPS MITM behave identically. The kernel command line is `console=hvc0 root=/dev/vda rootfstype=ext4 rw init=/init quiet initcall_blacklist=i8042_init` (set in `src/gondolin.ts`); the blacklisted i8042 driver spends ~0.25s probing libkrun's emulated keyboard controller. The kernel prints a harmless `free_init_pages` warning for the initrd under libkrun. To debug a Krun boot, set `console: "stdio"` in the VM options and point `GONDOLIN_KRUN_RUNNER` at a wrapper script that redirects the runner's output to a file.
+{.ai}
+
+Measured on a Core Ultra 7 265K (no AVX-512), 2 vCPU, 2 GiB, the same image, `bootGuest` create to first exec, n=12 each, interleaved, host under a load of ~3:
+{.ai}
+
+| | QEMU | Krun |
+| --- | --- | --- |
+| median / min / max | 0.95 s / 0.73 s / 1.27 s | 1.05 s / 0.78 s / 1.20 s |
+| 200 MB write / read on `/work` (sandboxfs) | 100-157 MB/s / 74-78 MB/s | 75-78 MB/s / 92-107 MB/s |
+| 200 MB write / read on the rootfs disk | 0.9-1.4 GB/s / page cache | 1.1-1.4 GB/s / page cache |
+
+Networking, `getent hosts model.internal`, HTTPS through the MITM (allowed host 200, blocked host 403) from curl, Python, requests and Node, and the sandboxfs mounts all gave identical results under both. `/work` throughput is bounded by the host-side sandboxfs RPC, not the VMM. QEMU stays the default: it is slightly faster to boot here and is the better-exercised path. Krun is a supported alternative; `mise run doctor` with `PI_V2_VMM=krun` checks the runner (present, no AVX-512) and the image's Krun assets.
 {.ai}
 
 From another terminal, launch and inspect a task:
 {.ai}
 
 ```sh
-mise run bottle-cli run --template offline --prompt "Write a greeting to /output/greeting.txt"
+mise run bottle-cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
 mise run bottle-cli ls
-mise run bottle-cli attach <id>
+mise run bottle-cli attach <id>      # id, unique id prefix, or name
 mise run bottle-cli stop <id>
+mise run bottle-cli help run         # per-command usage (mise intercepts --help after the task name)
 ```
+
+`ls` shows each task's state, pending speaker approvals (with the request id), age, model, name, and Pi's latest message. `run` prints a copy-pasteable `attach` line. Errors print one line and exit 1 (runtime) or 2 (usage).
 
 Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when complete. The owner must verify herdr and terminal behavior in a real guest.
 {.ai}

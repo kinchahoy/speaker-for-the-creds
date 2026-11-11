@@ -61,15 +61,17 @@ describe("configuration", () => {
     assert.throws(() => loadConfig(writeConfig("127.0.0.1", 7002)), /ports must be distinct/);
   });
 
-  test("accepts one configured RFC1918 model endpoint and rejects public endpoints", () => {
+  test("accepts one configured RFC1918 or Tailscale model endpoint and rejects public endpoints", () => {
     const path = writeConfig();
     const config = JSON.parse(readFileSync(path, "utf8"));
-    config.localModel.upstream = "192.168.0.83:9931";
-    writeFileSync(path, JSON.stringify(config));
-    assert.equal(loadConfig(path).localModel.upstream, "192.168.0.83:9931");
+    for (const upstream of ["192.168.1.20:8080", "100.100.10.20:8080"]) {
+      config.localModel.upstream = upstream;
+      writeFileSync(path, JSON.stringify(config));
+      assert.equal(loadConfig(path).localModel.upstream, upstream);
+    }
     config.localModel.upstream = "8.8.8.8:9931";
     writeFileSync(path, JSON.stringify(config));
-    assert.throws(() => loadConfig(path), /loopback or RFC1918 IPv4/);
+    assert.throws(() => loadConfig(path), /loopback, RFC1918, or Tailscale IPv4/);
   });
 
 });

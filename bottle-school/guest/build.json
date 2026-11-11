@@ -16,6 +16,9 @@
   "rootfs": {
     "label": "gondolin-root"
   },
+  "init": {
+    "rootfsInit": "rootfs-init.sh"
+  },
   "env": {
     "PATH": "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     "PI_OFFLINE": "1",

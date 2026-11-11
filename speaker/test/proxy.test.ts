@@ -30,9 +30,30 @@ const port = (server: { address(): string | AddressInfo | null }) => (server.add
 
 async function setup(t: TestContext, bundles: object = {}) {
   const calls: { url?: string; headers: IncomingHttpHeaders }[] = []
-  const upstream = createServer((req, res) => {
+  const upstream = createServer(async (req, res) => {
     calls.push({ url: req.url, headers: req.headers })
     if (req.url?.startsWith('/base/redirect')) return void res.writeHead(302, { location: '/must-not-follow' }).end()
+    // A minimal MCP server under /mcp: one read-only tool and one destructive tool.
+    if (req.url?.startsWith('/mcp') && req.method === 'POST') {
+      let text = ''
+      for await (const chunk of req) text += chunk
+      const message = JSON.parse(text) as { id?: number; method: string }
+      const result =
+        message.method === 'initialize'
+          ? { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fake', version: '1' } }
+          : message.method === 'tools/list'
+            ? {
+                tools: [
+                  { name: 'get_state', annotations: { readOnlyHint: true } },
+                  { name: 'delete_automation', annotations: { readOnlyHint: false, destructiveHint: true } },
+                ],
+              }
+            : { content: [] }
+      if (message.id === undefined) return void res.writeHead(202).end()
+      return void res
+        .writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'fake-session' })
+        .end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }))
+    }
     res.setHeader('content-type', 'application/json').end('{"ok":true}')
   }).listen(0, '127.0.0.1')
   await once(upstream, 'listening')
@@ -73,7 +94,7 @@ async function setup(t: TestContext, bundles: object = {}) {
     write: 'approval',
   })
   assert.equal(saved.status, 303)
-  return { url, call, owner, ownerForm, leases, calls }
+  return { url, call, owner, ownerForm, leases, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
@@ -113,7 +134,18 @@ test('session enroll, approval, request approval, then the proxy injects the cre
   const body = (await blocked.json()) as { error: string; requestId: string }
   assert.equal(body.error, 'approval_required')
   assert.equal(f.calls.length, 0)
+  const guide = async () =>
+    (await f.call('/_speaker/providers/notes/guide', { headers: bearer('session-token') })).text()
+  assert.match(await guide(), /Read \(GET, HEAD, OPTIONS\): needs `credential notes\.read`; not approved yet\./)
   assert.equal((await f.owner(`/api/requests/${body.requestId}/approve`, { duration: '30m' })).status, 200)
+  const status = (await (
+    await f.call(`/_speaker/requests/${body.requestId}`, { headers: bearer('session-token') })
+  ).json()) as { status: string; expiresAt: string }
+  assert.equal(status.status, 'approved')
+  assert.ok(Date.parse(status.expiresAt) > Date.now())
+  const approved = await guide()
+  assert.ok(approved.includes(`Read (GET, HEAD, OPTIONS): approved until ${status.expiresAt} (UTC).`))
+  assert.match(approved, /Your session is approved until .+ \(UTC\)\./)
   assert.equal((await call()).status, 200)
   assert.equal(f.calls[0].url, '/base/things?q=1')
   assert.equal(f.calls[0].headers.authorization, `Bearer ${upstreamSecret}`)
@@ -343,4 +375,131 @@ test('admin bundle saves list members, refuse empty or malformed input with a re
   assert.ok(failed.includes('list at least one member'))
   assert.equal((await f.ownerForm('/bundles/delete', { id: 'kit' })).status, 303)
   assert.ok(!(await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()).includes('~/vault'))
+})
+
+test('one enrollment call files the first request; approving the session grants it, and status long-polls', async (t) => {
+  const f = await setup(t)
+  const enrolled = await f.call('/_speaker/sessions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      label: 'quick agent',
+      llmName: 'Test LLM',
+      harness: 'Test Harness',
+      tokenHash: sha('quick-token'),
+      duration: '1h',
+      request: { capability: { kind: 'credential', ref: 'notes.read' }, reason: 'read one note', duration: '30m' },
+    }),
+  })
+  assert.equal(enrolled.status, 201)
+  const { id, requestId } = (await enrolled.json()) as { id: string; requestId: string }
+  assert.ok(requestId)
+  const waited = f.call(`/_speaker/sessions/${id}?wait=5`)
+  await sleep(100)
+  assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
+  assert.equal(((await (await waited).json()) as { status: string }).status, 'approved')
+  const mine = (await (await f.call('/_speaker/requests', { headers: bearer('quick-token') })).json()) as {
+    id: string
+    status: string
+    expiresAt: string
+  }[]
+  assert.equal(mine[0].id, requestId)
+  assert.equal(mine[0].status, 'approved')
+  assert.ok(Date.parse(mine[0].expiresAt) > Date.now())
+  assert.equal((await f.call('/notes/things', { headers: bearer('quick-token') })).status, 200)
+  assert.equal((await f.call('/SKILL.md')).status, 200)
+})
+
+async function approvedSession(f: Fixture, token: string) {
+  const enrolled = await f.call('/_speaker/sessions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: token, llmName: 'Test LLM', tokenHash: sha(token), duration: '1h' }),
+  })
+  const { id } = (await enrolled.json()) as { id: string }
+  assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
+  return id
+}
+
+test('an always read needs no lease, counts as a use, and the guide says until when', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/providers/save', {
+    id: 'notes',
+    baseUrl: `${f.upstreamOrigin}/base`,
+    authType: 'bearer',
+    read: 'always',
+    write: 'approval',
+  })
+  await approvedSession(f, 'always-token')
+  assert.equal((await f.call('/notes/x', { headers: bearer('always-token') })).status, 200)
+  const page = await (await f.call('/admin?section=identities', { headers: ownerHeaders })).text()
+  assert.match(page, /1 use/)
+  const guide = await (await f.call('/_speaker/providers/notes/guide', { headers: bearer('always-token') })).text()
+  assert.match(guide, /Read \(GET, HEAD, OPTIONS\): allowed without a request until .+ \(UTC\)\./)
+})
+
+test('path auth splices the stored secret into the upstream path and keeps it from the agent', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/providers/save', {
+    id: 'hook',
+    baseUrl: `${f.upstreamOrigin}/api/webhook`,
+    authType: 'path',
+    secret: 'mcp_secret123',
+    read: 'always',
+    write: 'always',
+  })
+  await approvedSession(f, 'hook-token')
+  assert.equal((await f.call('/hook', { method: 'POST', headers: bearer('hook-token'), body: '{}' })).status, 200)
+  const last = f.calls.at(-1)
+  assert.equal(last?.url, '/api/webhook/mcp_secret123')
+  assert.equal(last?.headers.authorization, undefined)
+})
+
+test('an MCP provider classifies tool calls by their read-only hints', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/providers/save', {
+    id: 'ha',
+    baseUrl: `${f.upstreamOrigin}/mcp`,
+    authType: 'bearer',
+    secret: 'ha-secret',
+    read: 'always',
+    write: 'approval',
+    mcp: 'on',
+  })
+  await approvedSession(f, 'mcp-token')
+  const rpc = (method: string, params: object = {}) =>
+    f.call('/ha', {
+      method: 'POST',
+      headers: { ...bearer('mcp-token'), accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method, params }),
+    })
+  assert.equal((await rpc('tools/list')).status, 200)
+  assert.equal((await rpc('tools/call', { name: 'get_state', arguments: {} })).status, 200)
+  const blocked = await rpc('tools/call', { name: 'delete_automation', arguments: {} })
+  assert.equal(blocked.status, 403)
+  assert.equal(((await blocked.json()) as { capability: string }).capability, 'ha.write')
+  const requests = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as {
+    path: string
+  }[]
+  assert.match(requests[0].path, /delete_automation \(destructive\)/)
+})
+
+test('the access log lists proxied calls per identity, with no lease for an always call', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/providers/save', {
+    id: 'open',
+    baseUrl: `${f.upstreamOrigin}/base`,
+    authType: 'bearer',
+    secret: 's',
+    read: 'always',
+    write: 'approval',
+  })
+  const id = await approvedSession(f, 'log-token')
+  for (const path of ['/open/first', '/open/second'])
+    assert.equal((await f.call(`${path}?k=hidden`, { headers: bearer('log-token') })).status, 200)
+  const page = await (await f.call(`/admin/log?identity=${id}`, { headers: ownerHeaders })).text()
+  assert.match(page, /GET \/first/)
+  assert.match(page, /GET \/second/)
+  assert.match(page, /always/)
+  assert.doesNotMatch(page, /k=hidden|127\.0\.0\.1:\d+\/base/)
 })

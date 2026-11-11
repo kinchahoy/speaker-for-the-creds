@@ -136,7 +136,17 @@ export class Tasks {
     this.catalog = catalog;
     this.secrets = secrets;
     this.speaker = speakerClient(config, enforcerToken);
-    this.#report = watchLeases(config, enforcerToken, (snapshot) => this.#onSnapshot(snapshot));
+    this.#report = watchLeases(
+      config,
+      enforcerToken,
+      (snapshot) => this.#onSnapshot(snapshot),
+      // Without speaker no lease can apply: stop through the normal shutdown (archives tasks) and exit nonzero.
+      (message) => {
+        console.error(`stopping bottle-school: ${message}`);
+        process.exitCode = 1;
+        process.kill(process.pid, "SIGTERM");
+      },
+    );
   }
 
   list = () => [...this.byId.values()];
@@ -163,7 +173,8 @@ export class Tasks {
     prompt?: string;
     hours?: number;
   }): Promise<Task> {
-    if (this.byId.size >= this.config.maxTasks)
+    // Closed and failed-archive tasks stay listed for the owner but no longer hold a slot.
+    if ([...this.byId.values()].filter((task) => !isClosed(task)).length >= this.config.maxTasks)
       throw new Error(`already running ${this.config.maxTasks} tasks`);
     const template = this.templates.get(input.template);
     if (!template) throw new Error(`no template ${input.template}`);
@@ -458,20 +469,24 @@ export class Tasks {
 
   async #close(task: Task) {
     if (!this.byId.has(task.id)) return;
+    // A task whose Pi never started has no guest session to stop or export; each guest call would only time out.
+    const started = task.state !== "failed";
     task.state = "closing";
     clearInterval(task.doneWatch);
     this.#event(task, "owner began archival");
     try {
-      await pi
-        .quit(task.guest)
-        .catch((error: Error) => this.#event(task, `Pi quit request failed: ${error.message}`));
-      for (let tries = 0; tries < 20 && (await pi.running(task.guest)); tries += 1)
-        await delay(250);
-      if (await pi.running(task.guest)) {
-        this.#event(task, "Pi did not exit after the grace period; killed");
-        await pi.kill(task.guest);
+      if (started) {
+        await pi
+          .quit(task.guest)
+          .catch((error: Error) => this.#event(task, `Pi quit request failed: ${error.message}`));
+        for (let tries = 0; tries < 20 && (await pi.running(task.guest)); tries += 1)
+          await delay(250);
+        if (await pi.running(task.guest)) {
+          this.#event(task, "Pi did not exit after the grace period; killed");
+          await pi.kill(task.guest);
+        }
+        await pi.export(task.guest);
       }
-      await pi.export(task.guest);
       this.#writeArchive(task, "archived");
       await task.guest.close();
       await this.speaker.deleteSubject(task.subjectId);
@@ -489,6 +504,8 @@ export class Tasks {
         /* Keep the work tree when even the trusted record cannot be written. */
       }
       await task.guest.close().catch(() => undefined);
+      // The VM is gone; its speaker identity must not outlive it. The work tree stays for the owner.
+      await this.speaker.deleteSubject(task.subjectId).catch(() => undefined);
       throw error;
     }
   }

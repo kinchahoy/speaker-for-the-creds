@@ -64,7 +64,11 @@ The provider prefix replaces the configured API base:
 - Edit a provider in `/admin` and enter its key. Saved keys are never shown again. For Basic auth, enter
   `username:password`.
 - Each provider has a read and a write policy: `approval`, `always`, or `deny`. `deny` overrides leases.
-- A provider may carry a markdown `guide`. `GET /_speaker/providers/<name>/guide` serves it to sessions and subjects.
+- `always` lets an approved session use the provider without a request for at most 90 days after the session's approval; after that the rule acts as `approval`. The session approval card lists the providers it can read this way.
+- `GET /_speaker/providers/<name>/guide` serves every provider a short generated guide for the caller (how to call it, current read/write access and expiry in UTC), followed by the provider's own markdown `guide` when it has one.
+- Auth type `path` stores a secret URL segment, such as a webhook id, and inserts it after the base URL (`/hook/x` → `<baseUrl>/<secret>/x`). Logs record only the agent-facing path.
+- Tick "MCP server" for a streamable-HTTP MCP provider. Speaker classifies each POST: protocol housekeeping, tool listing and tools annotated `readOnlyHint: true` are reads; any other tool call is a write, and approval cards mark destructive tools. "Refresh tools" lists the tools and shows how they classify.
+- `PUBLIC_PROVIDERS=1` lets `GET /_speaker/providers` answer without a token (names, auth type and policy only). It is off by default.
 - The `demo` provider allows reads and requires a lease for writes. `/demo/check` answers
   `"credential":"accepted"` without exposing the fake key.
 
