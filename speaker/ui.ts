@@ -1,5 +1,5 @@
 import { html, raw } from 'hono/html'
-import type { Capability, Provider, View } from './server.ts'
+import type { Capability, LogEntry, Provider, View } from './server.ts'
 
 const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp'] as const
 const input = (name: string, label: string, type = 'text', value = '') =>
@@ -184,6 +184,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:22px;align-items:start}
 .inbox{background:var(--region);border-radius:18px;padding:20px;min-width:0}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;min-width:0}
+.log{width:100%;border-collapse:collapse;font-size:.9rem}.log th{text-align:left;color:var(--dim);font-weight:600}.log th,.log td{padding:6px 10px 6px 0;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
 .rows{list-style:none;margin:0;padding:0}
 .rows>li{padding:12px 0;border-top:1px solid var(--line)}.rows>li:first-child{border-top:0}
 .rows[data-nomatch]::after{content:"Nothing matches this filter.";display:block;padding:14px 0;color:var(--dim)}
@@ -261,8 +262,8 @@ const cap = (m: Capability) =>
   html`<li class="cap">${mark(m.kind)}<div><code>${m.ref}</code><span class="meta">${m.kind}</span></div></li>`
 const caps = (list: Capability[]) => html`<ul class="caps">${list.map(cap)}</ul>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
-const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }) =>
-  html`${plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
+const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }, query = '') =>
+  html`${query && uses ? html`<a href="/admin/log?${query}" title="Show who used this, when and what for">${plural(uses, 'use', 'uses')}</a>` : plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
 const chips = { active: ['good', 'active'], granted: ['warn', 'granted'], waiting: ['warn', 'waiting for enforcer'] }
 const notices = {
   disabled: '',
@@ -294,16 +295,19 @@ export function adminPage(
   bundles: Record<string, Capability[]> = {},
   error?: string,
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
+  log?: { entries: LogEntry[]; filter: string },
 ) {
   const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
   const activeSection = selected
     ? 'providers'
-    : ['access', 'identities', 'providers', 'bundles'].includes(section)
-      ? section
-      : 'approvals'
+    : log
+      ? 'log'
+      : ['access', 'identities', 'providers', 'bundles'].includes(section)
+        ? section
+        : 'approvals'
   const providerList = Object.entries(providers).map(
     ([id, provider]) =>
-      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}${provider.mcp ? ' · MCP' : ''}${provider.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
+      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}${provider.mcp ? ' · MCP' : ''}${provider.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a><a href="/admin/log?provider=${encodeURIComponent(id)}" aria-label="Access log for provider ${id}">Log</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
   )
   const panels = livePanels(view)
   const identities = [
@@ -313,7 +317,7 @@ export function adminPage(
         identity(
           'enforcer',
           `Enforcer ${e.name}`,
-          html`${e.kinds.join(', ')} · ${activity(e)}`,
+          html`${e.kinds.join(', ')} · ${activity(e, `identity=${encodeURIComponent(e.id)}`)}`,
           [...e.kinds],
           `enforcers/${e.id}`,
         ),
@@ -324,7 +328,7 @@ export function adminPage(
         identity(
           'session',
           `Session ${s.label}`,
-          html`${who(s)} · ${activity(s)} · ${s.expiresAt ?? 'until revoked'}`,
+          html`${who(s)} · ${activity(s, `identity=${encodeURIComponent(s.id)}`)} · ${s.expiresAt ?? 'until revoked'}`,
           ['credential'],
           `sessions/${s.id}`,
         ),
@@ -360,16 +364,18 @@ export function adminPage(
     ['identities', 'Identities', 'Agent sessions and sandboxes you have approved; revoke one to cut it off.'],
     ['providers', 'Providers', 'Upstream APIs Speaker proxies, with their stored credentials and read/write rules.'],
     ['bundles', 'Bundles', 'Named sets of capabilities an agent can request with a single approval.'],
+    ['log', 'Log', 'Log: recent calls and decisions, newest first.'],
   ]
   const nav = html`<nav class="nav" aria-label="Admin sections">${sections.map(
     ([id, label, tip], i) =>
-      html`${i === 1 || i === 3 ? html`<span class="sep" aria-hidden="true"></span>` : ''}<a href="/admin?section=${id}" title="${tip}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
+      html`${i === 1 || i === 3 || i === 5 ? html`<span class="sep" aria-hidden="true"></span>` : ''}<a href="${id === 'log' ? '/admin/log' : `/admin?section=${id}`}" title="${tip}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
   )}</nav>`
   const intro = html`<p class="muted intro">${sections.find(([id]) => id === activeSection)?.[2]}</p>`
   const tools = (withKinds: boolean) =>
     html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, ref or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
-  const content =
-    activeSection === 'access'
+  const content = log
+    ? logPanel(log.entries, log.filter)
+    : activeSection === 'access'
       ? html`${tools(true)}<section class="panel wide"><div id="leases">${raw(panels.leases)}</div></section>`
       : activeSection === 'identities'
         ? html`${tools(false)}<section class="panel"><h2>Approved identities</h2><ul class="rows">${identities.length ? identities : empty('No approved identities', 'Enforcers and sessions appear here after you approve them, and can be revoked.')}</ul></section>`
@@ -380,6 +386,40 @@ export function adminPage(
             : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
   return page(nav, html`${intro}${content}`, nonce ?? '')
 }
+
+const ago = (iso: string) => {
+  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000))
+  return seconds < 60
+    ? `${seconds}s ago`
+    : seconds < 3600
+      ? `${Math.floor(seconds / 60)}m ago`
+      : seconds < 86400
+        ? `${Math.floor(seconds / 3600)}h ago`
+        : `${Math.floor(seconds / 86400)}d ago`
+}
+const logWhat = (e: LogEntry) => {
+  if (e.event === 'proxy')
+    return html`<code>${e.method} ${e.path}</code> <span class="meta">${e.provider}${e.mcp ? ` · ${e.mcp}` : ''}</span>`
+  const list = Array.isArray(e.capability)
+    ? (e.capability as Capability[]).map((m) => `${m.kind} ${m.ref}`).join(', ')
+    : String(e.capability ?? '')
+  return html`<code>${list}</code>${e.reason ? html` <span class="meta">${String(e.reason)}</span>` : ''}`
+}
+const logResult = (e: LogEntry) =>
+  e.event === 'proxy'
+    ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.leaseId ? 'lease' : String(e.rule)}</span>`
+    : e.expiresAt === undefined
+      ? ''
+      : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
+const logPanel = (entries: LogEntry[], filter: string) =>
+  html`<section class="panel wide"><h2>Log ${filter ? html`<span class="meta">${filter} · <a href="/admin/log">show all</a></span>` : ''}</h2>${
+    entries.length
+      ? html`<table class="log"><thead><tr><th>Time</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
+          (e) =>
+            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.llmName, e.harness].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
+        )}</tbody></table>`
+      : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen.')}</ul>`
+  }</section>`
 
 // One compact line naming who is asking: model, then harness, both as the agent reported them.
 const who = (s: { llmName?: string; harness?: string }) =>
@@ -466,7 +506,7 @@ export function livePanels({ enforcers, sessions, requests, leases, always }: Vi
   )
   const leaseList = ordered.map((l) => {
     const [tone, state] = chips[l.state]
-    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
+    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l, `lease=${encodeURIComponent(l.id)}`) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
   })
   return {
     pending: items.length,

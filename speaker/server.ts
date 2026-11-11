@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { serve, upgradeWebSocket } from '@hono/node-server'
@@ -165,6 +165,17 @@ export type View = {
   // Providers any approved session may read without a request (shown when approving a session).
   always: string[]
 }
+export type LogEntry = {
+  time: string
+  event: string
+  subject?: string
+  enforcerId?: string
+  label?: string
+  llmName?: string
+  harness?: string
+  [field: string]: unknown
+}
+const logLimit = 5 * 1024 * 1024
 type Caller = { role: 'enforcer'; enforcer: Enforcer } | { role: 'subject'; id: string; kinds: string[] }
 type Env = { Variables: { caller: Caller } }
 const demoSecret = 'speaker-demo-credential-not-for-real-services'
@@ -467,6 +478,50 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     await persistUsage()
   }
+  // Append-only JSONL access log next to the audit stdout lines; one queue keeps lines from interleaving.
+  const logPath = file('access-log.jsonl'),
+    logOld = file('access-log.1.jsonl')
+  let logQueue: Promise<unknown> = Promise.resolve()
+  const logEvent = (event: string, subjectId: string | undefined, fields: Record<string, unknown>) => {
+    const known = subjectId !== undefined && (subjects.has(subjectId) || sessions.has(subjectId))
+    const who = known ? owner(subjectId) : undefined
+    const line = `${JSON.stringify({
+      time: new Date().toISOString(),
+      event,
+      subject: subjectId,
+      enforcerId: subjects.get(subjectId ?? '')?.enforcer,
+      label: who?.label,
+      llmName: who?.llmName,
+      harness: who?.harness,
+      ...fields,
+    })}\n`
+    logQueue = logQueue
+      .then(async () => {
+        const size = await stat(logPath).then(
+          (s) => s.size,
+          () => 0,
+        )
+        if (size > logLimit) await rename(logPath, logOld)
+        await appendFile(logPath, line, { mode: 0o600 })
+      })
+      .catch((error) => console.error(`access log write failed: ${error.message}`))
+    return logQueue
+  }
+  const readLog = async (match: (entry: LogEntry) => boolean, limit = 200) => {
+    await logQueue
+    const found: LogEntry[] = []
+    for (const path of [logPath, logOld]) {
+      const text = await optionalFile(path)
+      if (text === undefined) continue
+      const lines = text.split('\n').filter(Boolean)
+      for (let i = lines.length - 1; i >= 0 && found.length < limit; i--) {
+        const entry = JSON.parse(lines[i]) as LogEntry
+        if (match(entry)) found.push(entry)
+      }
+      if (found.length >= limit) break
+    }
+    return found
+  }
   const removeLeases = (matches: (lease: Lease) => boolean) =>
     serial(() => commitLeases(new Map([...leases].filter(([, lease]) => !matches(lease)))))
   const owner = (subjectId: string) => {
@@ -533,6 +588,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       await commitLeases(next)
       request.status = 'approved'
       audit('request_approved', { requestId: id, subject: request.subjectId, expiresAt })
+      void logEvent('request_approved', request.subjectId, {
+        requestId: id,
+        capability: request.bundle ?? request.members,
+        reason: request.reason,
+        expiresAt,
+      })
     })
   }
   function deny(id: string) {
@@ -540,6 +601,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       const request = pendingRequest(id)
       request.status = 'denied'
       audit('request_denied', { requestId: id, subject: request.subjectId })
+      void logEvent('request_denied', request.subjectId, {
+        requestId: id,
+        capability: request.bundle ?? request.members,
+        reason: request.reason,
+      })
       push()
     })
   }
@@ -615,6 +681,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     pending.set(request.id, request)
     push()
     audit('request_created', { requestId: request.id, subject: subjectId, members })
+    void logEvent('request_created', subjectId, {
+      requestId: request.id,
+      capability: bundle ?? members,
+      reason,
+    })
     void notify(
       `${request.label} requests ${bundle ?? members.map((m) => m.ref).join(', ')}`,
       `request-${request.id}`,
@@ -820,6 +891,36 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       )
     await next()
   })
+  // Newest entries first, optionally narrowed to one lease, identity (session, subject or enforcer) or provider.
+  admin.get('/log', async (c) => {
+    const { lease, identity, provider } = c.req.query()
+    const members = (entry: LogEntry) => (Array.isArray(entry.capability) ? (entry.capability as Capability[]) : [])
+    const entries = await readLog(
+      (e) =>
+        (!lease || e.leaseId === lease) &&
+        (!identity || e.subject === identity || e.enforcerId === identity) &&
+        (!provider ||
+          e.provider === provider ||
+          members(e).some((m) => m.kind === 'credential' && m.ref.startsWith(`${provider}.`))),
+    )
+    return c.html(
+      adminPage(
+        providers,
+        secrets,
+        view(),
+        undefined,
+        c.get('secureHeadersNonce'),
+        'log',
+        bundles,
+        undefined,
+        {},
+        {
+          entries,
+          filter: lease ? `lease ${lease}` : identity ? `identity ${identity}` : provider ? `provider ${provider}` : '',
+        },
+      ),
+    )
+  })
   admin.get('/', (c) =>
     c.html(
       adminPage(
@@ -994,8 +1095,13 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     })
     admin.post(api ? '/api/leases/:id/revoke' : '/leases/revoke', async (c) => {
       const id = api ? c.req.param('id') : z.object({ id: idSchema }).parse(await fields(c)).id
+      const revoked = leases.get(id)
       await removeLeases((lease) => lease.id === id)
       audit('lease_revoked', { leaseId: id })
+      void logEvent('lease_revoked', revoked?.subjectId, {
+        leaseId: id,
+        capability: revoked && [{ kind: revoked.kind, ref: revoked.ref }],
+      })
       return api ? c.json({ ok: true }) : redirect(c)
     })
   }
@@ -1205,6 +1311,16 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ...(detail ? { mcp: detail } : {}),
       status: upstream?.status ?? 502,
       latencyMs: Date.now() - start,
+    })
+    await logEvent('proxy', caller.id, {
+      provider: providerId,
+      method,
+      path,
+      ...(detail ? { mcp: detail } : {}),
+      status: upstream?.status ?? 502,
+      latencyMs: Date.now() - start,
+      leaseId: lease?.id ?? null,
+      rule,
     })
     if (!upstream) return c.json({ error: 'upstream_unavailable' }, 502)
     const responseHeaders = new Headers(upstream.headers)
