@@ -23,7 +23,7 @@ import type { Config } from "../src/config.ts";
 import { secretRoute } from "../src/sandbox.ts";
 import { launchRequest, Template } from "../src/leases.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
-import { SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases as watch } from "../src/speaker.ts";
+import { hostApproved, registerHost, SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases as watch } from "../src/speaker.ts";
 
 // speaker's own WebSocket library, typed from speaker's @types/ws.
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -228,6 +228,24 @@ test("a template's want becomes the task's first request, labelled and timed as 
   assert.match(approvals, /launch template packages: Install PyPI and npm packages/);
   // The template's duration is what the card preselects.
   assert.match(approvals, /<option value="1d" selected/);
+});
+
+test("registering learns speaker's proxy and SSH ports into config.json, and the host is approved only once the owner says so", async (t) => {
+  const f = await fixture(t, { proxy: true });
+  const dir = await mkdtemp(join(tmpdir(), "bottle-register-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const configPath = join(dir, "config.json");
+  const config = { ...f.config, stateRoot: dir } as Config;
+  await writeFile(configPath, JSON.stringify({ speaker: { url: f.url }, guestImage: "kept" }));
+
+  const id = await registerHost(config, configPath, "bottle");
+  assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+    speaker: { url: f.url, proxyPort: f.config.speaker.proxyPort },
+    guestImage: "kept",
+  });
+  assert.equal(await hostApproved(config), false);
+  assert.equal((await f.ownerPost(`/hosts/${id}/approve`)).status, 303);
+  assert.equal(await hostApproved(config), true);
 });
 
 test("bottle-school reports its shares to speaker as not mountable, since its folders arrive over SSH", async (t) => {

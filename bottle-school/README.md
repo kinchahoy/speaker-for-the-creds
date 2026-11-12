@@ -16,26 +16,22 @@ bottle-school runs Pi inside disposable [microsandbox](https://github.com/superr
 The Linux host needs hardware virtualization, KVM access, Docker for image builds, and `setsid`. Add the service account to the `kvm` group; start a new login session afterward. Run the service as the owner account that holds its configuration and archives.
 {.ai}
 
-Run these commands from the repository root:
+Run from the repository root (`mise trust && mise install` once; `init` runs `mise run install` itself):
 {.ai}
 
 ```sh
-mise run install
-cp bottle-school/.env.example bottle-school/.env   # set LLM_UPSTREAM, LLM_MODEL, SPEAKER_URL
-mise run setup
-mise run doctor
+mise run init bottle-school
 ```
 
-Host-specific values (model endpoint, speaker URL) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
+The guided setup checks KVM access, Docker, `setsid` and 20 GiB free on the chosen home, then asks for bottle-school's home (default `~/.local/share/bottle-school`, everything created private, mode 700), its control and guest ports (7001/7002), speaker's URL, and the model server (`host:port`, with the model picked from its `/v1/models`). It writes `bottle-school/config.json`, asks before building the guest image (about 10 GiB, several minutes), registers this host with speaker and waits while you approve it at the link it prints, and offers to start bottle-school and run a smoke-test task. Every question has a flag, so it also runs unattended: `mise run init bottle-school --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model` (`--home`, `--control-port`, `--guest-port`, `--image`, `--config`, `--force`, `--skip-build`, `--skip-register`, `--skip-smoke`). Speaker's URL must be an address the VM can reach, so not `127.0.0.1`, and the home path must stay short (about 55 bytes for `<home>/state/microsandbox`), because microsandbox puts unix sockets below it. On a separate machine from speaker, run `mise run init speaker` there first (see [speaker](../speaker/README.md)), then this on the sandbox machine. `mise run doctor` rechecks the host later.
 {.ai}
 
-To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`. bottle-school holds no secrets: see "Secrets and speaker's proxy". The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
+To configure by hand instead of `init`, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`. bottle-school holds no secrets: see "Secrets and speaker's proxy". The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
-- `speaker.proxyPort` is speaker's `PROXY_PORT`, on the same host as `speaker.url`. Set it to use `secret:` items; without it a task that is granted a secret cannot reach the secret's hosts (the request is refused with that message).
-- `speaker.sshPort` is speaker's `SSH_PORT`, on the same host as `speaker.url`. It is needed for `folder:` grants (see "The VM").
+- `speaker.proxyPort` and `speaker.sshPort` are speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-cli register` learns them from speaker's reply and writes them here; set them by hand only if you skip registering. The proxy port is needed for `secret:` items (without it a task granted a secret cannot reach the secret's hosts) and the SSH port for `folder:` grants (see "The VM").
 - `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.
 - `shareRoots` defines the host folders a grant may expose. Begin with no sensitive shares and one task.
@@ -47,14 +43,15 @@ To configure by hand instead, copy `config.example.json` to `config.json`. Choos
 
 <sub>AI-written</sub>
 
+`mise run init bottle-school` builds the guest image, registers the host and can start the service. To do those steps by hand:
+
 ```sh
 mise run guest-build pi-v5-guest
-mise run bottle-cli register
-# Approve the sandbox host in speaker /admin before starting the service.
+mise run bottle-cli register   # prints the approve link; approve the sandbox host in speaker /admin
 mise run bottle
 ```
 
-`guest/Dockerfile` is a Debian slim image in five layers (apt system packages; Node via mise; Playwright with Chromium; the other mise tools in `guest/mise.toml` plus uv's CPython and the default environment in `guest/python/requirements.in`; Pi and its extensions). Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi; the extensions stay pinned and everything else takes the latest release. `guest-build` builds the image with `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` builds both where Docker has emulation), then loads it into microsandbox's storage under `<stateRoot>/microsandbox` (`stateRoot` from `config.json`). It needs `config.json`, so run `mise run setup` first. Builds need internet access and about 10 GiB of disk space.
+`guest/Dockerfile` is a Debian slim image in five layers (apt system packages; Node via mise; Playwright with Chromium; the other mise tools in `guest/mise.toml` plus uv's CPython and the default environment in `guest/python/requirements.in`; Pi and its extensions). Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi; the extensions stay pinned and everything else takes the latest release. `guest-build` builds the image with `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` builds both where Docker has emulation), then loads it into microsandbox's storage under `<stateRoot>/microsandbox` (`stateRoot` from `config.json`). It needs `config.json`, so run `mise run init bottle-school` first (it offers this build). Builds need internet access and about 10 GiB of disk space.
 {.ai}
 
 From another terminal, launch and inspect a task:
@@ -164,7 +161,7 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 
 <sub>AI-written</sub>
 
-- **Secrets move to speaker.** Add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees), delete `secrets.env` and the `BROKER_SECRET_*` variables (startup refuses to run while they exist), set `speaker.proxyPort` in `config.json` to speaker's `PROXY_PORT`, and publish that port. A grant for `secret:<NAME>@host` in old groups becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now be a speaker secret.
+- **Secrets move to speaker.** Add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees), delete `secrets.env` and the `BROKER_SECRET_*` variables (startup refuses to run while they exist), register again (it learns speaker's `PROXY_PORT`), and publish that port. A grant for `secret:<NAME>@host` in old groups becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now be a speaker secret.
 - **Templates.** `bundle` becomes `want: ["group:<name>"]` and `bundleDuration` becomes `duration`; copy the new `templates.json` into `configRoot` or edit yours (the old keys fail validation).
 - **Catalog.** Remove remote MCP entries from `catalog.json` (`mcps` keeps only servers that run inside the VM) and add them in speaker's Setup as services (tick "MCP server"); replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
 
@@ -209,7 +206,7 @@ The owner deletes archives manually. An archival failure preserves the work tree
 
 <sub>AI-written</sub>
 
-Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop) and the secret route against a real speaker proxy. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. In particular check, with `PROXY_PORT` set in speaker and `speaker.proxyPort` here: `gh` and `git` with a granted secret through the egress proxy (placeholder in, real value only at the real host, a `git clone` through speaker), a revoke ending it, the model-request capture for routed requests, and certificate inheritance through dtach.
+Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop) and the secret route against a real speaker proxy. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. In particular check, with `PROXY_PORT` set in speaker (registration records it as `speaker.proxyPort` here): `gh` and `git` with a granted secret through the egress proxy (placeholder in, real value only at the real host, a `git clone` through speaker), a revoke ending it, the model-request capture for routed requests, and certificate inheritance through dtach.
 {.ai}
 
 - A missing `setsid` stops startup with a clear error; so does a microsandbox storage folder or parent that is group- or world-writable.

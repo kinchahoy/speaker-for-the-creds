@@ -16,13 +16,13 @@ the owner approves each request from a phone page. Sandbox hosts such as bottle-
 
 ```sh
 mise trust && mise install
-cp .env.example .env
-chmod 600 .env
-mise run install
-mise run speaker
+mise run init speaker
 ```
 
-Open `http://localhost:3000/admin`. The first visit asks you to set the owner password; after every restart you sign in with it, which unlocks the stored keys (see Keys and sign-in).
+The guided setup (run it on the machine that hosts speaker) asks where speaker keeps its data (default `~/.local/share/speaker`, private), the web, secrets-proxy and SSH ports (3000, 3128, 2222; each must be free), the address agents and VMs will use (it offers this machine's LAN address), whether speaker is behind a reverse proxy (then it sets `TRUSTED_PROXY` and reminds you to open the proxy and SSH ports directly and raise the proxy timeout above 120 s), and the owner password, typed twice. It creates the encrypted store, writes `speaker/.env` and offers to start speaker. Every question has a flag for unattended use: `printf '%s\n' "$PASSWORD" | mise run init speaker --yes --password-stdin --data-dir DIR --address IP` (also `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, `--force`). On a separate sandbox machine, run `mise run init bottle-school` there afterwards.
+{.ai}
+
+Open `PUBLIC_URL/admin` and sign in with the password you chose; after every restart you sign in again, which unlocks the stored keys (see Keys and sign-in). Start it later with `mise run speaker`.
 {.ai}
 
 <!-- author: ai -->
@@ -90,7 +90,7 @@ to the configured notification service.
 All service keys, secrets and speaker's SSH key live in one file, `DATA_DIR/store.json`: a random data key, wrapped by a key derived (scrypt) from the owner password, and every secret sealed with it (AES-256-GCM). Unwrapping the data key is the password check; no password hash is stored, and clear values exist only in memory after sign-in.
 {.ai}
 
-- The first visit to `/admin` sets the owner password. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited; plain HTTP from another machine works but the sign-in page warns that the password crosses the network unencrypted.
+- `mise run init speaker` sets the owner password (without it, the first visit to `/admin` does). Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited; plain HTTP from another machine works but the sign-in page warns that the password crosses the network unencrypted.
 - Speaker starts locked when a store exists: agent and sandbox-host calls answer `503` `locked` with a `tell_user` line, `/admin` shows only sign-in, and one push (if ntfy is set) says to sign in. Signing in unlocks.
 - Setup lists Secrets: name, value (write-only), allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup; it re-wraps the data key. Forgot it: delete `store.json` and speaker resets, and you re-enter every key.
@@ -150,7 +150,7 @@ NTFY_TOKEN=your-publish-token
 
 <sub>AI-written</sub>
 
-Run from `speaker/`. The included Compose file builds the image, binds port 3000 to host loopback, and stores state in a named volume.
+Run from `speaker/`. (`mise run init speaker` is for running without Docker: it creates the store in a host directory, which Compose does not use; in Docker the owner password is set on the first visit to `/admin`.) The included Compose file builds the image, binds port 3000 to host loopback, and stores state in a named volume.
 {.ai}
 
 ```sh

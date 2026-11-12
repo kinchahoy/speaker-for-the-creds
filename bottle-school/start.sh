@@ -11,7 +11,7 @@ for dir in /opt/homebrew/opt/util-linux/bin /usr/local/opt/util-linux/bin; do
 done
 command -v setsid >/dev/null || { echo "setsid is required" >&2; exit 1; }
 config="${PI_V2_CONFIG:-$root/config.json}"
-[ -f "$config" ] || { echo "$config is missing: run mise run setup" >&2; exit 1; }
+[ -f "$config" ] || { echo "$config is missing: run mise run init bottle-school" >&2; exit 1; }
 # microsandbox refuses a storage root that is, or sits under, a group- or world-writable directory (sticky ones such as /tmp are fine).
 node -e '
 	const { readFileSync, statSync } = require("node:fs"), { dirname, join, resolve } = require("node:path");

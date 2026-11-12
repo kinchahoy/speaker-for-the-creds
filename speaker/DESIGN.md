@@ -232,7 +232,7 @@ Services, rules and groups stay behind authentication. Targets and shares are ne
 | `POST /_speaker/requests` | agent, sandbox host for its agents | request items and groups |
 | `* /<service>/<path>` | agent | forwarded call, with optional `Speaker-Wait` |
 | SSH on one unusual port | agent with an SSH or folder grant | commands and file transfer, relayed |
-| `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host |
+| `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |
 | `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents |
 | `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
 | `GET /_speaker/health` | anyone | liveness |

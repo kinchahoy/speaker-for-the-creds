@@ -1,0 +1,86 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { homedir, networkInterfaces } from "node:os";
+import { join } from "node:path";
+import test, { type TestContext } from "node:test";
+import { promisify } from "node:util";
+import { loadConfig } from "../src/config.ts";
+
+const init = join(import.meta.dirname, "..", "..", "init.ts");
+const lan = Object.values(networkInterfaces())
+  .flat()
+  .find((entry) => entry?.family === "IPv4" && !entry.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(entry.address))?.address;
+const kvm = (() => {
+  try {
+    accessSync("/dev/kvm", constants.R_OK | constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const listen = async (t: TestContext, host: string, handler: Parameters<typeof createServer>[1]) => {
+  const server: Server = createServer(handler).listen(0, host);
+  t.after(() => void server.close());
+  await new Promise((done) => server.once("listening", done));
+  return (server.address() as AddressInfo).port;
+};
+
+// The real home filesystem: /tmp can be a small RAM disk, and init wants 20 GiB free.
+const scratch = (t: TestContext) => {
+  mkdirSync(join(homedir(), ".cache"), { recursive: true });
+  const dir = mkdtempSync(join(homedir(), ".cache", "bi-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
+
+// Asynchronous: the fake speaker and model servers live in this process and must keep answering.
+const run = async (args: string[]) => {
+  const flags = [init, "bottle-school", "--yes", "--skip-build", "--skip-register", "--skip-smoke", ...args];
+  return promisify(execFile)(process.execPath, flags).then(
+    (done) => ({ status: 0, ...done }),
+    (failed: { code: number; stdout: string; stderr: string }) => ({ status: failed.code, stdout: failed.stdout, stderr: failed.stderr }),
+  );
+};
+
+test("init bottle-school writes a config.json that loads, with private directories and the chosen model", { skip: !kvm || !lan }, async (t) => {
+  const dir = scratch(t);
+  const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
+  const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }, { id: "big" }] })));
+  const configPath = join(dir, "config.json");
+  const result = await run([
+    ...["--home", join(dir, "h"), "--config", configPath, "--image", "pi-init-unit"],
+    ...["--control-port", "7391", "--guest-port", "7392", "--speaker-url", `http://${lan}:${speaker}`],
+    ...["--model-endpoint", `127.0.0.1:${model}`, "--model", "big"],
+  ]);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const config = loadConfig(configPath);
+  assert.equal(config.guestImage, "pi-init-unit");
+  assert.deepEqual([config.controlPort, config.guestPort], [7391, 7392]);
+  assert.equal(config.speaker.url, `http://${lan}:${speaker}`);
+  assert.equal(config.localModel.upstream, `127.0.0.1:${model}`);
+  assert.deepEqual(config.localModel.models, [{ id: "big", label: "big" }]);
+  for (const directory of [config.configRoot, config.stateRoot, config.outputRoot, join(dir, "h")])
+    assert.equal(statSync(directory).mode & 0o777, 0o700, directory);
+  assert.ok(existsSync(join(config.configRoot, "templates.json")) && existsSync(join(config.configRoot, "catalog.json")));
+  assert.match(readFileSync(configPath, "utf8"), /\n$/);
+});
+
+test("init bottle-school refuses a loopback speaker URL, which a VM cannot reach, and writes no config", { skip: !kvm }, async (t) => {
+  const dir = scratch(t);
+  const result = await run(["--home", join(dir, "h"), "--config", join(dir, "config.json"), "--speaker-url", "http://127.0.0.1:3000", "--model-endpoint", "127.0.0.1:1"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /A VM cannot reach a loopback address/);
+  assert.equal(existsSync(join(dir, "config.json")), false);
+});
+
+test("init bottle-school refuses a home so deep that microsandbox's unix sockets would not fit", { skip: !kvm }, async (t) => {
+  const dir = scratch(t);
+  const result = await run(["--home", join(dir, "a-home-with-a-rather-long-name-for-the-sockets"), "--config", join(dir, "config.json")]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /too long for microsandbox's unix sockets.*Fix: choose a shorter --home/);
+});

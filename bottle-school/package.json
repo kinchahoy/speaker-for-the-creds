@@ -5,6 +5,7 @@
   "type": "module",
   "description": "microsandbox micro-VMs for local agents, enforcing speaker-for-the-creds leases.",
   "dependencies": {
+    "@clack/prompts": "^1.9.0",
     "@hono/node-server": "^2.1.5",
     "hono": "^4.13.16",
     "microsandbox": "0.7.14",

@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ProxyAgent } from "undici";
 import { z } from "zod";
 import type { Config } from "./config.ts";
@@ -56,6 +57,46 @@ export const readHostToken = (config: Config) => {
   return readFileSync(path, "utf8").trim();
 };
 
+const Registered = z.object({ id: z.string(), proxyPort: z.number().optional(), sshPort: z.number().optional() });
+
+/**
+ * Registers this machine as a sandbox host: writes a fresh token to the state directory, asks speaker to list the host
+ * for the owner's approval, and records speaker's proxy and SSH ports (which its reply carries) in config.json.
+ * Returns the id the owner sees in speaker /admin.
+ */
+export const registerHost = async (config: Config, configPath: string, name: string) => {
+  const token = randomBytes(32).toString("hex");
+  const response = await fetch(`${config.speaker.url}/_speaker/hosts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name,
+      kinds: ["secret", "site", "folder", "mcp", "ext"],
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+    }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch((error: Error & { cause?: { code?: string } }) => {
+    throw new Error(`cannot reach speaker at ${config.speaker.url} (${error.cause?.code ?? error.message}); is it running?`);
+  });
+  if (!response.ok) throw new Error(`speaker POST hosts returned ${response.status}: ${await response.text()}`);
+  const { id, proxyPort, sshPort } = Registered.parse(await response.json());
+  writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
+  const file = JSON.parse(readFileSync(configPath, "utf8"));
+  file.speaker = { url: config.speaker.url, ...(proxyPort ? { proxyPort } : {}), ...(sshPort ? { sshPort } : {}) };
+  writeFileSync(configPath, `${JSON.stringify(file, null, 2)}\n`);
+  return id;
+};
+
+/** Whether the owner has approved this host: speaker answers 401 `approval_required` to a pending or unknown token. */
+export const hostApproved = async (config: Config) => {
+  const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+    headers: { authorization: `Bearer ${readHostToken(config)}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  await response.body?.cancel();
+  return response.status !== 401;
+};
+
 export const speakerClient = (config: Config, token: string) => {
   const call = async (method: string, path: string, body?: unknown) => {
     const response = await fetch(`${config.speaker.url}/_speaker/${path}`, {
@@ -97,7 +138,7 @@ export type Speaker = ReturnType<typeof speakerClient>;
 export const speakerProxy = async (config: Config, agentToken: string) => {
   const { proxyPort } = config.speaker;
   if (!proxyPort)
-    throw new Error('speaker.proxyPort is not set in config.json: set it to speaker\'s PROXY_PORT to use secrets');
+    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle-cli register` again to learn it");
   const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok)
     throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);

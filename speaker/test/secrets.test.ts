@@ -78,8 +78,14 @@ async function setup(t: TestContext) {
 
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-secrets-'))
   const proxyPort = await freePort()
+  const sshPort = await freePort()
   const app = await createApp(
-    readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', PROXY_PORT: String(proxyPort) }),
+    readConfig({
+      DATA_DIR: dataDir,
+      PUBLIC_URL: 'http://localhost',
+      PROXY_PORT: String(proxyPort),
+      SSH_PORT: String(sshPort),
+    }),
   )
   const server = serve({
     fetch: app.fetch,
@@ -90,6 +96,7 @@ async function setup(t: TestContext) {
   await once(server, 'listening')
   const url = `http://127.0.0.1:${port(server)}`
   t.after(async () => {
+    await app.stop()
     app.proxy?.closeAllConnections()
     app.proxy?.close()
     server.closeAllConnections()
@@ -155,7 +162,7 @@ async function setup(t: TestContext) {
   const revokeAll = async () => {
     for (const id of await grantIds()) await ownerForm('/grants/revoke', { id })
   }
-  return { call, proxyPort, seen, keyless, agent, revokeAll, upstreamPort: port(upstream) }
+  return { call, proxyPort, sshPort, seen, keyless, agent, revokeAll, upstreamPort: port(upstream) }
 }
 type Me = {
   secrets: Record<
@@ -227,6 +234,19 @@ async function through(
   tunnel.close()
   return replies
 }
+
+test("registering a sandbox host tells it speaker's proxy and SSH ports", async (t) => {
+  const s = await setup(t)
+  const reply = await s.call('/_speaker/hosts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'test', kinds: ['secret'], tokenHash: sha('host-token') }),
+  })
+  assert.equal(reply.status, 201)
+  const { id, ...rest } = (await reply.json()) as { id: string }
+  assert.ok(id)
+  assert.deepEqual(rest, { status: 'pending', proxyPort: s.proxyPort, sshPort: s.sshPort })
+})
 
 test('placeholders become the real secret for covered hosts only, in Bearer and Basic credentials', async (t) => {
   const s = await setup(t)
