@@ -28,7 +28,7 @@ type Snapshot = {
 }
 const port = (server: { address(): string | AddressInfo | null }) => (server.address() as AddressInfo).port
 
-async function setup(t: TestContext, bundles: object = {}) {
+async function setup(t: TestContext, bundles: object = {}, env: Record<string, string> = {}) {
   const calls: { url?: string; headers: IncomingHttpHeaders }[] = []
   const upstream = createServer(async (req, res) => {
     calls.push({ url: req.url, headers: req.headers })
@@ -59,7 +59,9 @@ async function setup(t: TestContext, bundles: object = {}) {
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
   await writeFile(join(dataDir, 'bundles.json'), JSON.stringify(bundles))
-  const app = await createApp(readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost' }))
+  const app = await createApp(
+    readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }),
+  )
   const server = serve({
     fetch: app.fetch,
     port: 0,
@@ -632,14 +634,23 @@ test('an agent extends its grant itself within the approved span, and asks the o
   assert.equal(((await large.json()) as { status: string }).status, 'pending')
 })
 
-test('a session token works only from the address it enrolled from', async (t) => {
+test('a session token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {
   const f = await setup(t)
-  const from = (ip: string) => ({ 'x-forwarded-for': ip })
-  const { id } = (await (await enroll(f, 'tok', from('100.64.0.7'))).json()) as { id: string }
+  const { id } = (await (await enroll(f, 'tok', { 'x-forwarded-for': '100.64.0.7' })).json()) as { id: string }
   await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7') } })
+  // Bound to the socket address (127.0.0.1); a spoofed header changes nothing.
+  const spoofed = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  assert.equal(spoofed.status, 200)
+})
+
+test('a trusted proxy names the caller with the last X-Forwarded-For entry', async (t) => {
+  const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
+  const from = (chain: string) => ({ 'x-forwarded-for': chain })
+  const { id } = (await (await enroll(f, 'tok', from('6.6.6.6, 100.64.0.7'))).json()) as { id: string }
+  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
+  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
   assert.equal(home.status, 200)
-  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.9') } })
+  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
   assert.equal(away.status, 401)
   assert.equal(((await away.json()) as { error: string }).error, 'source_mismatch')
 })

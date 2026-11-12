@@ -263,6 +263,8 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       NTFY_TOKEN: z.string().optional(),
       // Enables SSH certificates; DATA_DIR/ssh-hosts.json must then list the target hosts.
       SSH_CA_KEY: z.string().min(1).optional(),
+      // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
+      TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
       SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
       // When on, GET /_speaker/providers answers without a token (names, auth type and policy only).
       PUBLIC_PROVIDERS: z
@@ -882,14 +884,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
 
   const base = config.PUBLIC_URL.replace(/\/$/, '')
   const tellUser = (anchor: string) => `Ask the owner to approve at ${base}/admin#${anchor}`
-  // The caller's address: the first X-Forwarded-For hop (speaker runs behind the owner's reverse proxy), else the
-  // socket; in-process app.fetch callers have neither and share 'unknown'.
-  const sourceOf = (c: Context) =>
-    (
-      c.req.header('x-forwarded-for')?.split(',')[0].trim() ||
-      (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ||
-      'unknown'
-    ).replace(/^::ffff:/, '')
+  // The caller's address is the socket's; only the trusted proxy may name another one, with the last
+  // X-Forwarded-For entry it appended. In-process app.fetch callers have no socket and share 'unknown'.
+  const sourceOf = (c: Context) => {
+    const socket = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket
+    const peer = socket?.remoteAddress?.replace(/^::ffff:/, '')
+    if (peer === undefined) return 'unknown'
+    if (peer !== config.TRUSTED_PROXY) return peer
+    return (
+      c.req
+        .header('x-forwarded-for')
+        ?.split(',')
+        .at(-1)
+        ?.trim()
+        .replace(/^::ffff:/, '') || peer
+    )
+  }
   // Every agent-facing 401 names its cause and the next step, and points at the skill.
   const unauthorized = (c: Context, error: string, fields: Record<string, string>) => {
     c.header('www-authenticate', 'Bearer realm="speaker"')

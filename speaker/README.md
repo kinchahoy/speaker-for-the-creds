@@ -210,8 +210,9 @@ protected.
 
 - A call sent with `Speaker-Wait: 60` (and `Speaker-Reason`) waits for your decision and is forwarded once approved.
 - Every agent 401 and 403 carries a `next` step and a `tell_user` line with the approval link.
-- A session works only from the address it enrolled from: the first `X-Forwarded-For` hop, so the reverse proxy
-  must set that header and speaker must not be reachable around it.
+- A session works only from the address it enrolled from: the socket address. Behind a reverse proxy, set
+  `TRUSTED_PROXY` to the proxy's IP; speaker then takes the last `X-Forwarded-For` entry from it and ignores that
+  header from every other sender.
 - Agents extend their own grants up to three times, each by at most the span you approved; larger extensions
   come to you as a new request. A denial stands for 15 minutes without re-asking you.
 {.ai}
