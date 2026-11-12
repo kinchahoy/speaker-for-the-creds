@@ -20,7 +20,7 @@ import { createApp, readConfig } from "../../speaker/server.ts";
 import * as x509 from "../../speaker/node_modules/@peculiar/x509/build/index.js";
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
-import { secretRoute } from "../src/gondolin.ts";
+import { secretRoute } from "../src/backend.ts";
 import { launchRequest, Template } from "../src/leases.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
 import { SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases } from "../src/speaker.ts";

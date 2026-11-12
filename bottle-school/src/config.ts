@@ -26,6 +26,8 @@ const HostedProviderSchema = z.object({
 
 const ConfigFile = z
   .object({
+    // Supported sandbox backends; src/backends/index.ts holds the implementations.
+    backend: z.enum(["gondolin"], { error: 'backend must be one of the supported backends: gondolin' }).default("gondolin"),
     bindHost: z.string(),
     controlPort: port,
     guestPort: port,

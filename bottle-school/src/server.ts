@@ -1,4 +1,3 @@
-import { gcSessions } from "@earendil-works/gondolin";
 import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
@@ -6,6 +5,7 @@ import { html } from "hono/html";
 import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
+import { backends } from "./backends/index.ts";
 import { assertNoHostSecrets, loadConfig, type Config } from "./config.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
@@ -187,8 +187,8 @@ export const startBroker = (config: Config) => {
 if (import.meta.main) {
   const configPath = process.env.PI_V2_CONFIG ?? `${import.meta.dirname}/../config.json`;
   const config = loadConfig(configPath);
-  const staleSessions = await gcSessions();
-  if (staleSessions) console.log(`reconciled ${staleSessions} stale Gondolin session records`);
+  const staleSessions = await backends[config.backend].reconcile();
+  if (staleSessions) console.log(`reconciled ${staleSessions} stale ${config.backend} session records`);
   const { tasks } = startBroker(config);
 
   let shuttingDown = false;

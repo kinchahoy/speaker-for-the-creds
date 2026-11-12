@@ -14,7 +14,8 @@ import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import type { Config } from "./config.ts";
-import { bootGuest, note, shareProvider, type CapturedBody, type Guest, type Live } from "./gondolin.ts";
+import { note, type CapturedBody, type Guest, type Live } from "./backend.ts";
+import { backends } from "./backends/index.ts";
 import { attendedFor, folderRef, launchRequest, secretHosts, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
 import { availableModels, pi, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerClient, speakerProxy, watchLeases, type Lease, type SecretInfo, type Snapshot } from "./speaker.ts";
@@ -251,7 +252,7 @@ export class Tasks {
         [],
         this.secrets,
       );
-      const guest = await bootGuest(
+      const guest = await backends[this.config.backend].boot(
         this.config,
         live,
         template.limits,
@@ -431,7 +432,7 @@ export class Tasks {
         continue;
       }
       if (task.live.shares.has(share!) && mode !== "rw") continue;
-      task.live.shares.set(share!, { expiresAt, provider: shareProvider(root, mode === "rw") });
+      task.live.shares.set(share!, { expiresAt, root, writable: mode === "rw" });
     }
 
     // Pi loads MCP servers and extensions only at start, so a changed set restarts it at the next idle boundary.
