@@ -347,6 +347,10 @@ export class Tasks {
     for (const task of this.byId.values()) {
       const mine = leases.filter((lease) => {
         if (lease.subjectId !== task.subjectId) return false;
+        if (lease.kind === "folder" && !backends[this.config.backend].folders) {
+          this.#event(task, `refused folder ${lease.ref}: folders are not available on the ${this.config.backend} backend yet`);
+          return false;
+        }
         const valid = lease.kind === "credential" ||
           (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && secretHosts.safeParse(lease.hosts).success) ||
           (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && Object.hasOwn(this.config.shareRoots, lease.ref.split(":")[0]!)) ||

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { rmSync, writeFileSync } from "node:fs";
+import { BlockList } from "node:net";
 import type { Dispatcher } from "undici";
 import type { Config } from "./config.ts";
 import { hostMatches, unexpired, type Timed } from "./leases.ts";
@@ -70,10 +73,12 @@ export type Backend = {
     speaker: { url: string; token: string },
     proxy: () => Promise<Dispatcher>,
   ) => Promise<Guest>;
+  /** Whether `live.shares` folders reach the guest; a backend without them has the service refuse `folder:` grants. */
+  folders: boolean;
   /** The owner's terminal into a running guest, as a command to spawn. */
-  attach: (sessionId: string, command: string[]) => { file: string; args: string[] };
+  attach: (config: Config, sessionId: string, command: string[]) => { file: string; args: string[] };
   /** Drop records of VMs a crashed service left behind; returns how many. */
-  reconcile: () => Promise<number>;
+  reconcile: (config: Config) => Promise<number>;
 };
 
 export const note = (live: Pick<Live, "events">, text: string) => {
@@ -123,3 +128,139 @@ export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: (
   };
 };
 
+
+const internal = new BlockList();
+for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["255.0.0.0", 8]] as const)
+  internal.addSubnet(network, prefix, "ipv4");
+internal.addAddress("::1", "ipv6");
+export const isInternalIp = (ip: string) => internal.check(ip, ip.includes(":") ? "ipv6" : "ipv4");
+
+const capturedHeaders = new Set([
+  "accept",
+  "content-length",
+  "content-type",
+  "date",
+  "openai-beta",
+  "openai-processing-ms",
+  "anthropic-version",
+  "anthropic-ratelimit-requests-remaining",
+  "anthropic-ratelimit-tokens-remaining",
+  "anthropic-ratelimit-input-tokens-remaining",
+  "anthropic-ratelimit-output-tokens-remaining",
+  "retry-after",
+  "server",
+  "traceparent",
+  "tracestate",
+  "user-agent",
+  "x-api-version",
+  "x-ratelimit-remaining-requests",
+  "x-ratelimit-remaining-tokens",
+  "x-ratelimit-reset-requests",
+  "x-ratelimit-reset-tokens",
+  "x-request-id",
+  "request-id",
+]);
+const safeHeaders = (headers: Headers) =>
+  Object.fromEntries([...headers].filter(([name]) => capturedHeaders.has(name)));
+
+/**
+ * Records one finished request in `live.httpResponses` for trace.jsonl: text and model bodies are saved as blobs in
+ * `captureDir`, and the oldest record (with its blobs) is dropped past 1,000.
+ */
+export const recordHttp = (
+  live: Live,
+  captureDir: string,
+  isModel: boolean,
+  request: { method: string; url: string; headers: Headers },
+  response: { status: number; headers: Headers } | null | undefined,
+  requestBody: Buffer,
+  responseBody: Buffer,
+  info: {
+    durationMs: number;
+    bytes?: number;
+    requestBytes?: number;
+    requestLimit?: number;
+    responseLimit?: number;
+    complete: boolean;
+    error?: string;
+  },
+) => {
+  const saveBody = (
+    direction: string,
+    body: Buffer,
+    totalBytes: number,
+    limitBytes: number,
+    contentType: string | null,
+    incomplete = false,
+  ): CapturedBody | undefined => {
+    if (!totalBytes) return;
+    if (
+      !isModel &&
+      !contentType?.match(
+        /^(text\/|application\/(json|[^;]+\+json|xml|javascript|x-www-form-urlencoded)|application\/.*\+xml)/i,
+      )
+    )
+      return;
+    const name = `${randomUUID()}.${direction}.bin`;
+    writeFileSync(`${captureDir}/${name}`, body, { flag: "wx" });
+    live.httpBodyBytes += body.length;
+    return {
+      path: `blobs/${name}`,
+      ...(contentType ? { contentType } : {}),
+      capturedBytes: body.length,
+      totalBytes,
+      limitBytes,
+      truncated: body.length < totalBytes || incomplete,
+    };
+  };
+  const requestBytes = Math.max(info.requestBytes ?? 0, requestBody.length);
+  const responseBytes = Math.max(info.bytes ?? 0, responseBody.length);
+  const requestCapture = saveBody(
+    "request",
+    requestBody,
+    requestBytes,
+    info.requestLimit ?? 0,
+    request.headers.get("content-type"),
+  );
+  const responseCapture = saveBody(
+    "response",
+    responseBody,
+    responseBytes,
+    info.responseLimit ?? 0,
+    response?.headers.get("content-type") ?? null,
+    !info.complete,
+  );
+  const captureStatus = (total: number, body?: CapturedBody) =>
+    !total
+      ? ("empty" as const)
+      : !body
+        ? ("metadata_only" as const)
+        : body.truncated
+          ? ("truncated" as const)
+          : ("complete" as const);
+  if (live.httpResponses.length === 1_000) {
+    const removed = live.httpResponses.shift()!;
+    for (const body of [removed.requestBody, removed.responseBody])
+      if (body) {
+        rmSync(`${captureDir}/${body.path.slice("blobs/".length)}`, { force: true });
+        live.httpBodyBytes -= body.capturedBytes;
+      }
+    live.httpResponsesOmitted += 1;
+  }
+  live.httpResponses.push({
+    at: new Date().toISOString(),
+    method: request.method,
+    destination: new URL(request.url).origin,
+    requestHeaders: safeHeaders(request.headers),
+    status: response?.status ?? 0,
+    responseHeaders: response ? safeHeaders(response.headers) : {},
+    durationMs: info.durationMs,
+    ...(info.bytes === undefined ? {} : { bytes: info.bytes }),
+    complete: info.complete,
+    ...(info.error ? { error: info.error } : {}),
+    requestCapture: captureStatus(requestBytes, requestCapture),
+    responseCapture: captureStatus(responseBytes, responseCapture),
+    ...(requestCapture ? { requestBody: requestCapture } : {}),
+    ...(responseCapture ? { responseBody: responseCapture } : {}),
+  });
+};

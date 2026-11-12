@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-bottle-school runs Pi inside disposable Gondolin micro-VMs. Speaker approves capabilities; bottle-school applies their leases.
+bottle-school runs Pi inside disposable micro-VMs (Gondolin by default, or microsandbox: see "The microsandbox backend"). Speaker approves capabilities; bottle-school applies their leases.
 {.ai}
 
 <!-- author: ai -->
@@ -32,6 +32,7 @@ Host-specific values (model endpoint, speaker URL, VM backend) live only in the 
 To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`. bottle-school holds no secrets: see "Secrets and speaker's proxy". The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
+- `backend` selects the sandbox runtime: `gondolin` (default) or `microsandbox`. The rest of this file describes Gondolin except the section on the microsandbox backend.
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` is speaker's `PROXY_PORT`, on the same host as `speaker.url`. Set it to use `secret:` items; without it a task that is granted a secret cannot reach the secret's hosts (the request is refused with that message).
@@ -111,6 +112,33 @@ Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI
 {.ai}
 
 A task is attended (the owner is at its terminal) or unattended (nobody is). Without `--prompt` a task defaults to attended; with one, to unattended. `--attended` or `--unattended` overrides that, and a template's `"attended"` fixes it; a flag that contradicts the template is refused. An attended task loads the ask-user-question extension (`ask_user_question` tool) regardless of its template, because it adds presence rather than access. An unattended task does not load it, and its system prompt says that nobody is watching: the agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which the owner answers in speaker. Mode does not change archival: a task with a prompt archives when Pi writes `/output/DONE`, and every task archives at its deadline.
+{.ai}
+
+<!-- author: ai -->
+
+## The microsandbox backend
+
+<sub>AI-written</sub>
+
+`"backend": "microsandbox"` in `config.json` runs each task in a [microsandbox](https://github.com/superradcompany/microsandbox) VM (libkrun, from the `microsandbox` npm package) instead of a Gondolin VM; `"gondolin"` stays the default. The guest has **no network device**. Its only doors are four host unix sockets on guest vsock ports, which `socat` in the guest exposes as localhost ports: an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`), the model endpoint (`http://model.internal`), speaker (`SPEAKER_URL`), and the control channel Pi's status reports use. `/work`, `/output` and `/etc/pi-v2` are bind mounts of the same host directories as on Gondolin.
+{.ai}
+
+- **Egress.** One `proxy-chain` server per task decides every request from the live lease view: a host on the task's allow list goes direct (to public IPv4 addresses only), a host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials, and anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate (fetched from `/_speaker/proxy/ca.pem` at boot, installed in the guest's trust store, and set as `NODE_EXTRA_CA_CERTS`); without `speaker.proxyPort` secrets are unavailable, as on Gondolin.
+- **Model endpoint.** A small forwarder to `localModel.upstream` that counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl` with the same code as the Gondolin backend. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`; the forwarder sends those through speaker's proxy once the provider's secret is granted.
+- **Speaker.** The speaker door allows the same paths as Gondolin and adds the task's token itself, so the guest never holds it (`SPEAKER_TOKEN` is only a placeholder).
+- **Terminal.** `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
+- **Folders are not available yet.** A `folder:` grant is refused with `folders are not available on the microsandbox backend yet` (recorded in the task's events) and is not reported in force. Folders over `sshfs` through speaker are the planned way; the image already contains `sshfs`.
+- **Storage.** microsandbox keeps images and VM records in `<stateRoot>/microsandbox`, created with mode 700. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`), so use a `stateRoot` whose parents are not group-writable.
+{.ai}
+
+Build the guest image into that storage before the first task (it needs Docker, and reuses the Gondolin guest's `guest/Dockerfile` as its base):
+{.ai}
+
+```sh
+guest/build-microsandbox.sh <stateRoot> pi-v5-ms    # then set "guestImage": "pi-v5-ms" and "backend": "microsandbox"
+```
+
+The backend takes any OCI image, however it was built, as long as it holds Node, Pi, git, curl, `socat`, `sshfs`, `openssh-client` and `ca-certificates` and has been imported into microsandbox's cache under the `guestImage` name (it never pulls). The loading step is only `docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestImage>` (`msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder), so another image builder can replace the Dockerfile below without touching the backend. The shipped Dockerfile is the quickest route, not a polished image: `guest/microsandbox.Dockerfile` adds `socat` and `sshfs` to that base; the script `docker save`s the result and imports it with `msb load`. Linux needs `/dev/kvm` access and nothing else; the `microsandbox` package carries its own runtime. `mise run doctor` and `guest/build.sh` are Gondolin's and do not apply. Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, terminal resize.
 {.ai}
 
 <!-- author: ai -->
