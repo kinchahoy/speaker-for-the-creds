@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
       name: "request_capability",
       label: "Request capability",
       description:
-        "Ask the owner for items: a service, site, secret, folder, MCP server, Pi extension, or a named group. Waits up to 30 minutes for the owner's decision and returns what was granted and denied.",
+        "Ask the owner for items: a service, site, secret, folder, MCP server, Pi extension, or named group. Waits up to 30 minutes for the owner's decision, then returns what was granted and denied.",
       parameters: Type.Object({
         want: Type.Array(Type.String(), {
           description:
@@ -96,15 +96,15 @@ export default function (pi: ExtensionAPI) {
         const { granted = [], denied = [], applying = [], status, id } = result;
         const text =
           status === "pending"
-            ? "The owner has not decided yet; continue other work."
+            ? "The owner has not decided yet. Continue other work."
             : status === "expired"
-              ? `The request for ${params.want.join(", ")} expired undecided; continue other work.`
+              ? `The request for ${params.want.join(", ")} expired without a decision. Continue other work.`
               : `Granted: ${granted.join(", ") || "nothing"}. Denied: ${denied.join(", ") || "nothing"}.` +
                 (applying.length
-                  ? ` Granted but not in force yet: ${applying.join(", ")}; the sandbox is applying it (mcp: and ext: items appear after Pi restarts when idle). Retry what was blocked shortly.`
+                  ? ` Granted but not in force yet: ${applying.join(", ")}. The sandbox is applying it (mcp: and ext: items appear after Pi restarts at idle). Retry what was blocked shortly.`
                   : granted.length
-                    ? " Use it now: folders are at /input/<share>, websites work directly."
-                    : " Continue without it or explain what is blocked.");
+                    ? " Use it now: folders are at /input/<share>, and websites work directly."
+                    : " Continue without it, or explain what is blocked.");
         return { content: [{ type: "text", text }], details: { id, status, granted, denied, applying } };
       },
     }),
