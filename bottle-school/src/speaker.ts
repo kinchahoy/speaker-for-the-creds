@@ -160,7 +160,8 @@ const probeSpeaker = async (config: Config, token: string) => {
  * heard for `dropMs` (30 s: connection lost, or snapshots stopped) every lease is dropped until the next snapshot. It
  * reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker rejects the token, after
  * SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs of continuous outage. On
- * every connection it reports the shares it holds. Returns the function that reports the in-effect lease ids.
+ * every connection it reports the shares it holds. Returns the function that reports the in-effect lease ids; its `stop`
+ * closes the connection and ends the reconnecting.
  */
 export const watchLeases = (
   config: Config,
@@ -179,13 +180,16 @@ export const watchLeases = (
   let downSince = Date.now();
   let backoff = limits.retryMs;
   let stopped = false;
+  let retryTimer: NodeJS.Timeout | undefined;
   const fail = (message: string) => {
     if (stopped) return;
     stopped = true;
     onFatal(message);
   };
   const retry = async () => {
+    if (stopped) return;
     const probe = await probeSpeaker(config, token);
+    if (stopped) return;
     if (probe.fatal) return fail(probe.message);
     const limit = connected ? limits.outageMs : limits.firstConnectMs;
     const down = Date.now() - downSince;
@@ -195,7 +199,7 @@ export const watchLeases = (
           `Check that speaker is running and that speaker.url is right in the bottle-school config.json.`,
       );
     console.error(`${probe.message}; grants are dropped after ${limits.dropMs / 1000} s without speaker; retrying in ${backoff / 1000} s`);
-    setTimeout(open, backoff);
+    retryTimer = setTimeout(open, backoff);
     backoff = Math.min(backoff * 2, limits.maxBackoffMs);
   };
   const send = (message: object) => {
@@ -225,17 +229,24 @@ export const watchLeases = (
       void retry();
     };
   };
-  setInterval(() => {
+  const dropTimer = setInterval(() => {
     if (dropped || Date.now() - lastHeard < limits.dropMs) return;
     dropped = true;
     console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
     onSnapshot({ leases: [], requests: [] });
   }, Math.min(1_000, limits.dropMs / 4)).unref();
   open();
-  return (leaseIds: string[]) => {
+  const report = (leaseIds: string[]) => {
     const next = JSON.stringify([...leaseIds].sort());
     if (next === applied) return;
     applied = next;
     send({ type: "applied", grantIds: leaseIds });
   };
+  const stop = () => {
+    stopped = true;
+    clearInterval(dropTimer);
+    clearTimeout(retryTimer);
+    socket?.close();
+  };
+  return Object.assign(report, { stop });
 };

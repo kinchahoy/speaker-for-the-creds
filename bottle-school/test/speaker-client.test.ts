@@ -23,7 +23,7 @@ import type { Config } from "../src/config.ts";
 import { secretRoute } from "../src/backend.ts";
 import { launchRequest, Template } from "../src/leases.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
-import { SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases } from "../src/speaker.ts";
+import { SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases as watch } from "../src/speaker.ts";
 
 // speaker's own WebSocket library, typed from speaker's @types/ws.
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -37,6 +37,12 @@ const freePort = async () => {
   probe.close();
   await once(probe, "close");
   return free;
+};
+// watchLeases reconnects until stopped, which would keep this process alive: stop each watcher when its test ends.
+const watchLeases = (t: TestContext, ...args: Parameters<typeof watch>) => {
+  const report = watch(...args);
+  t.after(report.stop);
+  return report;
 };
 const until = async (ok: () => boolean | Promise<boolean>, timeoutMs = 10_000) => {
   const start = Date.now();
@@ -91,12 +97,6 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
       server.close();
     }
     await rm(dataDir, { recursive: true, force: true });
-  });
-  // watchLeases retries on timers; unref them so the test process can exit.
-  const realSetTimeout = globalThis.setTimeout;
-  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => realSetTimeout(...args).unref()) as typeof setTimeout;
-  t.after(() => {
-    globalThis.setTimeout = realSetTimeout;
   });
   const url = `http://127.0.0.1:${speakerPort}`;
   const config = { speaker: { url, ...(proxyPort ? { proxyPort } : {}) }, shareRoots: {} } as Config;
@@ -168,12 +168,13 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
 
   // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
   const fatal: string[] = [];
-  watchLeases(config, "unknown-token", () => {}, (message) => fatal.push(message));
+  watchLeases(t, config, "unknown-token", () => {}, (message) => fatal.push(message));
   await until(() => fatal.length === 1);
   assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-cli register/);
 
   const snapshots: Snapshot[] = [];
   const reportApplied = watchLeases(
+    t,
     config,
     token,
     (snapshot) => snapshots.push(snapshot),
@@ -235,7 +236,7 @@ test("bottle-school reports the shares it holds, and whether it can mount them, 
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
   t.after(() => rm(documents, { recursive: true, force: true }));
   const config = { ...f.config, shareRoots: { documents, ghost: join(documents, "missing") } } as Config;
-  watchLeases(config, token, () => {}, (message) => assert.fail(message));
+  watchLeases(t, config, token, () => {}, (message) => assert.fail(message));
   await until(async () => (await f.live()).grants.includes("shares: documents (VM mount), ghost (no VM mount)"));
 });
 
@@ -245,7 +246,7 @@ test("a microsandbox host reports its shares as not mountable, since its folders
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
   t.after(() => rm(documents, { recursive: true, force: true }));
   const config = { ...f.config, backend: "microsandbox", shareRoots: { documents } } as Config;
-  watchLeases(config, token, () => {}, (message) => assert.fail(message));
+  watchLeases(t, config, token, () => {}, (message) => assert.fail(message));
   await until(async () => (await f.live()).grants.includes("shares: documents (no VM mount)"));
 });
 
@@ -256,6 +257,7 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   const received: Snapshot[] = [];
   const dropMs = 600;
   watchLeases(
+    t,
     f.config,
     token,
     (snapshot) => received.push(snapshot),
@@ -288,7 +290,7 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const f = await fixture(t);
   const { token, speaker } = await f.host(["site", "mcp"]);
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchLeases(f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
+  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
@@ -351,7 +353,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   const { token, speaker } = await f.host(["secret"]);
   const wire: string[] = [];
   const snapshots: Snapshot[] = [];
-  watchLeases(f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
+  watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: agent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
   await f.approve(request.id, ["secret:GITHUB_TOKEN"]);
