@@ -19,7 +19,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 **Open**
 - Should SSH certs be revocable early (key revocation list), or is a short TTL enough?
-- SSH is off unless SSH_CA_KEY is set: keep optional or require it?
+- SSH is off unless SSH_PORT is set: keep optional or require it?
 - Enrollment rate limit: shared budget (current) or per address?
 - List issued certificates on the admin page?
 - Commit or gitignore `.vscode/`?

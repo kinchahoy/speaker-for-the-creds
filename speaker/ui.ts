@@ -1,14 +1,15 @@
 import { html, raw } from 'hono/html'
+import type { SshSetup } from './jump.ts'
 import type { Group, LogEntry, Service, View } from './server.ts'
 import type { OwnerSecret } from './store.ts'
 
-const kindNames = ['service', 'secret', 'site', 'folder', 'mcp', 'ext'] as const
+const kindNames = ['service', 'secret', 'site', 'ssh', 'folder', 'mcp', 'ext'] as const
 // An item string's kind: the part before its colon, or `service` for `<service>.read` and `<service>.full`.
 const itemKind = (item: string) => (item.includes(':') ? item.split(':')[0] : 'service')
 const input = (name: string, label: string, type = 'text', value = '') =>
   html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
-  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', none: 'None (keyless)', ask: 'Ask the owner', open: 'Open (any agent may read)', never: 'Never' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
+  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', none: 'None (keyless)', ask: 'Ask the owner', open: 'Open (any agent may read)', never: 'Never', vm: 'VM mount', ssh: 'Over SSH', both: 'VM mount or over SSH' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
@@ -233,7 +234,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .inbox .empty{padding:24px 6px}
 .mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}
 .mark.sm{width:24px;height:24px;border-radius:7px}.mark.sm .ic{width:14px;height:14px}
-.k-service{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-ext{--h:25}.k-host{--h:250}.k-agent{--h:180}
+.k-service{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-ssh{--h:95}.k-mcp{--h:295}.k-ext{--h:25}.k-host{--h:250}.k-agent{--h:180}
 .strip{display:inline-flex;gap:3px}
 .ticket{--tp:18px;background:var(--ticket);border-radius:16px;box-shadow:var(--shadow);padding:var(--tp) var(--tp) 0;min-width:0}
 .t-head{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px}
@@ -342,6 +343,32 @@ const ownerPanels = (owned: Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>) 
   return html`<div style="display:grid;gap:22px;margin-top:22px"><section class="panel"><h2>Secrets</h2><ul class="rows">${list.length ? list : empty('No secrets', 'A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary>${form('/admin/secrets/save', html`${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}<label>Allowed hosts, one per line<textarea name="hosts" rows="2" placeholder="api.github.com"></textarea></label>${input('env', 'Environment variable the agent sees')}`, 'Save secret', 'fields')}</details></section><section class="panel"><h2>Owner password</h2>${form('/admin/password', html`${passwordField('current', 'Current password', 'current-password')}${passwordField('password', 'New password', 'new-password')}${passwordField('confirm', 'Repeat the new password', 'new-password')}`, 'Change password', 'fields')}</section></div>`
 }
 
+// Setup: SSH targets (with the one line each needs) and the shares on them.
+const sshPanels = (ssh: SshSetup) => {
+  if (!ssh.enabled)
+    return html`<section class="panel" style="margin-top:22px"><h2>SSH targets and shares</h2><p class="muted">SSH and folders over SSH are off. Set <code>SSH_PORT</code> and restart speaker to turn them on.</p></section>`
+  const targets = Object.entries(ssh.targets)
+  const shares = Object.entries(ssh.shares)
+  const targetRows = targets.map(
+    ([alias, t]) =>
+      html`<li><div class="row wrap">${mark('ssh')}<div class="row-main"><div class="row-title">${alias} <span class="meta">${t.account}@${t.host}:${t.port}</span></div><div class="row-sub">${t.sudo ? html`<span class="chip warn">passwordless sudo works</span> ` : ''}${t.account === 'root' ? html`<span class="chip warn">root</span> ` : ''}${t.sftp ? html`sftp-server <code>${t.sftp}</code>` : html`<span class="chip bad">no sftp-server found: folders over SSH are unavailable</span>`} · host key <code>${t.fingerprint}</code></div><div class="row-sub">authorized_keys line: <code>${t.line}</code></div>${form('/admin/ssh/targets/from', html`${input('alias', '', 'hidden', alias)}${input('from', 'Addresses speaker connects from (comma-separated)', 'text', t.from)}`, 'Save addresses', 'fields')}</div><div class="row-act">${form('/admin/ssh/targets/delete', input('alias', '', 'hidden', alias), 'Delete', 'inline danger', `Delete target ${alias}`, `Delete target ${alias}? Its shares go too, and open sessions and grants for them end.`)}</div></div></li>`,
+  )
+  const shareRows = shares.map(
+    ([name, share]) =>
+      html`<li><div class="row wrap">${mark('folder')}<div class="row-main"><div class="row-title">${name} <span class="meta">${share.target}:${share.path}</span></div><div class="row-sub">${{ vm: 'VM mount', ssh: 'over SSH', both: 'VM mount or over SSH' }[share.delivery]}${ssh.targets[share.target]?.home === share.path ? html` <span class="chip warn">home directory</span>` : ''}</div></div><div class="row-act">${form('/admin/ssh/shares/delete', input('name', '', 'hidden', name), 'Delete', 'inline danger', `Delete share ${name}`, `Delete share ${name}? Open sessions and grants for it end.`)}</div></div></li>`,
+  )
+  return html`<div style="display:grid;gap:22px;margin-top:22px"><section class="panel"><h2>SSH targets</h2>${ssh.error ? html`<p class="notice" role="alert">${ssh.error}</p>` : ''}<p class="muted" style="margin-top:0">Speaker's public key is <code>${ssh.publicKey ?? 'available after sign-in'}</code>. On each target, add <code>from="&lt;speaker's address&gt;",restrict &lt;that key&gt;</code> to the <code>authorized_keys</code> of the account speaker should use; a limited account (not root, no sudo) is best. Adding a target pins its host key, so add the line first.</p><ul class="rows">${targetRows.length ? targetRows : empty('No targets', 'A target is a host speaker opens SSH sessions to, as one account.')}</ul><details><summary>Add a target</summary>${form('/admin/ssh/targets/add', html`${input('alias', 'Name agents ask for (ssh:NAME)')}${input('host', 'Host name or address')}${input('port', 'SSH port', 'number', '22')}${input('account', 'Account speaker uses there')}${input('from', 'Addresses speaker connects from (blank: detected)')}${input('sftp', 'sftp-server path (blank: probed)')}<label class="override"><input type="checkbox" name="confirmRoot"> I understand: root has no limits</label>`, 'Add target', 'fields')}</details></section><section class="panel"><h2>Shares</h2><ul class="rows">${shareRows.length ? shareRows : empty('No shares', 'A share is a folder on a target that agents can be given, read-only or read-write.')}</ul><details><summary>Add a share</summary>${form(
+    '/admin/ssh/shares/save',
+    html`${input('name', 'Name agents ask for (folder:NAME)')}${select(
+      'target',
+      'Target',
+      targets.map(([alias]) => alias),
+    )}${input('path', 'Absolute path on the target')}${select('delivery', 'Delivery', ['ssh', 'vm', 'both'], 'ssh')}`,
+    'Save share',
+    'fields',
+  )}</details></section></div>`
+}
+
 const mark = (kind: string, small = false) =>
   html`<span class="mark k-${kind} ${small ? 'sm' : ''}"><svg class="ic" aria-hidden="true"><use href="#i-${kind}"></use></svg></span>`
 const strip = (list: readonly string[]) =>
@@ -375,7 +402,7 @@ const row = (
   html`<li data-search="${searchable(type, search, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${title}</div><div class="row-sub">${meta}</div></div><div class="row-act">${actions}</div></div></li>`
 const groupErrors: Record<string, string> = {
   empty: 'Group not saved: list at least one item, one per line.',
-  line: `Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, folder:<share>[:rw], mcp:<id> or ext:<id>.`,
+  line: `Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.`,
   id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
   description: 'Group not saved: keep the description to one line of at most 200 characters.',
 }
@@ -393,6 +420,7 @@ export function adminPage(
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
   log?: { entries: LogEntry[]; query: Record<string, string | undefined> },
   owned: Record<string, Pick<OwnerSecret, 'hosts' | 'env'>> = {},
+  ssh: SshSetup = { enabled: false, targets: {}, shares: {} },
 ) {
   const selected = selectedId && Object.hasOwn(services, selectedId) ? services[selectedId] : undefined
   const activeSection = selected
@@ -448,11 +476,11 @@ export function adminPage(
   const tools = (withKinds: boolean) =>
     html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, item or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
   const content = log
-    ? logPanel(log.entries, log.query, services, view)
+    ? logPanel(log.entries, log.query, services, view, ssh)
     : activeSection === 'active'
       ? html`${tools(true)}<section class="panel"><div id="grants">${raw(panels.grants)}</div></section>`
       : activeSection === 'services'
-        ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section>${ownerPanels(owned)}<p class="muted">Credentials stay on this server.</p>`
+        ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section>${ownerPanels(owned)}${sshPanels(ssh)}<p class="muted">Credentials stay on this server.</p>`
         : activeSection === 'groups'
           ? html`${tools(false)}<section class="panel"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="notice" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupList.length ? groupList : empty('No groups', 'A group collects items so an agent can request them with one approval.')}</ul>${groupEditor('', { items: [] })}</section><p class="muted">A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</p>`
           : html`${tools(true)}<section class="inbox" id="approvals">${raw(panels.approvals)}</section><p class="muted">Expiry and revocation block new calls; a response already streaming may finish.</p>`
@@ -470,6 +498,14 @@ const ago = (iso: string) => {
         : `${Math.floor(seconds / 86400)}d ago`
 }
 const logWhat = (e: LogEntry) => {
+  if (e.event === 'ssh_file')
+    return html`<code>${String(e.op)} ${String(e.path)}</code> <span class="meta">${String(e.share ?? e.target)}</span>`
+  if (e.event === 'ssh_session')
+    return html`<code>${String(e.command ?? 'sftp')}</code> <span class="meta">${String(e.share ?? e.target)} · ${String(e.fingerprint)} · from ${String(e.source)}</span>`
+  if (e.event === 'ssh_refused')
+    return html`${e.command ? html`<code>${String(e.command)}</code> ` : ''}<span class="meta">${String(e.why)}</span>`
+  if (e.event === 'request_unavailable')
+    return html`<code>${String(e.item)}</code> <span class="meta">${String(e.why)}</span>`
   if (e.event === 'proxy')
     return html`<code>${e.method} ${e.path}</code> <span class="meta">${e.service}${e.mcp ? ` · ${e.mcp}` : ''}</span>`
   const list = [e.item, ...(Array.isArray(e.items) ? e.items : []), ...(Array.isArray(e.granted) ? e.granted : [])]
@@ -478,13 +514,20 @@ const logWhat = (e: LogEntry) => {
   return html`<code>${list}</code>${e.reason ? html` <span class="meta">${String(e.reason)}</span>` : ''}`
 }
 const logResult = (e: LogEntry) =>
-  e.event === 'proxy'
-    ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.grant ? 'grant' : String(e.rule)}</span>`
-    : e.expiresAt === undefined
-      ? ''
-      : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
+  e.event === 'ssh_session_end'
+    ? html`exit ${String(e.code)} <span class="meta">${String(e.why)} · ${String(e.ms)}ms</span>`
+    : e.event === 'proxy'
+      ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.grant ? 'grant' : String(e.rule)}</span>`
+      : e.expiresAt === undefined
+        ? ''
+        : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
 // Narrow the log to one agent, grant or service; the GET form keeps the filters in the address.
-const logFilter = (query: Record<string, string | undefined>, services: Record<string, Service>, view: View) => {
+const logFilter = (
+  query: Record<string, string | undefined>,
+  services: Record<string, Service>,
+  view: View,
+  ssh: SshSetup,
+) => {
   const choose = (name: string, label: string, options: [string, string][]) =>
     html`<label>${label}<select name="${name}"><option value="">Any</option>${options.map(([value, text]) => html`<option value="${value}" ${raw(query[name] === value ? 'selected' : '')}>${text}</option>`)}</select></label>`
   return html`<form class="logform" method="get" action="/admin/log">${choose(
@@ -499,6 +542,14 @@ const logFilter = (query: Record<string, string | undefined>, services: Record<s
     'service',
     'Service',
     Object.keys(services).map((id) => [id, id]),
+  )}${choose(
+    'target',
+    'Target',
+    Object.keys(ssh.targets).map((id) => [id, id]),
+  )}${choose(
+    'share',
+    'Share',
+    Object.keys(ssh.shares).map((id) => [id, id]),
   )}<button>Filter</button><a href="/admin/log">Clear</a></form>`
 }
 const logPanel = (
@@ -506,21 +557,22 @@ const logPanel = (
   query: Record<string, string | undefined>,
   services: Record<string, Service>,
   view: View,
+  ssh: SshSetup,
 ) =>
-  html`<section class="panel wide"><h2>Log <span class="meta">${plural(entries.length, 'entry', 'entries')}, newest first</span></h2>${logFilter(query, services, view)}${
+  html`<section class="panel wide"><h2>Log <span class="meta">${plural(entries.length, 'entry', 'entries')}, newest first</span></h2>${logFilter(query, services, view, ssh)}${
     entries.length
       ? html`<table class="log"><thead><tr><th>Time</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
           (e) =>
-            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.agentName].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
+            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.agentName].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replaceAll('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
         )}</tbody></table>`
       : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen, or nothing matches this filter.')}</ul>`
   }</section>`
 
 // Items that can change things (or reach out with a credential) get a warmer tint on the card.
-const risky = (item: string) => /^(ssh(-cert)?|secret):|\.full$|^folder:.+:rw$/.test(item)
+const risky = (item: string) => /^(ssh|secret):|\.full$|^folder:.+:rw$/.test(item)
 
 export function livePanels(
-  { hosts, agents, requests, grants }: View,
+  { hosts, agents, requests, grants, sessions, details }: View,
   groups: Record<string, Group> = {},
   owned: Record<string, Pick<OwnerSecret, 'hosts'>> = {},
 ) {
@@ -556,8 +608,10 @@ export function livePanels(
     const name = item.slice('secret:'.length)
     return Object.hasOwn(owned, name) ? `sent to ${owned[name].hosts.join(', ')}` : 'not set up: it will do nothing'
   }
-  const pickItem = (formId: string, item: string, loose = false) =>
-    html`<li class="cap pickable ${risky(item) ? 'risky' : ''} ${loose ? 'loose' : ''}"><label class="tick"><input type="checkbox" name="items" value="${item}" form="${formId}" checked>${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${itemKind(item)}${item.startsWith('secret:') ? ` · ${secretHosts(item)}` : ''}</span></div></label></li>`
+  const pickItem = (formId: string, agentId: string, item: string, loose = false) => {
+    const detail = details[`${agentId} ${item}`]
+    return html`<li class="cap pickable ${risky(item) ? 'risky' : ''} ${loose ? 'loose' : ''}"><label class="tick"><input type="checkbox" name="items" value="${item}" form="${formId}" checked>${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${detail ? detail.text : itemKind(item)}${item.startsWith('secret:') ? ` · ${secretHosts(item)}` : ''}</span>${detail?.warning ? html`<span class="chip warn">${detail.warning}</span>` : ''}</div></label></li>`
+  }
   // The groups a request asked for, each with the members still awaiting a decision.
   const groupsAsked = (r: View['requests'][number]) =>
     r.want
@@ -573,7 +627,7 @@ export function livePanels(
     const asked = groupsAsked(r)
     const inGroup = new Set(asked.flatMap((g) => g.members))
     const loose = r.items.filter((item) => !inGroup.has(item))
-    return html`<div class="t-items">${asked.map(({ name, description, members }) => html`<details class="group" id="group-${r.id}-${name}"><summary><label class="tick"><input type="checkbox" class="g" form="${formId}" checked aria-label="All of group ${name}"><div><strong>${name}</strong><span class="meta">${description ? `${description} · ` : ''}${plural(members.length, 'item', 'items')}</span></div></label></summary><ul class="caps">${members.map((item) => pickItem(formId, item))}</ul></details>`)}${asked.length && loose.length ? html`<h3>Not in a group</h3>` : ''}${loose.length ? html`<ul class="caps">${loose.map((item) => pickItem(formId, item, asked.length > 0))}</ul>` : ''}</div>`
+    return html`<div class="t-items">${asked.map(({ name, description, members }) => html`<details class="group" id="group-${r.id}-${name}"><summary><label class="tick"><input type="checkbox" class="g" form="${formId}" checked aria-label="All of group ${name}"><div><strong>${name}</strong><span class="meta">${description ? `${description} · ` : ''}${plural(members.length, 'item', 'items')}</span></div></label></summary><ul class="caps">${members.map((item) => pickItem(formId, r.agentId, item))}</ul></details>`)}${asked.length && loose.length ? html`<h3>Not in a group</h3>` : ''}${loose.length ? html`<ul class="caps">${loose.map((item) => pickItem(formId, r.agentId, item, asked.length > 0))}</ul>` : ''}</div>`
   }
   const items = [
     ...hosts
@@ -593,15 +647,9 @@ export function livePanels(
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((r) => {
         const agent = byId.get(r.agentId)
-        const ssh = r.ssh
-          ? html`<div class="meta">SSH certificate for <code>${r.ssh.user}@${r.ssh.hostname}:${r.ssh.port}</code> · key <code>${r.ssh.fingerprint}</code> · ${[r.ssh.agentForwarding && 'agent forwarding', r.ssh.portForwarding && 'port forwarding'].filter(Boolean).join(', ') || 'no forwarding'}${r.ssh.sourceAddress ? html` · only from <code>${r.ssh.sourceAddress}</code>` : ''} · cannot be revoked before it expires</div>`
-          : ''
-        const sshMax = r.ssh?.maxDuration
         const label = agent?.label ?? 'Unknown agent'
         const formId = `decide-${r.id}`
-        const picker = sshMax
-          ? select('duration', 'Certificate valid for', durations.slice(0, durations.indexOf(sshMax) + 1), r.duration)
-          : select('duration', 'Allow access for', [...durations, 'permanent'], r.duration)
+        const picker = select('duration', 'Allow access for', [...durations, 'permanent'], r.duration)
         return ticket(
           `request-${r.id}`,
           `${label} ${agent?.agent ?? ''} ${agent?.sandboxHost ?? ''} ${r.reason} ${r.items.join(' ')}`,
@@ -611,7 +659,7 @@ export function livePanels(
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
               : html`<p class="why"><span class="meta">Reason:</span> ${r.reason || html`<span class="meta">none supplied yet</span>`}</p>`
-          }${itemRows(r, formId)}${ssh}${r.trigger || notices[r.notification] ? html`<div class="t-meta">${r.trigger ? html`<span class="meta">Triggered by <code>${r.trigger}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
+          }${itemRows(r, formId)}${r.trigger || notices[r.notification] ? html`<div class="t-meta">${r.trigger ? html`<span class="meta">Triggered by <code>${r.trigger}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
           // The card posts what is ticked and every item it showed; the server decides only those.
           html`<form class="decision" id="${formId}" method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => input('shown', '', 'hidden', item))}<div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="Approve: ${label}">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny" aria-label="Deny: ${label}">Deny</button></div></form>`,
         )
@@ -619,7 +667,7 @@ export function livePanels(
   ]
   const grantRow = (g: View['grants'][number]) => {
     const [tone, state] = chips[g.state]
-    return html`<li id="grant-${g.id}" data-search="${searchable(g.label, g.agent, g.item)}" data-kinds="${itemKind(g.item)}"><div class="row wrap">${mark(itemKind(g.item), true)}<div class="row-main"><div class="row-title"><code>${g.item}</code></div><div class="expiry">${g.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(g.expiresAt)}"><i></i></span><time class="left" datetime="${g.expiresAt}" data-expires-at="${Date.parse(g.expiresAt)}">expires ${g.expiresAt}</time>`}${g.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}${itemKind(g.item) === 'service' ? html`<span class="meta">${g.uses ? activity(g, `grant=${encodeURIComponent(g.id)}`) : 'unused'}</span>` : ''}</div></div><div class="row-act">${extend('/admin/grants/extend', input('id', '', 'hidden', g.id), g.expiresAt, g.grantedMs, `grant ${g.label} ${g.item}`)}${form('/admin/grants/revoke', input('id', '', 'hidden', g.id), 'Revoke', 'inline danger', `Revoke grant: ${g.label} ${g.item}`, `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></div></li>`
+    return html`<li id="grant-${g.id}" data-search="${searchable(g.label, g.agent, g.item)}" data-kinds="${itemKind(g.item)}"><div class="row wrap">${mark(itemKind(g.item), true)}<div class="row-main"><div class="row-title"><code>${g.item}</code></div>${details[`${g.agentId} ${g.item}`] ? html`<div class="row-sub">${details[`${g.agentId} ${g.item}`].text}${details[`${g.agentId} ${g.item}`].warning ? html` <span class="chip warn">${details[`${g.agentId} ${g.item}`].warning}</span>` : ''}</div>` : ''}<div class="expiry">${g.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(g.expiresAt)}"><i></i></span><time class="left" datetime="${g.expiresAt}" data-expires-at="${Date.parse(g.expiresAt)}">expires ${g.expiresAt}</time>`}${g.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}${itemKind(g.item) === 'service' ? html`<span class="meta">${g.uses ? activity(g, `grant=${encodeURIComponent(g.id)}`) : 'unused'}</span>` : ''}</div></div><div class="row-act">${extend('/admin/grants/extend', input('id', '', 'hidden', g.id), g.expiresAt, g.grantedMs, `grant ${g.label} ${g.item}`)}${form('/admin/grants/revoke', input('id', '', 'hidden', g.id), 'Revoke', 'inline danger', `Revoke grant: ${g.label} ${g.item}`, `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></div></li>`
   }
   // Soonest expiry first so what is about to lapse is on top; "until revoked" grants last.
   const endOf = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Infinity)
@@ -630,7 +678,8 @@ export function livePanels(
     .sort((a, b) => soonest(a) - soonest(b))
     .map((a) => {
       const mine = byEnd.filter((g) => g.agentId === a.id)
-      return html`<li class="active-agent" id="agent-${a.id}" data-search="${searchable(a.label, a.agent, mine.map((g) => g.item).join(' '))}" data-kinds="${[...new Set(mine.map((g) => itemKind(g.item)))].join(' ')}"><div class="row wrap">${mark('agent')}<div class="row-main"><div class="row-title">${a.label}</div><div class="row-sub">${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${activity(a, `agent=${encodeURIComponent(a.id)}`)}</div></div><div class="row-act">${form(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', 'inline danger', `Revoke agent ${a.label}`, `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></div>${mine.length ? html`<ul class="sub-grants">${mine.map(grantRow)}</ul>` : ''}</li>`
+      const open = sessions.filter((s) => s.agent === a.id)
+      return html`<li class="active-agent" id="agent-${a.id}" data-search="${searchable(a.label, a.agent, mine.map((g) => g.item).join(' '))}" data-kinds="${[...new Set(mine.map((g) => itemKind(g.item)))].join(' ')}"><div class="row wrap">${mark('agent')}<div class="row-main"><div class="row-title">${a.label}</div><div class="row-sub">${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${activity(a, `agent=${encodeURIComponent(a.id)}`)}</div></div><div class="row-act">${form(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', 'inline danger', `Revoke agent ${a.label}`, `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></div>${mine.length ? html`<ul class="sub-grants">${mine.map(grantRow)}</ul>` : ''}${open.length ? html`<ul class="sub-grants">${open.map((s) => html`<li><div class="row wrap">${mark('ssh', true)}<div class="row-main"><div class="row-title"><code>${s.what}</code></div><div class="row-sub">SSH session open since <time datetime="${new Date(s.started).toISOString()}" data-last-used-at="${s.started}"></time></div></div><div class="row-act">${form('/admin/ssh/sessions/end', input('id', '', 'hidden', s.id), 'End', 'inline danger', `End session ${s.what}`, `End this SSH session now? ${s.what}`)}</div></div></li>`)}</ul>` : ''}</li>`
     })
   const hostRows = hosts
     .filter((h) => h.status === 'approved')
