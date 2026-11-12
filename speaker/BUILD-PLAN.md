@@ -56,6 +56,16 @@ Calls made where the design left room; each can be revisited.
 - Approve with none of the shown items still pending answers 409.
 - Grants and agents are one Active section; time left is shown per grant.
 
+**Phase 4 (SSH and folders)**
+- The login name in agents' SSH commands is the account speaker runs as (`node` in the image), not `s`: a non-root `sshd` can only log in its own user.
+- No maintained library parses SFTP from a plain stream, so `speaker/sftp.ts` is a small parser for the SFTP v3 packets clients use; the target's own `sftp-server -d <path> [-R]` does the file work.
+- Command lines pin the jump server's host key with `KnownHostsCommand=/bin/echo "<line>"`, so nothing prompts.
+- On an `ssh:` grant, `scp`/`sftp` paths are `<target>/<absolute path>` with no folder limit; a share with the same name as a target takes precedence.
+- Refusal messages reach `ssh` command sessions; in `sftp`/`scp` sessions a refusal shows as "permission denied" and in the Log. Path operations are logged; reads and writes on open files are not logged one by one.
+- The jump server's runtime files live in a private temporary directory (public keys, the ssh-agent socket, its per-start host key); speaker's private key goes straight into `ssh-agent`.
+- An `ssh:` or `folder:` request without an `sshKey` is refused (400); `compose.yaml` publishes `SSH_PORT` 2222 by default.
+- Not yet verified on a real machine: `sshfs` (not installed where it was built), expiry through `expiry-time`, the passwordless-sudo warning.
+
 **Phase 5a (secrets proxy)**
 - The proxy listens on `PROXY_PORT`; clients authenticate with their agent token as the proxy password; the user name is ignored.
 - Allowed hosts match by name; any port in `CONNECT` is accepted.
