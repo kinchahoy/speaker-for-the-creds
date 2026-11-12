@@ -85,7 +85,7 @@ async function pickPort(given: string | undefined, yes: boolean, label: string, 
     const problem = !Number.isInteger(port) || port < 1 || port > 65535 ? "is not a port number" : taken.includes(port) || !(await isFree(port, "127.0.0.1")) ? "is already in use" : undefined;
     if (!problem) return port;
     if (value !== undefined || yes) fail(`${label} port ${raw} ${problem}`, `choose another with --${flag}`);
-    p.log.warn(`${raw} ${problem}; choose another.`);
+    p.log.warn(`Port ${raw} ${problem === "is already in use" ? "is in use" : problem}; choose another.`);
   }
 }
 
@@ -114,7 +114,7 @@ async function pickModel(endpoint: string, wanted: string | undefined, yes: bool
   if (wanted !== undefined) return listed.includes(wanted) ? wanted : fail(`${endpoint} does not serve model ${wanted}`, `use one of: ${listed.join(", ")}`);
   if (listed.length === 1) return listed[0]!;
   if (yes) fail(`${endpoint} serves several models (${listed.join(", ")})`, "pass --model <id>");
-  return answered(await p.autocomplete({ message: "Model (type to filter)", maxItems: 8, options: listed.map((id) => ({ value: id, label: id })) }));
+  return answered(await p.autocomplete({ message: `Model (${listed.length} available; type to filter, arrows move, Enter picks the highlighted one)`, maxItems: 8, options: listed.map((id) => ({ value: id, label: id })) }));
 }
 
 /** Runs start.sh detached with its output in a log file. */
@@ -183,7 +183,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   const yes = flags.yes ?? false;
   p.intro("bottle-school setup");
   const configPath = resolve(flags.config ?? configPathFromEnv());
-  if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "delete it, or pass --force to replace it");
+  if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "keep using it, or pass --force to replace it");
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
@@ -192,6 +192,8 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   const disk = statfsSync(existingAncestor(home));
   const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
   if (freeGiB < MIN_FREE_GIB) fail(`${home} has ${freeGiB.toFixed(1)} GiB free and bottle-school needs ${MIN_FREE_GIB}`, "choose a home on a larger filesystem with --home");
+  for (const old of [join(home, "config.json"), join(home, "config", "config.json")])
+    if (existsSync(old) && !flags.force) fail(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it");
   const stateHome = join(home, "state", "microsandbox");
   if (Buffer.byteLength(stateHome) + SOCKET_ROOM >= SOCKET_LIMIT)
     fail(`${stateHome} is too long for microsandbox's unix sockets (${Buffer.byteLength(stateHome)} bytes, plus about ${SOCKET_ROOM} for the socket; the limit is ${SOCKET_LIMIT})`, "choose a shorter --home");

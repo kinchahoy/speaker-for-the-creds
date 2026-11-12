@@ -212,7 +212,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       await run("herdr", ["pane", "run", JSON.parse(stdout).result.pane.pane_id, attach]);
     } else {
       const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
-      console.log(`Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}`);
+      console.log(`Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`);
     }
   } else if (command === "ls") {
     const list = await tasks();
@@ -235,7 +235,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       list.forEach((task, index) => {
         console.log(line(rows[index]!));
         for (const request of task.pendingRequests)
-          console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it in speaker /admin`);
+          console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it at ${config.speaker.url}/admin`);
       });
     }
     // Finished tasks leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.

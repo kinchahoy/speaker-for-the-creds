@@ -490,6 +490,14 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
       assert.equal(response.status, 403, `${site || 'no metadata'} ${json ? 'JSON' : 'form'}`)
     }
   }
+  // A form post with no Origin says why it was refused.
+  const missing = await f.call('/admin/services/save', {
+    method: 'POST',
+    headers: { cookie: f.ownerHeaders.cookie },
+    body: new URLSearchParams({ ...input, write: 'ask' }),
+  })
+  assert.equal(missing.status, 403)
+  assert.match(await missing.text(), /^Cross-origin form post blocked: send an Origin header matching http/)
   const after = await (await f.call('/admin?service=obsidian', { headers: f.ownerHeaders })).text()
   assert.ok(after.includes('read ask · write never'))
   // Older clients still work with an explicitly configured Origin and no Fetch Metadata.

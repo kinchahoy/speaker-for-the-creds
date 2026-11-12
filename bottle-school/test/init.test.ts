@@ -78,6 +78,16 @@ test("init bottle-school refuses a loopback speaker URL, which a VM cannot reach
   assert.equal(existsSync(join(dir, "config.json")), false);
 });
 
+test("init bottle-school refuses a home that already has a config unless --force", { skip: !kvm }, async (t) => {
+  const dir = scratch(t);
+  const home = join(dir, "h");
+  mkdirSync(join(home, "config"), { recursive: true });
+  writeFileSync(join(home, "config", "config.json"), "{}");
+  const result = await run(["--home", home, "--config", join(dir, "config.json")]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /already has a bottle-school config .*config\.json.*pass --force/);
+});
+
 test("init bottle-school refuses a home so deep that microsandbox's unix sockets would not fit", { skip: !kvm }, async (t) => {
   const dir = scratch(t);
   const result = await run(["--home", join(dir, "a-home-with-a-rather-long-name-for-the-sockets"), "--config", join(dir, "config.json")]);
