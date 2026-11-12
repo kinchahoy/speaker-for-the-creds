@@ -11,14 +11,10 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { serve } from '@hono/node-server'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createApp, readConfig } from '../server.ts'
+import { setOwnerPassword } from './owner.ts'
 
 const upstreamSecret = 'secret-only-the-upstream-should-see'
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-const ownerHeaders = {
-  authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}`,
-  origin: 'http://localhost',
-  'content-type': 'application/json',
-}
 const bearer = (token: string) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' })
 type Grant = { id: string; item: string; expiresAt: string | null; state: string }
 type Snapshot = {
@@ -60,9 +56,7 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
   await writeFile(join(dataDir, 'groups.json'), JSON.stringify(groups))
-  const app = await createApp(
-    readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }),
-  )
+  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }))
   const server = serve({
     fetch: app.fetch,
     port: 0,
@@ -79,12 +73,14 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
     await rm(dataDir, { recursive: true, force: true })
   })
   const call = (path: string, init: RequestInit = {}) => fetch(url + path, { redirect: 'manual', ...init })
+  const cookie = await setOwnerPassword(call)
+  const ownerHeaders = { cookie, origin: 'http://localhost', 'content-type': 'application/json' }
   const owner = (path: string, body: object = {}) =>
     call(`/admin${path}`, { method: 'POST', headers: ownerHeaders, body: JSON.stringify(body) })
   const ownerForm = (path: string, body: Record<string, string>) =>
     call(`/admin${path}`, {
       method: 'POST',
-      headers: { authorization: ownerHeaders.authorization, origin: ownerHeaders.origin },
+      headers: { cookie, origin: ownerHeaders.origin },
       body: new URLSearchParams(body),
     })
   const grants = async () => (await call('/admin/api/grants', { headers: ownerHeaders })).json() as Promise<Grant[]>
@@ -97,7 +93,16 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
     write: 'ask',
   })
   assert.equal(saved.status, 303)
-  return { url, call, owner, ownerForm, grants, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
+  return {
+    url,
+    call,
+    owner,
+    ownerForm,
+    ownerHeaders,
+    grants,
+    calls,
+    upstreamOrigin: `http://127.0.0.1:${port(upstream)}`,
+  }
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
@@ -325,7 +330,7 @@ test('the admin saves and deletes groups without a restart, and refuses malforme
   })
   assert.equal(saved.status, 303)
   assert.deepEqual((await listed()).pair, { description: 'Two services', items: ['notes.read', 'notes.full'] })
-  const page = await (await f.call('/admin?section=groups', { headers: ownerHeaders })).text()
+  const page = await (await f.call('/admin?section=groups', { headers: f.ownerHeaders })).text()
   assert.ok(page.includes('Two services') && page.includes('2 items'))
   // A blank description is dropped rather than stored.
   await f.ownerForm('/groups/save', { id: 'pair', description: '', items: 'notes.read' })
@@ -341,7 +346,7 @@ test('the admin saves and deletes groups without a restart, and refuses malforme
     assert.equal(response.headers.get('location'), `/admin?section=groups&error=${code}`)
   }
   assert.equal((await listed()).bad, undefined)
-  const failed = await (await f.call('/admin?section=groups&error=empty', { headers: ownerHeaders })).text()
+  const failed = await (await f.call('/admin?section=groups&error=empty', { headers: f.ownerHeaders })).text()
   assert.ok(failed.includes('list at least one item'))
   assert.equal((await f.ownerForm('/groups/delete', { id: 'pair' })).status, 303)
   assert.deepEqual(await listed(), {})
@@ -372,7 +377,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
   const saved = await f.call('/admin/services/save', {
     method: 'POST',
     headers: {
-      authorization: ownerHeaders.authorization,
+      cookie: f.ownerHeaders.cookie,
       origin: 'https://speaker.example.com',
       'sec-fetch-site': 'same-origin',
       'x-forwarded-proto': 'https',
@@ -380,7 +385,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
     body: new URLSearchParams(input),
   })
   assert.equal(saved.status, 303)
-  const page = await (await f.call('/admin?service=obsidian', { headers: ownerHeaders })).text()
+  const page = await (await f.call('/admin?service=obsidian', { headers: f.ownerHeaders })).text()
   assert.ok(page.includes('Read rule (GET / HEAD / OPTIONS)'))
   assert.ok(page.includes('Write rule (all other methods)'))
   assert.ok(page.includes('read ask · write never'))
@@ -391,7 +396,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
       const response = await f.call('/admin/services/save', {
         method: 'POST',
         headers: {
-          authorization: ownerHeaders.authorization,
+          cookie: f.ownerHeaders.cookie,
           origin: 'https://untrusted.example.com',
           ...(site ? { 'sec-fetch-site': site } : {}),
           ...(json ? { 'content-type': 'application/json' } : {}),
@@ -404,7 +409,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
       assert.equal(response.status, 403, `${site || 'no metadata'} ${json ? 'JSON' : 'form'}`)
     }
   }
-  const after = await (await f.call('/admin?service=obsidian', { headers: ownerHeaders })).text()
+  const after = await (await f.call('/admin?service=obsidian', { headers: f.ownerHeaders })).text()
   assert.ok(after.includes('read ask · write never'))
   // Older clients still work with an explicitly configured Origin and no Fetch Metadata.
   assert.equal((await f.ownerForm('/services/save', input)).status, 303)
@@ -421,7 +426,7 @@ test('enrollment with Speaker-Wait holds until the owner decides and answers per
   let pending: { id: string }[] = []
   while (!pending.length) {
     await sleep(50)
-    pending = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as { id: string }[]
+    pending = (await (await f.call('/admin/api/requests', { headers: f.ownerHeaders })).json()) as { id: string }[]
   }
   assert.equal((await f.owner(`/api/requests/${pending[0].id}/approve`, { duration: '1h' })).status, 200)
   const response = await held
@@ -458,8 +463,8 @@ test('an open read needs no grant or card, is never listed in /me, and counts as
   await enrolled(f, 'open-token')
   assert.equal((await f.call('/lights/x', { headers: bearer('open-token') })).status, 200)
   assert.ok(!('lights' in (await me(f, 'open-token')).services))
-  assert.deepEqual(await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json(), [])
-  assert.match(await (await f.call(`/admin?section=agents`, { headers: ownerHeaders })).text(), /1 use/)
+  assert.deepEqual(await (await f.call('/admin/api/requests', { headers: f.ownerHeaders })).json(), [])
+  assert.match(await (await f.call(`/admin?section=agents`, { headers: f.ownerHeaders })).text(), /1 use/)
   // Asking for the open read is answered at once without a card; writes still need a grant.
   const asked = (await (await askFor(f, 'open-token', { want: ['lights.read'], reason: 'x' })).json()) as Outcome
   assert.deepEqual([asked.status, asked.granted], ['decided', ['lights.read']])
@@ -531,7 +536,7 @@ test('an MCP service classifies tool calls by their read-only hints', async (t) 
   const blocked = await rpc('tools/call', { name: 'delete_automation', arguments: {} })
   assert.equal(blocked.status, 403)
   assert.equal(((await blocked.json()) as { item: string }).item, 'ha.full')
-  const requests = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as {
+  const requests = (await (await f.call('/admin/api/requests', { headers: f.ownerHeaders })).json()) as {
     trigger: string
   }[]
   assert.match(requests[0].trigger, /delete_automation \(destructive\)/)
@@ -550,7 +555,7 @@ test('the log lists proxied calls per agent, with no grant for an open call', as
   const id = await enrolled(f, 'log-token')
   for (const path of ['/open/first', '/open/second'])
     assert.equal((await f.call(`${path}?k=hidden`, { headers: bearer('log-token') })).status, 200)
-  const page = await (await f.call(`/admin/log?agent=${id}`, { headers: ownerHeaders })).text()
+  const page = await (await f.call(`/admin/log?agent=${id}`, { headers: f.ownerHeaders })).text()
   assert.match(page, /GET \/first/)
   assert.match(page, /GET \/second/)
   assert.match(page, /open/)
@@ -581,7 +586,7 @@ test('Speaker-Wait holds a call until approval; without it the call answers at o
   let listed: { id: string; reason: string }[] = []
   while (!listed.some((r) => r.reason === 'read doc')) {
     await sleep(100)
-    listed = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as typeof listed
+    listed = (await (await f.call('/admin/api/requests', { headers: f.ownerHeaders })).json()) as typeof listed
   }
   assert.equal(listed.length, 1)
   assert.equal((await f.owner(`/api/requests/${listed[0].id}/approve`, { duration: '30m' })).status, 200)
@@ -685,4 +690,13 @@ test('public discovery answers without a token, uses the caller address, and nam
   assert.ok(!help.includes('$SPEAKER_URL') && !help.includes('secretgroup') && !help.includes('notes'))
   // Removed discovery routes are not served: unknown paths fall through to authentication.
   assert.equal((await f.call('/llms.txt')).status, 401)
+})
+
+test('the sign-in page warns about plain HTTP only for a caller that is not on loopback', async (t) => {
+  const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
+  const page = async (headers: Record<string, string>) => (await f.call('/admin', { headers })).text()
+  const away = { 'x-forwarded-for': '192.168.1.9' }
+  assert.doesNotMatch(await page({}), /unencrypted/)
+  assert.match(await page(away), /unencrypted/)
+  assert.doesNotMatch(await page({ ...away, 'x-forwarded-proto': 'https' }), /unencrypted/)
 })

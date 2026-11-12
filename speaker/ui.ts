@@ -1,5 +1,6 @@
 import { html, raw } from 'hono/html'
 import type { Group, LogEntry, Service, View } from './server.ts'
+import type { OwnerSecret } from './store.ts'
 
 const kindNames = ['service', 'secret', 'site', 'folder', 'mcp', 'ext'] as const
 // An item string's kind: the part before its colon, or `service` for `<service>.read` and `<service>.full`.
@@ -281,6 +282,48 @@ input,select,textarea{font-size:1rem}.pick{flex-basis:100%}.go{flex-basis:100%}.
 const page = (nav: unknown, body: unknown, nonce: string) =>
   html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3Erect%7Bfill:%231c2b8f%7D.s%7Bfill:none;stroke:%23fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round%7D@media(prefers-color-scheme:dark)%7Brect%7Bfill:%239aa8ff%7D.s%7Bstroke:%2310143a%7D%7D%3C/style%3E%3Crect width='32' height='32' rx='8'/%3E%3Cg class='s' transform='translate(4 4) scale(1)'%3E%3Ccircle cx='7' cy='14' r='3.2'/%3E%3Cpath d='m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700'/%3E%3C/g%3E%3C/svg%3E"><style>${raw(css)}</style></head><body>${raw(sprite)}<header class="top"><div class="top-in"><div class="bar"><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-brand"></use></svg></span><h1>Speaker for the <em>creds</em></h1><p id="live-status" role="status">Connecting…</p><a class="refresh" href="/admin">Refresh</a></div>${nav}</div></header><main>${body}</main><dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><h2 id="confirm-title">Are you sure?</h2><p id="confirm-text"></p><div class="dlg-actions"><button value="cancel" autofocus>Keep</button><button value="ok" id="confirm-ok" class="ok">Confirm</button></div></form></dialog><script nonce="${nonce}">${raw(liveScript)}</script></body></html>`
 
+// Sign-in and first-run pages: no live panels or navigation, just the logo and one form.
+const authPage = (
+  heading: string,
+  intro: string,
+  fields: unknown,
+  button: string,
+  action: string,
+  exposed: boolean,
+  error?: string,
+) =>
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><style>${raw(css)}.auth{max-width:420px;margin:48px auto;display:grid;gap:14px}</style></head><body>${raw(sprite)}<main class="auth"><section class="panel"><h2><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-brand"></use></svg></span>${heading}</h2><p>${intro}</p>${exposed ? html`<p class="notice" role="note">This page uses plain HTTP, so your password crosses the network unencrypted.</p>` : ''}${error ? html`<p class="notice" role="alert">${error}</p>` : ''}${form(action, fields, button, 'fields')}</section></main></body></html>`
+const passwordField = (name: string, label: string, autocomplete: string) =>
+  html`<label>${label}<input name="${name}" type="password" autocomplete="${autocomplete}" required></label>`
+export const signInPage = (exposed: boolean, error?: string) =>
+  authPage(
+    'Sign in',
+    'Signing in unlocks the keys speaker stores.',
+    passwordField('password', 'Owner password', 'current-password'),
+    'Sign in',
+    '/admin/signin',
+    exposed,
+    error,
+  )
+export const setPasswordPage = (exposed: boolean, error?: string) =>
+  authPage(
+    'Set the owner password',
+    'It protects every key speaker stores, and you sign in with it after each restart. Use at least 8 characters.',
+    html`${passwordField('password', 'Owner password', 'new-password')}${passwordField('confirm', 'Repeat the password', 'new-password')}`,
+    'Set password',
+    '/admin/setup',
+    exposed,
+    error,
+  )
+// Setup pieces for the services page: secrets (values are write-only) and the owner password.
+const ownerPanels = (owned: Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>) => {
+  const list = Object.entries(owned).map(
+    ([name, { hosts, env }]) =>
+      html`<li><div class="row wrap">${mark('secret')}<div class="row-main"><div class="row-title">${name}</div><div class="row-sub">Agent sees <code>${env}</code> · sent only to ${hosts.map((host) => html`<code>${host}</code> `)}</div></div><div class="row-act">${form('/admin/secrets/delete', input('name', '', 'hidden', name), 'Delete', 'inline danger', `Delete secret ${name}`, `Delete secret ${name}? Its value is erased.`)}</div></div></li>`,
+  )
+  return html`<div style="display:grid;gap:22px;margin-top:22px"><section class="panel"><h2>Secrets</h2><ul class="rows">${list.length ? list : empty('No secrets', 'A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary>${form('/admin/secrets/save', html`${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}<label>Allowed hosts, one per line<textarea name="hosts" rows="2" placeholder="api.github.com"></textarea></label>${input('env', 'Environment variable the agent sees')}`, 'Save secret', 'fields')}</details></section><section class="panel"><h2>Owner password</h2>${form('/admin/password', html`${passwordField('current', 'Current password', 'current-password')}${passwordField('password', 'New password', 'new-password')}${passwordField('confirm', 'Repeat the new password', 'new-password')}`, 'Change password', 'fields')}</section></div>`
+}
+
 const mark = (kind: string, small = false) =>
   html`<span class="mark k-${kind} ${small ? 'sm' : ''}"><svg class="ic" aria-hidden="true"><use href="#i-${kind}"></use></svg></span>`
 const strip = (list: readonly string[]) =>
@@ -331,6 +374,7 @@ export function adminPage(
   error?: string,
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
   log?: { entries: LogEntry[]; filter: string },
+  owned: Record<string, Pick<OwnerSecret, 'hosts' | 'env'>> = {},
 ) {
   const selected = selectedId && Object.hasOwn(services, selectedId) ? services[selectedId] : undefined
   const activeSection = selected
@@ -429,7 +473,7 @@ export function adminPage(
       : activeSection === 'agents'
         ? html`${tools(false)}<section class="panel"><h2>Agents</h2><ul class="rows">${agentRows.length ? agentRows : empty('No agents', 'Agents appear here once they enroll, and can be revoked.')}</ul></section>`
         : activeSection === 'services'
-          ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section><p class="muted">Credentials stay on this server.</p>`
+          ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section>${ownerPanels(owned)}<p class="muted">Credentials stay on this server.</p>`
           : activeSection === 'groups'
             ? html`${tools(false)}<section class="panel"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="notice" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupList.length ? groupList : empty('No groups', 'A group collects items so an agent can request them with one approval.')}</ul>${groupEditor('', { items: [] })}</section><p class="muted">A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</p>`
             : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="grants">${raw(panels.grants)}</div></section></div><p class="muted">Expiry and revocation block new calls; a response already streaming may finish.</p>`

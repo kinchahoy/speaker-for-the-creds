@@ -10,12 +10,13 @@ import test from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { serve } from "../../speaker/node_modules/@hono/node-server/dist/index.mjs";
 import { createApp, readConfig, wss } from "../../speaker/server.ts";
+import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { type Snapshot, speakerClient, watchLeases } from "../src/speaker.ts";
 
 test("watchLeases receives granted items as leases and reports applied ids to speaker", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-speaker-"));
-  const app = await createApp(readConfig({ ADMIN_PASSWORD: "pw", DATA_DIR: dataDir, PUBLIC_URL: "http://localhost" }));
+  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost" }));
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1", websocket: { server: wss } }) as Server;
   await once(server, "listening");
   t.after(async () => {
@@ -33,7 +34,7 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const config = { speaker: { url } } as Config;
   const owner = {
-    authorization: `Basic ${Buffer.from("admin:pw").toString("base64")}`,
+    cookie: await setOwnerPassword((path, init) => fetch(url + path, init)),
     origin: "http://localhost",
     "content-type": "application/json",
   };

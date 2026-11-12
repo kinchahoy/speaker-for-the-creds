@@ -16,6 +16,7 @@ import {
   transition,
 } from '../lifecycle.ts'
 import { createApp, readConfig } from '../server.ts'
+import { setOwnerPassword } from './owner.ts'
 
 test('every table target is a known state and terminal states accept no event', () => {
   for (const [states, table] of [
@@ -49,16 +50,15 @@ test('transitions: legal moves land on the table state, illegal moves throw', ()
 })
 
 test('PUBLIC_URL is required', () => {
-  assert.throws(() => readConfig({ ADMIN_PASSWORD: 'pw' }), /PUBLIC_URL/)
+  assert.throws(() => readConfig({}), /PUBLIC_URL/)
 })
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-const owner = { authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}`, origin: 'http://localhost' }
 
 async function setup(t: TestContext) {
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-lifecycle-'))
   t.after(() => rm(dataDir, { recursive: true, force: true }))
-  const app = await createApp(readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost' }))
+  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost' }))
   const call = (path: string, init: RequestInit = {}) =>
     app.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init }))
   const json = (path: string, body: object, headers: Record<string, string>) =>
@@ -75,11 +75,13 @@ async function setup(t: TestContext) {
     )
     return { response, id: response.status === 201 ? ((await response.json()) as { id: string }).id : '' }
   }
-  return { call, json, enroll }
+  const owner = { cookie: await setOwnerPassword(call), origin: 'http://localhost' }
+  return { call, json, enroll, owner }
 }
 
 test('requests, grants and agents move through explicit lifecycles, and repeated decisions are refused', async (t) => {
   const f = await setup(t)
+  const owner = f.owner
   const { id } = await f.enroll('tok')
   const agent = { authorization: 'Bearer tok' }
   const ask = async () =>

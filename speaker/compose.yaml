@@ -4,7 +4,6 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       PORT: "3000"
       DATA_DIR: /data
       PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env to the browser-facing URL}
