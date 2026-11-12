@@ -135,7 +135,7 @@ export class Tasks {
   readonly byToken = new Map<string, Task>();
   readonly #closing = new Map<string, Promise<void>>();
   readonly #reconfiguring = new Map<string, Promise<void>>();
-  readonly #report: (leaseIds: string[]) => void;
+  readonly #report: ReturnType<typeof watchLeases>;
   #requests: Snapshot["requests"] = [];
 
   config: Config;
@@ -168,6 +168,8 @@ export class Tasks {
   }
 
   list = () => [...this.byId.values()];
+  /** Closes the connection to speaker (the tasks stay as they are). */
+  stop = () => this.#report.stop();
   get = (id: string) => {
     const task = this.byId.get(id);
     if (!task) throw new Error(`no active task ${id}`);
