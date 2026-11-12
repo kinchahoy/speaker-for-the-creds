@@ -20,7 +20,7 @@ else
 	setsid_fix="sudo apt install util-linux"
 fi
 check "node and pnpm (mise run install)" "mise install" sh -c 'command -v node && command -v pnpm'
-check "docker daemon reachable" "install Docker and start it" docker info
+check "Docker daemon reachable" "install Docker and start it" docker info
 check "setsid" "$setsid_fix" command -v setsid
 if [ "$(uname -s)" = Darwin ]; then
 	check "hardware virtualization (Hypervisor.framework)" "use a Mac with Hypervisor support" sh -c '[ "$(sysctl -n kern.hv_support)" = 1 ]'
