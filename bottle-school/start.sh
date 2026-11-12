@@ -13,11 +13,11 @@ command -v setsid >/dev/null || { echo "setsid is missing. Fix: sudo apt install
 [ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
 config="${BOTTLE_SCHOOL_CONFIG:-$root/config.json}"
 [ -f "$config" ] || { echo "$config is missing. Fix: run mise run init bottle-school" >&2; exit 1; }
-# microsandbox refuses a storage root that is, or sits under, a group- or world-writable directory (sticky ones such as /tmp are fine).
+# microsandbox refuses a storage root (MSB_HOME, else ~/.microsandbox) that is, or sits under, a group- or world-writable
+# directory (sticky ones such as /tmp are fine).
 node -e '
-	const { readFileSync, statSync } = require("node:fs"), { dirname, join, resolve } = require("node:path");
-	const { stateRoot } = JSON.parse(readFileSync(process.argv[1], "utf8"));
-	for (let dir = join(resolve(stateRoot), "microsandbox"); ; dir = dirname(dir)) {
+	const { statSync } = require("node:fs"), { homedir } = require("node:os"), { dirname, join, resolve } = require("node:path");
+	for (let dir = resolve(process.env.MSB_HOME || join(homedir(), ".microsandbox")); ; dir = dirname(dir)) {
 		const mode = statSync(dir, { throwIfNoEntry: false })?.mode ?? 0;
 		if (mode & 0o022 && !(mode & 0o1000)) {
 			console.error(`microsandbox refuses ${dir}: it is group- or world-writable. Fix: chmod 700 ${dir}`);
@@ -25,7 +25,7 @@ node -e '
 		}
 		if (dir === dirname(dir)) break;
 	}
-' "$config"
+'
 
 setsid node "$root/src/server.ts" &
 broker=$!

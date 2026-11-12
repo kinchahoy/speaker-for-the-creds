@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { configPathFromEnv, loadConfig, validateConfig } from "./src/config.ts";
+import { configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
@@ -35,9 +35,6 @@ const here = import.meta.dirname;
 const ok = (message: string) => p.log.message(message, { symbol: styleText("green", "✓") });
 const MIN_FREE_GIB = 20;
 const WAIT_MS = 10 * 60_000;
-// microsandbox puts a unix socket about 50 bytes below its home (<stateRoot>/microsandbox); the platform caps socket paths.
-const SOCKET_ROOM = 50;
-const SOCKET_LIMIT = platform() === "darwin" ? 104 : 108;
 const SMOKE_PROMPT = "write the word hello to /output/hello.txt, then finish";
 
 const fail = (what: string, fix: string): never => {
@@ -189,21 +186,19 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const defaultHome = join(homedir(), ".local", "share", "bottle-school");
   const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: `Where should bottle-school keep its config, state, and output? (Enter keeps ${defaultHome})`, placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
-  const disk = statfsSync(existingAncestor(home));
-  const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
-  if (freeGiB < MIN_FREE_GIB) fail(`${home} has ${freeGiB.toFixed(1)} GiB free and bottle-school needs ${MIN_FREE_GIB}`, "choose a home on a larger filesystem with --home");
   for (const old of [join(home, "config.json"), join(home, "config", "config.json")])
     if (existsSync(old) && !flags.force) fail(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it");
-  const stateHome = join(home, "state", "microsandbox");
-  if (Buffer.byteLength(stateHome) + SOCKET_ROOM >= SOCKET_LIMIT)
-    fail(`${stateHome} is too long for microsandbox's unix sockets (${Buffer.byteLength(stateHome)} bytes, plus about ${SOCKET_ROOM} for the socket; the limit is ${SOCKET_LIMIT})`, "choose a shorter --home");
-  // Everything private (700): microsandbox refuses a storage root with a group- or world-writable ancestor. Checked now so a
-  // bad home fails before the other questions.
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
   for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  for (let directory = join(stateRoot, "microsandbox"); ; directory = dirname(directory)) {
+  // The guest image and VM disks live in microsandbox's own home (MSB_HOME, else ~/.microsandbox), not under --home. It refuses
+  // a storage folder with a group- or world-writable ancestor, so check both now, before the other questions.
+  const msbHome = microsandboxHome();
+  const disk = statfsSync(existingAncestor(msbHome));
+  const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
+  if (freeGiB < MIN_FREE_GIB) fail(`${msbHome} has ${freeGiB.toFixed(1)} GiB free and the guest image and VMs need ${MIN_FREE_GIB}`, "free space there, or set MSB_HOME to a folder on a larger filesystem");
+  for (let directory = msbHome; ; directory = dirname(directory)) {
     const mode = statSync(directory, { throwIfNoEntry: false })?.mode ?? 0;
-    if (mode & 0o022 && !(mode & 0o1000)) fail(`microsandbox refuses ${directory}: it is group- or world-writable`, `chmod go-w ${directory}, or choose another --home`);
+    if (mode & 0o022 && !(mode & 0o1000)) fail(`microsandbox refuses ${directory}: it is group- or world-writable`, `chmod go-w ${directory}`);
     if (directory === dirname(directory)) break;
   }
 

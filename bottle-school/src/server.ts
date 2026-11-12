@@ -187,7 +187,7 @@ export const startBroker = (config: Config) => {
 if (import.meta.main) {
   const configPath = configPathFromEnv();
   const config = loadConfig(configPath);
-  const staleSessions = await reconcile(config);
+  const staleSessions = await reconcile();
   if (staleSessions) console.log(`removed ${staleSessions} microsandbox VMs a crashed service left behind`);
   const { tasks } = startBroker(config);
 

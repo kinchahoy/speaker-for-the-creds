@@ -1,8 +1,8 @@
 #!/bin/sh
 # Builds the guest image and loads it into microsandbox.
 # Usage: guest/build.sh [image-tag]   (default: bottle-school-guest; set it as "guestImage" in config.json)
-# Docker (buildx) builds guest/Dockerfile for the host architecture under the tag, then microsandbox loads it into
-# <stateRoot>/microsandbox (stateRoot from config.json, or BOTTLE_SCHOOL_CONFIG).
+# Docker (buildx) builds guest/Dockerfile for the host architecture under the tag, then microsandbox loads it into its
+# own home (MSB_HOME, else ~/.microsandbox).
 # microsandbox refuses storage another account could write to; keep everything it and we create private.
 umask 077
 set -eu
@@ -18,9 +18,9 @@ case "$(uname -m)" in
   *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
 [ -f "$CONFIG" ] || { echo "$CONFIG not found. Fix: run mise run init bottle-school first" >&2; exit 1; }
-STATE=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).stateRoot" "$CONFIG")
+MSB_HOME=${MSB_HOME:-"$HOME/.microsandbox"}
 
 # PI_GUEST_PLATFORMS=linux/amd64,linux/arm64 builds both (needs binfmt/QEMU emulation and Docker's containerd image store).
 docker buildx build --load --platform "${PI_GUEST_PLATFORMS:-$PLATFORM}" -t "$IMAGE" "$ROOT/guest"
-mkdir -p -m 700 "$STATE/microsandbox"
-docker save --platform "$PLATFORM" "$IMAGE" | MSB_HOME="$STATE/microsandbox" "$MSB" load --tag "$IMAGE"
+mkdir -p -m 700 "$MSB_HOME"
+docker save --platform "$PLATFORM" "$IMAGE" | MSB_HOME="$MSB_HOME" "$MSB" load --tag "$IMAGE"

@@ -5,9 +5,11 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { once } from "node:events";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
 import { BlockList, connect, createServer as createNetServer, isIP, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { buffer } from "node:stream/consumers";
 import { promisify } from "node:util";
@@ -15,7 +17,7 @@ import { RequestError, Server as ProxyServer } from "proxy-chain";
 import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
-import type { Config } from "./config.ts";
+import { microsandboxHome, type Config } from "./config.ts";
 import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./leases.ts";
 import { recordHttp, type HttpResponseRecord } from "./trace.ts";
 
@@ -103,11 +105,14 @@ const SSH_VSOCK = 5004;
 const GUEST_SSH = { key: "/run/speaker/ssh_key", config: "/run/speaker/ssh_config", knownHosts: "/run/speaker/known_hosts" };
 
 /** microsandbox keeps its images and sandbox records here. It refuses a folder other accounts could write. */
-const msbHome = (config: Config) => {
-  const dir = `${config.stateRoot}/microsandbox`;
+const msbHome = () => {
+  const dir = microsandboxHome();
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   process.env.MSB_HOME = dir;
 };
+
+/** A private folder for one VM's door sockets, in the short per-user runtime dir so the socket paths fit any stateRoot. */
+const socketFolder = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "bottle-school-"));
 
 /** What the guest's HTTP proxy does with a host: refuse it, route it through speaker's proxy (a secret host), or go direct. */
 export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof secretRoute>, "allow">, host: string) => {
@@ -332,10 +337,11 @@ export async function boot(
   speaker: { url: string; token: string },
   proxy: () => Promise<Dispatcher>,
 ): Promise<Guest> {
-  msbHome(config);
+  msbHome();
   const { MiB, Sandbox } = await import("microsandbox");
   const name = `bs-${randomBytes(4).toString("hex")}`;
   const dir = paths.work.slice(0, paths.work.lastIndexOf("/"));
+  const socketDir = socketFolder();
   mkdirSync(paths.capture, { recursive: true });
   const route = secretRoute(live, proxy);
   const proxyPort = config.speaker.proxyPort;
@@ -347,16 +353,18 @@ export async function boot(
   const sshPort = config.speaker.sshPort;
   const key = sshPort ? await newSshKey(dir) : undefined;
   const servers = [
-    await serveEgress(egress, `${dir}/egress.sock`),
-    await listen(`${dir}/model.sock`, modelDoor(config, live, route, paths.capture)),
-    await listen(`${dir}/speaker.sock`, speakerDoor(speaker, key?.public)),
-    await listen(`${dir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
-    ...(sshPort ? [await serveSsh(`${dir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
+    await serveEgress(egress, `${socketDir}/egress.sock`),
+    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.capture)),
+    await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key?.public)),
+    await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
+    ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
   ];
   let folders: NodeJS.Timeout | undefined;
   const stopDoors = () => {
     clearInterval(folders);
-    return Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]);
+    return Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]).finally(() =>
+      rmSync(socketDir, { recursive: true, force: true }),
+    );
   };
 
   let sandbox: MicroVm | undefined;
@@ -390,8 +398,8 @@ export async function boot(
       .volume("/work", (mount) => mount.bind(paths.work))
       .volume("/output", (mount) => mount.bind(paths.artifacts))
       .volume("/etc/bottle-school", (mount) => mount.bind(paths.guestConfig).readonly());
-    for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${dir}/${door}.sock`, port);
-    if (key) builder = builder.vsock(`${dir}/ssh.sock`, SSH_VSOCK);
+    for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${socketDir}/${door}.sock`, port);
+    if (key) builder = builder.vsock(`${socketDir}/ssh.sock`, SSH_VSOCK);
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);
     sandbox = await builder.create();
     if (ca) await sandbox.fs().write(caPath, ca);
@@ -481,14 +489,14 @@ export async function boot(
 }
 
 /** The owner's terminal into a running guest, as a command to spawn. */
-export const attach = (config: Config, sessionId: string, command: string[]) => ({
+export const attach = (sessionId: string, command: string[]) => ({
   file: "env",
-  args: [`MSB_HOME=${config.stateRoot}/microsandbox`, `${import.meta.dirname}/../node_modules/.bin/msb`, "exec", "-t", sessionId, "--", ...command],
+  args: [`MSB_HOME=${microsandboxHome()}`, `${import.meta.dirname}/../node_modules/.bin/msb`, "exec", "-t", sessionId, "--", ...command],
 });
 
 /** Removes the VMs a crashed service left behind; returns how many. */
-export const reconcile = async (config: Config) => {
-  msbHome(config);
+export const reconcile = async () => {
+  msbHome();
   const { Sandbox } = await import("microsandbox");
   const stale = (await Sandbox.list()).sandboxes.filter((handle) => handle.name.startsWith("bs-"));
   await Promise.all(stale.map((handle) => Sandbox.remove(handle.name)));

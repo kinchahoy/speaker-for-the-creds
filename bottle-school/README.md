@@ -96,7 +96,7 @@ An attended task loads the ask-user-question extension (the `ask_user_question` 
 Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi. The extensions stay pinned, and everything else takes the latest release.
 {.ai}
 
-`guest-build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into microsandbox's storage under `<stateRoot>/microsandbox` (`stateRoot` from `config.json`). It needs `config.json`, so run `mise run init bottle-school` first. Builds need internet access and about 10 GiB of disk space.
+`guest-build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into microsandbox's own home (`MSB_HOME`, else `~/.microsandbox`). It needs `config.json`, so run `mise run init bottle-school` first. Builds need internet access and about 10 GiB of disk space.
 {.ai}
 
 The image holds:
@@ -112,7 +112,7 @@ You can use any OCI image instead, however you build it. It must hold Node, Pi, 
 {.ai}
 
 ```sh
-docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestImage>
+docker save <image> | msb load --tag <guestImage>   # into MSB_HOME, else ~/.microsandbox
 ```
 
 `msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder. Set `"guestImage"` to the tag.
@@ -151,7 +151,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
   - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
   - A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
-- Storage: microsandbox keeps images and VM records in `<stateRoot>/microsandbox`, created with mode 700. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`), so use a `stateRoot` whose parents are not group-writable. `start.sh` checks this and stops with the directory to `chmod 700`.
+- Storage: microsandbox keeps images, VM disks, and its sockets in its own home, `MSB_HOME` or by default `~/.microsandbox`, created with mode 700. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle-school's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder). No socket lives under `stateRoot`, so unix socket path limits (104-108 bytes) do not constrain where you put the home.
 
 <!-- author: ai -->
 

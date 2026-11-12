@@ -32,7 +32,7 @@ check "config.json (mise run init bottle-school)" "mise run init bottle-school" 
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
 if [ "$failed" = 0 ]; then
 	image=$(cfg guestImage)
-	export MSB_HOME="$(cfg stateRoot)/microsandbox"
+	export MSB_HOME="${MSB_HOME:-$HOME/.microsandbox}"
 	check "guest image $image loaded into microsandbox" "mise run guest-build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
 	check "guest image $image boots and runs a command" "mise run guest-build $image" \
 		sh -c '"$1" run -q --no-net --replace --name pi-doctor "$2" -- true; rc=$?; "$1" rm pi-doctor; exit $rc' sh "$root/node_modules/.bin/msb" "$image"

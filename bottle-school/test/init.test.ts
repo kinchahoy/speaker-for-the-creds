@@ -88,11 +88,12 @@ test("init bottle-school refuses a home that already has a config unless --force
   assert.match(result.stderr, /already has a bottle-school config .*config\.json.*pass --force/);
 });
 
-test("init bottle-school refuses a home so deep that microsandbox's unix sockets would not fit", { skip: !kvm }, async (t) => {
+test("init bottle-school accepts a deep home: no unix socket lives under it", { skip: !kvm }, async (t) => {
   const dir = scratch(t);
-  const result = await run(["--home", join(dir, "a-home-with-a-rather-long-name-for-the-sockets"), "--config", join(dir, "config.json")]);
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /too long for microsandbox's unix sockets.*Fix: choose a shorter --home/);
+  const home = join(dir, "x".repeat(60), "a-home-with-a-rather-long-name-for-the-sockets");
+  const result = await run(["--home", home, "--config", join(dir, "config.json")]);
+  assert.doesNotMatch(result.stderr, /too long|unix socket/);
+  assert.ok(existsSync(join(home, "state")), result.stderr);
 });
 
 // A speaker that is locked until /admin/signin gets the owner password. A registered host stays pending (401 on
