@@ -45,7 +45,7 @@ To use a service, call it with `Speaker-Wait: 60` (see the core skill); speaker 
 
 Target and share names come only from the user. Once, make a throwaway key with `ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"` and send `"sshKey":"<contents of ssh_key.pub>"` with your first request. Then ask for `ssh:<target>` or `folder:<share>`.
 
-After approval, `/me` lists complete command lines under `ssh`. Copy them and fill in `<key>` (the path of `ssh_key`), `<command>`, `<file>`, `<path>`, `<mountpoint>`.
+After approval, `/me` lists complete command lines under `ssh`. Once, run its `knownHosts.save` command with `<known_hosts>` replaced by `"$d/known_hosts"`. Then copy the command lines and fill in `<key>` (the path of `ssh_key`), `<known_hosts>` (`"$d/known_hosts"`), `<command>`, `<file>`, `<path>`, `<mountpoint>`.
 
 - Commands: the `ssh` line. There is no terminal. For a script, end the line with `'sh -s' <<'EOF'`.
 - Folders: use `sshfs` first and work inside the mountpoint; if `sshfs` is not installed, use `sftp` or `scp` (fine for a few files). Paths start with the share name. `rsync` and `scp -O` are refused.
