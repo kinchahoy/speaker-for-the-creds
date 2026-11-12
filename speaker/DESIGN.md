@@ -237,7 +237,7 @@ Services, rules and groups stay behind authentication. Targets and shares are ne
 
 ## Deployment
 
-One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally a push topic and `TRUSTED_PROXY`. Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
+One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally a push topic, `TRUSTED_PROXY` and `PROXY_PORT` (the secrets proxy, off when unset). Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
 
 Placement:
 

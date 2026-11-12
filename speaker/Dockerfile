@@ -11,7 +11,7 @@ ENV NODE_ENV=production PORT=3000 DATA_DIR=/data
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/* \
   && mkdir /data && chown node:node /data
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY package.json server.ts ui.ts lifecycle.ts ssh.ts store.ts services.example.json ./
+COPY package.json server.ts ui.ts lifecycle.ts ssh.ts store.ts proxy.ts services.example.json ./
 COPY skill ./skill
 USER node
 EXPOSE 3000

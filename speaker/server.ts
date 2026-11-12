@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { once } from 'node:events'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -26,6 +27,7 @@ import {
   requestTable,
   transition,
 } from './lifecycle.ts'
+import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
 import {
   caPublicKey,
   fingerprint,
@@ -69,6 +71,8 @@ const mcpReadMethods = new Set([
   'logging/setLevel',
 ])
 const authSchema = z.discriminatedUnion('type', [
+  // A keyless service (a remote MCP server or API that needs no credential): speaker only gates and forwards.
+  z.object({ type: z.literal('none') }),
   z.object({ type: z.literal('bearer'), secret: idSchema }),
   z.object({ type: z.literal('basic'), secret: idSchema }),
   z.object({
@@ -281,6 +285,8 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       // Enables SSH certificates; DATA_DIR/ssh-hosts.json must then list the target hosts.
       SSH_CA_KEY: z.string().min(1).optional(),
       SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
+      // Port of the HTTPS proxy that inserts secrets (see proxy.ts); the proxy is off when unset.
+      PROXY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
       // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
     })
@@ -363,6 +369,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     store = opened
     for (const [id, key] of Object.entries(opened.vault.services)) secrets.set(id, key)
   }
+  // A service's key, or '' for a keyless service; undefined when a keyed service has none yet.
+  const credentialOf = (id: string) => (services[id]?.auth.type === 'none' ? '' : secrets.get(id))
   const persistServiceKeys = () => {
     unlocked().vault.services = Object.fromEntries(secrets)
     return unlocked().save()
@@ -371,6 +379,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   async function newVault() {
     const vault: Vault = { services: {}, secrets: {}, ssh: await generateSshKey() }
     for (const [id, service] of Object.entries(services)) {
+      if (service.auth.type === 'none') continue
       const plaintext = await optionalFile(join(dataDir, 'secrets', service.auth.secret))
       if (plaintext !== undefined) vault.services[id] = plaintext
     }
@@ -462,7 +471,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return target.origin === base.origin && target.pathname.startsWith(prefix) ? target : undefined
   }
   const applyCredential = (service: Service, secret: string, headers: Headers) => {
-    if (service.auth.type === 'path') return
+    if (service.auth.type === 'path' || service.auth.type === 'none') return
     if (service.auth.type === 'header') headers.set(service.auth.headerName, secret)
     else
       headers.set(
@@ -475,7 +484,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   // Lists an MCP service's tools with speaker's own credentialed session (initialize, tools/list, close).
   async function listMcpTools(id: string) {
     const service = services[id],
-      secret = secrets.get(id)
+      secret = credentialOf(id)
     if (!service || secret === undefined) throw new Error('MCP service or credential missing')
     const url = upstreamUrl(service, secret, [], '')
     if (!url) throw new Error('Invalid MCP service URL')
@@ -602,6 +611,40 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   // `.full` includes read, so either item covers a read.
   const coverFor = (agentId: string, service: string, write: boolean) =>
     grantFor(agentId, `${service}.full`) ?? (write ? undefined : grantFor(agentId, `${service}.read`))
+  // Secrets proxy (proxy.ts). One random placeholder per agent per secret; the agent puts it where the secret goes and
+  // speaker swaps it for the value in requests to the secret's allowed hosts.
+  const placeholders = new Map<string, string>()
+  const placeholderOf = (agentId: string, name: string) => {
+    const key = `${agentId}\n${name}`
+    if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
+    return placeholders.get(key) as string
+  }
+  // The agent's active `secret:` grants whose secret still exists in the store.
+  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; until: string | null })[] =>
+    [...grants.values()]
+      .filter((grant) => grant.agentId === agentId && grant.item.startsWith('secret:') && live(grant))
+      .flatMap((grant) => {
+        const name = grant.item.slice('secret:'.length),
+          owned = store && Object.hasOwn(store.vault.secrets, name) ? store.vault.secrets[name] : undefined
+        return owned ? [{ ...owned, name, until: grant.expiresAt, placeholder: placeholderOf(agentId, name) }] : []
+      })
+  // The proxy's certificate authority: made at first need, kept in the encrypted store.
+  let authority: Promise<{ cert: string; key: string }> | undefined
+  const certificateAuthority = () => {
+    const opened = store
+    if (!opened) throw new Refusal(503, `Speaker is locked: the owner signs in at ${config.PUBLIC_URL}/admin`)
+    authority ??= (async () => {
+      if (!opened.vault.ca) {
+        opened.vault.ca = await createCa()
+        await opened.save()
+      }
+      return opened.vault.ca
+    })().catch((error) => {
+      authority = undefined
+      throw error
+    })
+    return authority
+  }
   const useOf = (target: Usage) => {
     target.uses++
     target.lastUsedAt = Date.now()
@@ -892,8 +935,13 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
     while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
-  // Item kinds an agent may ask for: services and groups, plus what its sandbox host enforces.
-  const allowedKinds = (agent: Agent): string[] => ['service', 'group', ...(hostOf(agent)?.kinds ?? [])]
+  // Item kinds an agent may ask for: services and groups, secrets when the proxy is on, plus what its sandbox host enforces.
+  const allowedKinds = (agent: Agent): string[] => [
+    'service',
+    'group',
+    ...(config.PROXY_PORT ? ['secret'] : []),
+    ...(hostOf(agent)?.kinds ?? []),
+  ]
   // A group is offered only if every member is a kind the agent can use.
   const offered = (agent: Agent) =>
     Object.entries(groups).filter(([, group]) =>
@@ -911,7 +959,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       const kind = kindOf(item) ?? ''
       if (!allowedKinds(agent).includes(kind)) throw invalid(`${item} is not available to this agent`, itemForms)
       const target = serviceItem(item)
-      if (target && (!Object.hasOwn(services, target.id) || secrets.get(target.id) === undefined))
+      if (target && (!Object.hasOwn(services, target.id) || credentialOf(target.id) === undefined))
         throw invalid(`Unknown service ${target.id}`)
     }
     return union(items)
@@ -969,6 +1017,16 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     message: { error: 'rate_limited', next: 'Wait a few minutes before enrolling again' },
   })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
+  // The proxy's public certificate: agents trust it for the hosts of their secrets.
+  if (config.PROXY_PORT)
+    app.get('/_speaker/proxy/ca.pem', async (c) => {
+      try {
+        return c.text((await certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' })
+      } catch (error) {
+        if (error instanceof Refusal) return c.json({ error: 'locked', message: error.message }, 503)
+        throw error
+      }
+    })
   if (ssh) app.get('/_speaker/ssh/ca.pub', (c) => c.text(`${ssh.caPublicKey}\n`))
   // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
@@ -1210,7 +1268,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ),
     ),
   )
-  admin.get('/live', (c) => c.json(livePanels(view(), groups)))
+  admin.get('/live', (c) => c.json(livePanels(view(), groups, unlocked().vault.secrets)))
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
   const redirect = (c: Context) => c.redirect('/admin', 303)
   admin.post('/services/save', async (c) => {
@@ -1218,7 +1276,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .object({
         id: idSchema,
         baseUrl: urlSchema,
-        authType: z.enum(['bearer', 'header', 'basic', 'path']),
+        authType: z.enum(['none', 'bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),
         notes: z.string().optional(),
@@ -1248,6 +1306,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       secrets.set(input.id, input.secret)
       await persistServiceKeys()
     }
+    if (input.authType === 'none' && secrets.delete(input.id)) await persistServiceKeys()
     services[input.id] = service
     mcpTools.delete(input.id)
     await save(servicesFile, services)
@@ -1466,6 +1525,29 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     endAgent(id)
     return c.json({ ok: true })
   })
+  // Per secret grant, everything the agent needs to use it through the proxy (the value is never shown).
+  const secretsView = (c: Context, agent: Agent) => {
+    const base = baseOf(c),
+      ca = '$HOME/.local/state/speaker/ca.pem'
+    return Object.fromEntries(
+      secretGrants(agent.id).map(({ name, env, placeholder, hosts, until }) => [
+        name,
+        {
+          until,
+          hosts,
+          environment: {
+            [env]: placeholder,
+            HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
+            SSL_CERT_FILE: ca,
+          },
+          token: '<token> is the part after "Bearer " in your header file; do not print it',
+          certificate: `Once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh; for git set GIT_SSL_CAINFO to the same file or run git config --global http.sslCAInfo "${ca}".`,
+          git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
+          note: 'Set these only on the command that needs them (for example HTTPS_PROXY=... gh pr list): the proxy refuses every host except these.',
+        },
+      ]),
+    )
+  }
   // Everything an agent needs to know about where it stands. Open services, targets and shares are never listed.
   app.get('/_speaker/me', (c) => {
     const agent = agentCaller(c)
@@ -1496,7 +1578,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         Object.entries(services)
           .filter(
             ([id, service]) =>
-              secrets.get(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
+              credentialOf(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
           )
           .map(([id, service]) => [
             id,
@@ -1504,6 +1586,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           ]),
       ),
       grants: mine.map(({ item, expiresAt }) => ({ item, expiresAt })),
+      ...(config.PROXY_PORT ? { secrets: secretsView(c, agent) } : {}),
       groups: Object.fromEntries(offered(agent)),
       requests: [...requests.values()]
         .filter((request) => request.agentId === agent.id)
@@ -1621,7 +1704,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const rule = write ? service.write : service.read
     if (rule === 'never')
       return c.json({ error: 'denied', item, next: 'Stop: the owner blocks this; do not request it.' }, 403)
-    const secret = secrets.get(serviceId)
+    const secret = credentialOf(serviceId)
     if (secret === undefined) return c.json({ error: 'invalid', message: 'Service has no key configured' }, 503)
     if (rule === 'ask' && !coverFor(agent.id, serviceId, write)) {
       const until = lockedUntil(agent.id, item)
@@ -1725,13 +1808,34 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       responseHeaders.set('location', location.replaceAll(secret, '<redacted>'))
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
   })
+  const proxy = config.PROXY_PORT
+    ? createProxy({
+        authenticate(token, source) {
+          if (!store) throw new Refusal(503, `Speaker is locked: the owner signs in at ${config.PUBLIC_URL}/admin`)
+          const digest = hash(token)
+          if (revoked.has(digest)) throw new Refusal(403, 'The owner revoked this agent: stop and tell the user')
+          const agent = [...agents.values()].find((a) => same(a.tokenHash, digest))
+          if (!agent || agent.source !== source)
+            throw new Refusal(407, 'Unknown token or address: enroll again (GET /_speaker/help)')
+          agent.lastSeen = Date.now()
+          return { agent: agent.id }
+        },
+        secrets: secretGrants,
+        ca: certificateAuthority,
+        log: audit,
+      })
+    : undefined
+  if (proxy) {
+    proxy.listen(config.PROXY_PORT, '0.0.0.0')
+    await once(proxy, 'listening')
+  }
   if (hasStore)
     void notify(
       'Speaker is locked',
       'unlock',
       `Speaker restarted: sign in at ${config.PUBLIC_URL.replace(/\/$/, '')}/admin to unlock`,
     )
-  return app
+  return Object.assign(app, { proxy })
 }
 
 if (import.meta.main) {

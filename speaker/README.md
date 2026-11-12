@@ -85,6 +85,7 @@ A call without access answers `approval_required` with the request's id; with `S
 | Bearer | Speaker, in the encrypted store | The configured upstream API, in `Authorization: Bearer …` |
 | Basic | Speaker, in the encrypted store, as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
 | Custom header | Speaker, in the encrypted store; the header name is service configuration | The configured upstream API, in that header |
+| None | Nothing | Nothing: a keyless remote MCP server or API; speaker only gates and forwards |
 
 Speaker keeps these values encrypted on its host-side data volume (decrypted in memory after you sign in) and injects them only when forwarding a granted
 service request. It strips the agent's authorization and cookie headers first. Agents receive a Speaker
@@ -104,9 +105,25 @@ All service keys, secrets and speaker's SSH key live in one file, `DATA_DIR/stor
 
 - The first visit to `/admin` sets the owner password. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited; plain HTTP from another machine works but the sign-in page warns that the password crosses the network unencrypted.
 - Speaker starts locked when a store exists: agent and sandbox-host calls answer `503` `locked` with a `tell_user` line, `/admin` shows only sign-in, and one push (if ntfy is set) says to sign in. Signing in unlocks.
-- Setup lists Secrets: name, value (write-only), allowed hosts, and the environment variable the agent sees. They are stored and held in memory only; the proxy that inserts them is a later phase.
+- Setup lists Secrets: name, value (write-only), allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup; it re-wraps the data key. Forgot it: delete `store.json` and speaker resets, and you re-enter every key.
 - Upgrading: plaintext key files from earlier versions (`DATA_DIR/secrets/`) are imported into the store when you set the password, then deleted.
+{.ai}
+
+<!-- author: ai -->
+
+## Secrets proxy
+
+<sub>AI-written</sub>
+
+Set `PROXY_PORT` to turn on speaker's HTTPS proxy (off when unset; publish the port next to `PORT`). An agent holding `secret:<NAME>` sends HTTPS through it with `CONNECT`, authenticating with its speaker token as the proxy password (`http://agent:<token>@<speaker>:<PROXY_PORT>`; curl, `gh` and `git` send it as Basic credentials). For a host the secret's Setup entry allows (`*.domain` covers subdomains only), speaker terminates TLS with its own certificate authority, replaces the agent's placeholder with the real value in the `Authorization` header only (also inside HTTP Basic credentials, which is how `git` sends it), and forwards the request to the real host over TLS. Every other host gets `403` and a one-line message: it is not a general proxy. Grants are checked on every request, so a revoke or expiry answers `403` at once, even in an open tunnel.
+{.ai}
+
+- The certificate authority is made at first need, kept in the encrypted store, and served at `GET /_speaker/proxy/ca.pem`; leaf certificates are made per host and cached in memory. Agents trust it for the proxy only.
+- Each agent gets one random placeholder per secret (memory only). `GET /_speaker/me` shows per secret grant the variable with its placeholder, `HTTPS_PROXY`, where to fetch the certificate, `SSL_CERT_FILE` for `gh` (`GIT_SSL_CAINFO` or `http.sslCAInfo` for `git`), the allowed hosts and the `gh auth setup-git` hint.
+- Set those variables on the one command that needs them, not on the whole shell: the proxy refuses every other host.
+- The log records agent, host, method, path (no query) and status; never the token or bodies.
+- `site:` items stay sandbox-only; `secret:` items are available to direct agents when `PROXY_PORT` is set.
 {.ai}
 
 <!-- author: ai -->
@@ -118,7 +135,7 @@ All service keys, secrets and speaker's SSH key live in one file, `DATA_DIR/stor
 Define groups in `DATA_DIR/groups.json` as `{ "<name>": { "description": "<one line>", "items": ["<item>", …] } }`. The description is optional. Copy
 [groups.example.json](groups.example.json) to start. Restart speaker after editing the file by hand; the `/admin`
 Groups page edits it live. A group may hold any items except other groups.
-A request names the group and the owner approves it with the group's items. An agent is offered (in `GET /_speaker/me`) and may request a group only if it may request every item in it, so direct agents never see groups with `site:`, `secret:`, `mcp:` or `ext:` items.
+A request names the group and the owner approves it with the group's items. An agent is offered (in `GET /_speaker/me`) and may request a group only if it may request every item in it, so direct agents never see groups with `site:`, `mcp:` or `ext:` items (and none with `secret:` items unless `PROXY_PORT` is set).
 {.ai}
 
 
