@@ -187,8 +187,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     const name = values.name ?? "bottle-school";
     await api("POST", `${config.speaker.url}/_speaker/hosts`, {
       name,
-      // "folder" tells speaker this host mounts shares itself, so it delivers them as VM mounts, never over SSH.
-      kinds: ["secret", "site", ...(config.backend === "gondolin" ? ["folder" as const] : []), "mcp", "ext"],
+      kinds: ["secret", "site", "folder", "mcp", "ext"],
       tokenHash: createHash("sha256").update(token).digest("hex"),
     });
     console.log(`Registered sandbox host "${name}". Approve it in speaker /admin, then start bottle-school.`);

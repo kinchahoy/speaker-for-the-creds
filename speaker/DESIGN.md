@@ -178,7 +178,7 @@ Limits: commands are not folder-limited (they run as the target's agent account)
 
 Each share lists how it may be delivered: **VM mount** (by a sandbox host that has the folder locally), **over SSH** (through speaker), or both. The agent asks only for `folder:<share>`; speaker picks the delivery:
 
-- a sandboxed agent whose sandbox host has the share, where the share allows VM mounts, gets a VM mount (fast, enforced by the VM boundary);
+- a sandboxed agent whose sandbox host has the share, where the share allows VM mounts, gets a VM mount (fast, enforced by the VM boundary); the host's share report (`mount: true`), not its registered kinds, says whether it has the share;
 - every other agent, including every direct agent, gets it over SSH, if the share allows that; otherwise the item is answered like a denial.
 
 The card, `/me` and the Active list label each folder grant **VM mount** or **over SSH**, so the owner always sees which one is in use. Over SSH, a sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is much slower than a VM mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
@@ -293,7 +293,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/me` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/me` gives the path.
-- A sandbox host that does not declare the `folder` kind has its agents' folders delivered over SSH and mounts them itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
+- A share the sandbox host reported with `mount: false` (or did not report) is delivered to its agents over SSH, and the host mounts it itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
 - After a speaker restart, the sandbox host re-creates the agents of its running tasks and files each task's template request again; the owner sees one card per task.
 
 **Deployment**

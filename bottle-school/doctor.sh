@@ -1,6 +1,6 @@
 #!/bin/sh
 # Preflight for the bottle-school host (Linux or macOS). Prints one line per check and the fix for anything missing.
-# Gondolin uses libkrun unless PI_V2_VMM=qemu; Krun also checks the Krun runner (no AVX-512 instructions) and the image's Krun boot assets.
+# With "backend": "gondolin", Gondolin uses libkrun unless PI_V2_VMM=qemu; Krun also checks the Krun runner (no AVX-512 instructions) and the image's Krun boot assets. The default, microsandbox, needs neither.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 os=$(uname -s)
@@ -8,7 +8,7 @@ case "$(uname -m)" in arm64|aarch64) arch=aarch64 qemu=qemu-system-aarch64 ;; *)
 failed=0
 config=${PI_V2_CONFIG:-$root/config.json}
 cfg() { node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))[process.argv[2]] ?? ''" "$config" "$1" 2>/dev/null; }
-backend=$(cfg backend); backend=${backend:-gondolin}
+backend=$(cfg backend); backend=${backend:-microsandbox}
 check() { # check <label> <fix> <command...>
 	label=$1 fix=$2
 	shift 2

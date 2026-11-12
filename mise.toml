@@ -31,7 +31,7 @@ run = "pnpm exec biome check --write ."
 description = "Run both packages' tests"
 run = [
   "cd speaker && node --test --test-timeout=15000 test/*.test.ts",
-  "cd bottle-school && node --test test/*.test.ts",
+  "cd bottle-school && node --test --test-timeout=30000 test/*.test.ts",
 ]
 
 [tasks.speaker]

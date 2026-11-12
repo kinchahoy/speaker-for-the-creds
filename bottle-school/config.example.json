@@ -1,4 +1,5 @@
 {
+  "backend": "microsandbox",
   "bindHost": "100.64.0.10",
   "controlPort": 7001,
   "guestPort": 7002,
