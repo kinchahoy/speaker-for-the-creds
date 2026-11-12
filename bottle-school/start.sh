@@ -26,8 +26,11 @@ if [ -x "$root/.runtime/krun-runner/bin/gondolin-krun-runner" ]; then
 fi
 
 command -v setsid >/dev/null || { echo "setsid is required" >&2; exit 1; }
+config="${PI_V2_CONFIG:-$root/config.json}"
+[ -f "$config" ] || { echo "$config is missing: run mise run setup" >&2; exit 1; }
+backend=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).backend ?? 'microsandbox'" "$config")
 # QEMU and qemu-img are Gondolin's; the microsandbox backend needs neither.
-if ! grep -q '"backend": *"microsandbox"' "${PI_V2_CONFIG:-$root/config.json}"; then
+if [ "$backend" = gondolin ]; then
 	command -v qemu-img >/dev/null || { echo "qemu-img is required to create Gondolin's COW root disk" >&2; exit 1; }
 	if [ "${PI_V2_VMM:-krun}" = qemu ]; then
 		case "$(uname -m)" in
@@ -40,6 +43,21 @@ if ! grep -q '"backend": *"microsandbox"' "${PI_V2_CONFIG:-$root/config.json}"; 
 		echo "Build the Krun runner first: mise run krun-runner (or set PI_V2_VMM=qemu)" >&2
 		exit 1
 	fi
+else
+	# microsandbox refuses a storage root that is, or sits under, a group- or world-writable directory (sticky ones such as /tmp are fine).
+	node -e '
+		const { readFileSync, statSync } = require("node:fs"), { dirname, join, resolve } = require("node:path");
+		const { stateRoot } = JSON.parse(readFileSync(process.argv[1], "utf8"));
+		for (let dir = join(resolve(stateRoot), "microsandbox"); ; dir = dirname(dir)) {
+			let mode;
+			try { mode = statSync(dir).mode; } catch { mode = 0; }
+			if (mode & 0o022 && !(mode & 0o1000)) {
+				console.error(`microsandbox refuses ${dir}: it is group- or world-writable. Fix: chmod 700 ${dir}`);
+				process.exit(1);
+			}
+			if (dir === dirname(dir)) break;
+		}
+	' "$config"
 fi
 
 setsid node "$root/src/server.ts" &

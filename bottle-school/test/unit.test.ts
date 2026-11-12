@@ -59,13 +59,13 @@ describe("configuration", () => {
     assert.throws(() => loadConfig(writeConfig("0.0.0.0")), /bindHost must be one exact/);
   });
 
-  test("defaults to the gondolin backend, accepts microsandbox, and rejects any other by name", () => {
+  test("defaults to the microsandbox backend, accepts gondolin, and rejects any other by name", () => {
     const path = writeConfig();
-    assert.equal(loadConfig(path).backend, "gondolin");
+    assert.equal(loadConfig(path).backend, "microsandbox");
     const set = (backend: string) =>
       writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), backend }));
-    set("microsandbox");
-    assert.equal(loadConfig(path).backend, "microsandbox");
+    set("gondolin");
+    assert.equal(loadConfig(path).backend, "gondolin");
     set("firecracker");
     assert.throws(() => loadConfig(path), /supported backends: gondolin, microsandbox/);
   });

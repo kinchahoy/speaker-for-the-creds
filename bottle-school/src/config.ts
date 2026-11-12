@@ -29,7 +29,7 @@ const ConfigFile = z
     // Supported sandbox backends; src/backends/index.ts holds the implementations.
     backend: z
       .enum(["gondolin", "microsandbox"], { error: "backend must be one of the supported backends: gondolin, microsandbox" })
-      .default("gondolin"),
+      .default("microsandbox"),
     bindHost: z.string(),
     controlPort: port,
     guestPort: port,

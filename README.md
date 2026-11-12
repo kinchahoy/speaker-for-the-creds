@@ -8,7 +8,7 @@ The owner approves what agents may use from a phone, for a chosen duration.
 {.ai}
 
 - [speaker](speaker/README.md) stores homelab keys, lets the owner approve what agents may use, proxies APIs, and issues grants.
-- [bottle-school](bottle-school/README.md) runs Pi in Gondolin micro-VMs and enforces site, secret, folder, and MCP grants as a speaker sandbox host.
+- [bottle-school](bottle-school/README.md) runs Pi in micro-VMs (microsandbox by default, or Gondolin) and enforces site, secret, folder, and MCP grants as a speaker sandbox host.
 
 <!-- author: ai -->
 
@@ -48,10 +48,10 @@ The owner can deploy speaker through [Docker](speaker/README.md#docker--home-ser
 
 <sub>AI-written</sub>
 
-One Linux machine can run speaker, bottle-school, and a direct agent together. These steps were run end to end on Linux x86_64 with QEMU; details live in [speaker/README.md](speaker/README.md) and [bottle-school/README.md](bottle-school/README.md).
+One Linux machine can run speaker, bottle-school, and a direct agent together. The default microsandbox backend needs no QEMU; the Gondolin steps were run end to end on Linux x86_64 with QEMU; details live in [speaker/README.md](speaker/README.md) and [bottle-school/README.md](bottle-school/README.md).
 {.ai}
 
-1. **Prerequisites.** `mise` (then `mise install && mise run install`), Docker for the guest build, `/dev/kvm` access, and `qemu-system-x86`, `qemu-utils` and `setsid` for the VMs (`mise run doctor` checks them). Optional: `sshd` (an SSH target to test) and `sshfs` (folders for direct agents; without it agents use `sftp` or `scp`).
+1. **Prerequisites.** `mise` (then `mise install && mise run install`), Docker for the guest build, `/dev/kvm` access and `setsid` for the VMs (`mise run doctor` checks them). Only the Gondolin backend (`"backend": "gondolin"`) also needs `qemu-utils`, and `qemu-system-x86` for `PI_V2_VMM=qemu`. Optional: `sshd` (an SSH target to test) and `sshfs` (folders for direct agents; without it agents use `sftp` or `scp`).
 2. **Configure speaker.** In `speaker/.env` set `DATA_DIR`, `PORT`, `PUBLIC_URL` (for example `http://127.0.0.1:3000`), `PROXY_PORT` (secrets proxy) and `SSH_PORT` (jump server). Start it with `mise run speaker`.
 3. **Set the owner password.** Open `PUBLIC_URL/admin`; the first visit asks for a password. After every restart speaker is `locked` (agents get `503 locked`) until you sign in at `/admin`, and restarting also forgets all agents and grants.
 4. **Add what agents can use** under Setup (the Services page): a service (the `demo` service works without a key), a secret (name, value, allowed hosts, variable name; the agent only ever sees a placeholder), an SSH target (put the line Setup shows into that account's `authorized_keys` first, then add it), and a share on that target (`VM mount`, `over SSH`, or both).
