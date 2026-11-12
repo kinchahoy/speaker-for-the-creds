@@ -7,10 +7,10 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { createApp, readConfig } from '../server.ts'
+import { setOwnerPassword } from './owner.ts'
 
 const run = promisify(execFile)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-const owner = { authorization: `Basic ${Buffer.from('admin:pw').toString('base64')}`, origin: 'http://localhost' }
 const agent = { authorization: 'Bearer agent-token' }
 
 test('an approved SSH request returns a certificate limited to its principal, window and options', async (t) => {
@@ -21,7 +21,6 @@ test('an approved SSH request returns a certificate limited to its principal, wi
   await writeFile(join(dir, 'ssh-hosts.json'), JSON.stringify({ nas: { hostname: 'nas.lan', users: ['raist'] } }))
   const app = await createApp(
     readConfig({
-      ADMIN_PASSWORD: 'pw',
       DATA_DIR: dir,
       PUBLIC_URL: 'http://localhost',
       SSH_CA_KEY: join(dir, 'ca'),
@@ -30,6 +29,7 @@ test('an approved SSH request returns a certificate limited to its principal, wi
   )
   const call = (path: string, init: RequestInit = {}) =>
     app.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init }))
+  const owner = { cookie: await setOwnerPassword(call), origin: 'http://localhost' }
   const post = (path: string, body: object, headers: Record<string, string> = {}) =>
     call(path, {
       method: 'POST',

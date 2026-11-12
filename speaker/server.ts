@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { serve, upgradeWebSocket } from '@hono/node-server'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
-import { basicAuth } from 'hono/basic-auth'
+import { getCookie, setCookie } from 'hono/cookie'
 import { csrf } from 'hono/csrf'
 import { etag } from 'hono/etag'
 import { HTTPException } from 'hono/http-exception'
@@ -35,7 +35,8 @@ import {
   sshHostsSchema,
   sshRequestSchema,
 } from './ssh.ts'
-import { adminPage, livePanels } from './ui.ts'
+import { createStore, generateSshKey, openStore, type Store, type Vault, WrongPassword } from './store.ts'
+import { adminPage, livePanels, setPasswordPage, signInPage } from './ui.ts'
 
 const idSchema = z
   .string()
@@ -171,6 +172,24 @@ const enrollSchema = identitySchema
     path: ['reason'],
   })
 const listSchema = z.union([z.string(), z.array(z.string())]).transform((value) => [value].flat())
+const newPasswordSchema = z
+  .object({ password: z.string().min(8, 'Use at least 8 characters.'), confirm: z.string() })
+  .refine((value) => value.password === value.confirm, { message: 'The two passwords differ.', path: ['confirm'] })
+const ownerSecretSchema = z.object({
+  // `secret:<NAME>` is how agents ask for it.
+  name: z.string().regex(/^[A-Za-z0-9_]+$/, 'A secret name uses letters, numbers and _'),
+  value: z.string().refine((value) => !/[\r\n]/.test(value), 'A secret value must be a single line'),
+  hosts: z
+    .string()
+    .transform((value) => value.split(/[\s,]+/).filter(Boolean))
+    .pipe(
+      z
+        .array(z.string().regex(/^(\*\.)?[a-zA-Z0-9.-]+$/, 'Allowed hosts look like api.github.com or *.example.org'))
+        .min(1),
+    ),
+  // The environment variable the agent sees (holding a placeholder, never the value).
+  env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _'),
+})
 const decisionSchema = z.object({
   duration: adminDurationSchema,
   permanent: z.literal('on').optional(),
@@ -248,11 +267,6 @@ const union = (...lists: string[][]) => [...new Set(lists.flat())]
 export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
   return z
     .object({
-      ADMIN_USER: z.string().min(1).default('admin'),
-      ADMIN_PASSWORD: z
-        .string()
-        .min(1)
-        .refine((value) => value !== 'change-this-password', 'Set a real admin password'),
       DATA_DIR: z.string().default('./data'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
       // Required: push links and the admin CSRF origin use it.
@@ -298,8 +312,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ),
     )
   ).join('\n')
-  const secretPath = (id: string) => join(dataDir, 'secrets', id)
-  await mkdir(join(dataDir, 'secrets'), { recursive: true, mode: 0o700 })
+  await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   const servicesFile = file('services.json')
   const starter = z
@@ -315,8 +328,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       if (!Object.hasOwn(services, id)) services[id] = service
     }
     await save(servicesFile, services)
-    if (services.demo && (await optionalFile(secretPath('demo'))) === undefined)
-      await writeFile(secretPath('demo'), demoSecret, { mode: 0o600 })
     await writeFile(imported, 'done', { mode: 0o600 })
   }
   const groupsFile = file('groups.json')
@@ -336,13 +347,42 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         hosts: sshHostsSchema.parse(JSON.parse(await readFile(file('ssh-hosts.json'), 'utf8'))),
       }
     : undefined
-  const secrets = new Map(
-    await Promise.all(
-      Object.entries(services).map(
-        async ([id, service]) => [id, await optionalFile(secretPath(service.auth.secret))] as const,
-      ),
-    ),
-  )
+  // Service keys in clear, empty until the owner unlocks the encrypted store (see "Keys and sign-in" below).
+  const secrets = new Map<string, string>()
+  // Keys and sign-in. The store appears when the owner first sets a password; after every restart speaker is locked
+  // until the owner signs in, which unwraps the data key. Sessions live in memory only.
+  const storeFile = file('store.json')
+  let store: Store | undefined
+  let hasStore = (await optionalFile(storeFile)) !== undefined
+  const unlocked = () => {
+    if (!store) throw new Error('Speaker is locked')
+    return store
+  }
+  const unlock = (opened: Store) => {
+    store = opened
+    for (const [id, key] of Object.entries(opened.vault.services)) secrets.set(id, key)
+  }
+  const persistServiceKeys = () => {
+    unlocked().vault.services = Object.fromEntries(secrets)
+    return unlocked().save()
+  }
+  // First unlock: speaker's SSH key and the service keys from the plaintext files of earlier versions.
+  async function newVault() {
+    const vault: Vault = { services: {}, secrets: {}, ssh: await generateSshKey() }
+    for (const [id, service] of Object.entries(services)) {
+      const plaintext = await optionalFile(join(dataDir, 'secrets', service.auth.secret))
+      if (plaintext !== undefined) vault.services[id] = plaintext
+    }
+    if (services.demo && vault.services.demo === undefined) vault.services.demo = demoSecret
+    return vault
+  }
+  const sessions = new Map<string, number>()
+  const sessionLife = 12 * 3600_000
+  const sessionCookie = 'speaker_session'
+  const signedIn = (c: Context) => {
+    const id = getCookie(c, sessionCookie)
+    return id !== undefined && (sessions.get(id) ?? 0) > Date.now()
+  }
   // Agents, grants, requests and usage live in memory only: a restart starts them empty.
   const agents = new Map<string, Agent>()
   const grants = new Map<string, Grant>()
@@ -389,6 +429,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   // Applies clock-driven transitions before every HTTP request: expired grants and requests, idle agents.
   function sweep() {
     const now = Date.now()
+    for (const [id, end] of sessions) if (end <= now) sessions.delete(id)
     let ended = false
     for (const grant of grants.values())
       if (!live(grant)) {
@@ -654,7 +695,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     })
   }
   const denyRequest = (id: string) => decide(id, [], '2h')
-  async function notify(title: string, anchor: string): Promise<'disabled' | 'sent' | 'failed'> {
+  async function notify(
+    title: string,
+    anchor: string,
+    message = 'Open the approval page to decide.',
+  ): Promise<'disabled' | 'sent' | 'failed'> {
     if (!config.NTFY_URL) return 'disabled'
     try {
       const response = await fetch(config.NTFY_URL, {
@@ -668,7 +713,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         body: JSON.stringify({
           topic: config.NTFY_TOPIC,
           title,
-          message: 'Open the approval page to decide.',
+          message,
           click: `${config.PUBLIC_URL.replace(/\/$/, '')}/admin#${anchor}`,
         }),
       })
@@ -800,6 +845,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     c.header('www-authenticate', 'Bearer realm="speaker"')
     c.header('link', '</skill.md>; rel="help"')
     return c.json({ error, ...fields, help: '/skill.md' }, 401)
+  }
+  // Until the owner signs in after a restart, every agent and sandbox-host call is refused.
+  const locked: MiddlewareHandler<Env> = async (c, next) => {
+    if (hasStore && !store)
+      return c.json({ error: 'locked', tell_user: `Speaker restarted: sign in at ${baseOf(c)}/admin to unlock` }, 503)
+    await next()
   }
   const enrollNext = 'Enroll again with a new token: GET /_speaker/help'
   // Resolves a bearer token to an approved sandbox host or an agent.
@@ -933,7 +984,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         )
       : c.text(intro),
   )
-  app.post('/_speaker/agents', enrollmentLimit, async (c) => {
+  app.post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
     const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
     const source = sourceOf(c)
     let agent = [...agents.values()].find((a) => same(a.tokenHash, tokenHash))
@@ -961,7 +1012,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       created ? 201 : 200,
     )
   })
-  app.post('/_speaker/hosts', enrollmentLimit, async (c) => {
+  app.post('/_speaker/hosts', locked, enrollmentLimit, async (c) => {
     const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
     const host: Host = { id: rid(), ...input, status: 'pending' }
     hosts.set(host.id, host)
@@ -1002,7 +1053,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     c.header('cache-control', 'no-store')
     await next()
   })
-  admin.use('*', basicAuth({ username: config.ADMIN_USER, password: config.ADMIN_PASSWORD, realm: 'Speaker' }))
   admin.use('*', csrf({ origin: new URL(config.PUBLIC_URL).origin }))
   admin.use('*', async (c, next) => {
     const origin = c.req.header('origin')
@@ -1019,6 +1069,64 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         403,
       )
     await next()
+  })
+  // Sign-in is the only way in: the first visit sets the owner password, later visits sign in with it.
+  const signInLimit = rateLimiter({
+    windowMs: 15 * 60_000,
+    limit: 5,
+    standardHeaders: 'draft-7',
+    skipSuccessfulRequests: true,
+    keyGenerator: (c) => sourceOf(c),
+    message: 'Too many failed attempts; wait a few minutes.',
+  })
+  const authPage = (c: Context, error?: string, status: 200 | 400 | 401 = 200) => {
+    // Plain HTTP from another machine sends the password in clear.
+    const exposed = !baseOf(c).startsWith('https:') && !/^(127\.|::1$)/.test(sourceOf(c))
+    return c.html(hasStore ? signInPage(exposed, error) : setPasswordPage(exposed, error), status)
+  }
+  const startSession = (c: Context) => {
+    const id = rid()
+    sessions.set(id, Date.now() + sessionLife)
+    setCookie(c, sessionCookie, id, {
+      httpOnly: true,
+      sameSite: 'Strict',
+      secure: baseOf(c).startsWith('https:'),
+      path: '/admin',
+      maxAge: sessionLife / 1000,
+    })
+    return c.redirect('/admin', 303)
+  }
+  admin.post('/setup', signInLimit, async (c) => {
+    const input = newPasswordSchema.safeParse(await c.req.parseBody())
+    if (!input.success) return authPage(c, input.error.issues[0].message, 400)
+    await serial(async () => {
+      if (hasStore) throw new HTTPException(409, { message: 'The owner password is already set' })
+      unlock(await createStore(storeFile, input.data.password, await newVault()))
+      hasStore = true
+    })
+    // Their keys are in the store now: the plaintext files of earlier versions go.
+    await rm(join(dataDir, 'secrets'), { recursive: true, force: true })
+    audit('owner_password_set')
+    return startSession(c)
+  })
+  admin.post('/signin', signInLimit, async (c) => {
+    if (!hasStore) return c.redirect('/admin', 303)
+    const { password } = z.object({ password: z.string() }).parse(await c.req.parseBody())
+    try {
+      const opened = await openStore(storeFile, password)
+      if (!store) unlock(opened)
+    } catch (error) {
+      if (!(error instanceof WrongPassword)) throw error
+      audit('signin_failed', { source: sourceOf(c) })
+      return authPage(c, 'Wrong password.', 401)
+    }
+    audit('owner_signed_in')
+    return startSession(c)
+  })
+  admin.use('*', async (c, next) => {
+    if (signedIn(c)) return await next()
+    if (c.req.method !== 'GET') return c.text('Sign in at /admin', 401)
+    return c.req.path === '/admin' ? authPage(c) : c.redirect('/admin', 303)
   })
   const grantState = (grant: Grant): GrantView['state'] => {
     const hostId = agents.get(grant.agentId)?.host
@@ -1090,6 +1198,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
             ]
           }),
         ),
+        undefined,
+        Object.fromEntries(
+          Object.entries(unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
+        ),
       ),
     ),
   )
@@ -1128,8 +1240,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       if (/[\r\n]/.test(input.secret)) throw new HTTPException(400, { message: 'Credential must be a single line' })
       if (input.authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(input.secret))
         throw new HTTPException(400, { message: 'A path credential must be one URL path segment' })
-      await writeFile(secretPath(input.id), input.secret, { mode: 0o600 })
       secrets.set(input.id, input.secret)
+      await persistServiceKeys()
     }
     services[input.id] = service
     mcpTools.delete(input.id)
@@ -1150,15 +1262,50 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   admin.post('/services/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
     if (!Object.hasOwn(services, id)) throw new HTTPException(404, { message: 'Unknown service' })
-    const secret = services[id].auth.secret
     delete services[id]
     secrets.delete(id)
     await save(servicesFile, services)
-    await rm(secretPath(secret), { force: true })
+    await persistServiceKeys()
     revokeGrants((grant) => grant.item.startsWith(`${id}.`))
     for (const [key, request] of requests)
       if (request.items.some((item) => item.startsWith(`${id}.`))) requests.delete(key)
     audit('service_deleted', { service: id })
+    return c.redirect('/admin?section=services', 303)
+  })
+  // Secrets agents may use without seeing them (inserted by the secrets proxy of a later phase). A blank value keeps
+  // the stored one.
+  admin.post('/secrets/save', async (c) => {
+    const input = ownerSecretSchema.parse(await fields(c))
+    const { vault } = unlocked()
+    const value = input.value || vault.secrets[input.name]?.value
+    if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
+    vault.secrets[input.name] = { value, hosts: input.hosts, env: input.env }
+    await unlocked().save()
+    audit('secret_saved', { secret: input.name })
+    return c.redirect('/admin?section=services', 303)
+  })
+  admin.post('/secrets/delete', async (c) => {
+    const { name } = ownerSecretSchema.pick({ name: true }).parse(await fields(c))
+    const { vault } = unlocked()
+    if (!Object.hasOwn(vault.secrets, name)) throw new HTTPException(404, { message: 'Unknown secret' })
+    delete vault.secrets[name]
+    await unlocked().save()
+    audit('secret_deleted', { secret: name })
+    return c.redirect('/admin?section=services', 303)
+  })
+  admin.post('/password', async (c) => {
+    const { current, ...next } = z
+      .object({ current: z.string() })
+      .and(newPasswordSchema)
+      .parse(await fields(c))
+    try {
+      await openStore(storeFile, current)
+    } catch (error) {
+      if (error instanceof WrongPassword) throw new HTTPException(400, { message: 'The current password is wrong' })
+      throw error
+    }
+    await unlocked().setPassword(next.password)
+    audit('owner_password_changed')
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/groups/save', async (c) => {
@@ -1263,7 +1410,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   app.route('/admin', admin)
 
-  app.use('*', auth)
+  app.use('*', locked, auth)
   app.get(
     '/_speaker/hosts/ws',
     async (c, next) => {
@@ -1576,6 +1723,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       responseHeaders.set('location', location.replaceAll(secret, '<redacted>'))
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
   })
+  if (hasStore)
+    void notify(
+      'Speaker is locked',
+      'unlock',
+      `Speaker restarted: sign in at ${config.PUBLIC_URL.replace(/\/$/, '')}/admin to unlock`,
+    )
   return app
 }
 
