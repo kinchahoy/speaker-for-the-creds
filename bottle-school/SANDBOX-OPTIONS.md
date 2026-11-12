@@ -298,6 +298,25 @@ Losses:
 8. smolvm check, only if microsandbox fails check 1: `--mount-socket` on a no-network machine on Linux and macOS, attach through the CLI or local API, seccomp mode under the service account.
 9. Whether speaker's agent API can be reached over plain HTTP from the gateway and whether its token binding (bound to the sandbox host's address) works when the gateway is the caller.
 
+### Trial result on Linux: go
+
+microsandbox 0.7.14 from npm (`microsandbox` plus `@superradcompany/microsandbox-linux-x64-gnu`, Apache-2.0), driven from Node as the owner's user with no root, no daemon and no system packages; one `libkrun` process per VM, needing only `/dev/kvm` access.
+
+| Check | Result |
+| --- | --- |
+| Boot a stock OCI image (`debian:stable-slim`) | first command at about 0.28 s with the image cached; 4.4 s with a cold pull |
+| No network device (`disableNetwork()` in the Node API) | only `lo` and an idle kernel `dummy0`; no route |
+| Host unix socket to guest vsock (`.vsock(path, port)`) | byte round trip with `socat - VSOCK-CONNECT:2:<port>` in the guest |
+| Exec and terminal | `exec` returns output and exit code; `attachShell()` gives a PTY (needs a host TTY; resize not yet checked) |
+| CPU, memory, disk | `cpus`, `memory` and a root-disk size cap hold; the OCI image is a read-only layer under a writable overlay that lasts for the VM's life |
+| FUSE and `sshfs` with no network | `/dev/fuse` present; `sshfs -F <config>` with `ProxyCommand socat - VSOCK-CONNECT:2:<port>` mounted a host folder through a stock non-root `sshd`, reads and writes both ways |
+
+Setup requirement: microsandbox refuses a storage folder that other accounts could write; bottle-school must create its microsandbox storage folder with mode 700 (or run with `umask 077`).
+
+What the gateway still needs from maintained parts: `socat`, `sshfs` and `openssh-client` baked into the guest image; an egress proxy with a per-request allow list and upstream chaining to speaker's proxy (candidate: the `proxy-chain` npm package; alternatives squid or tinyproxy); a model-call recorder.
+
+Still unverified: macOS (vsock routes are documented as supported; entitlements and FUSE in the macOS guest kernel are open), `sshfs` throughput over vsock, many concurrent VMs, terminal resize, `sb.ssh()`.
+
 ## 7. Owner's decisions
 
 - **macOS is a requirement.** A separate backend is fine if it stays a few dozen lines. Consequence: libkrun first (one backend for Linux and macOS); Firecracker optional on Linux. Spike check 1 runs on libkrun (through microsandbox) on both the Linux server and a Mac, with no network device and vsock only.
