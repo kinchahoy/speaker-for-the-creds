@@ -73,3 +73,14 @@ Calls made where the design left room; each can be revisited.
 - Certificates: ECDSA P-256 with `@peculiar/x509`; the authority's key is in the vault and its certificate is served at `/_speaker/proxy/ca.pem`.
 - `secret:` is offered to direct agents only when `PROXY_PORT` is set.
 - A `secret:` request for a name not in Setup still makes a card, marked "not set up".
+
+**Phase 5b (bottle-school)**
+- Secret route: for a secret's hosts, bottle-school's network layer opens its upstream connection as a `CONNECT` tunnel to speaker's proxy, authenticated as the task's agent; speaker inserts the value. If the proxy is unconfigured, locked or unreachable, the request is refused, never sent directly. This needed a ~10-line hook in the existing Gondolin patch (`httpHooks.upstreamDispatcher`).
+- The guest gets no `HTTPS_PROXY` and no extra certificate; Pi reads the placeholder from `/me` and sets the variable on the one command that needs it (DESIGN.md's worked example now says so).
+- `secrets.env` and `BROKER_SECRET_*` are gone; bottle-school refuses to start while either is still present. Hosted model keys are speaker secrets too.
+- `catalog.json` holds only MCP servers that run inside the VM; remote ones are speaker services (keyless Context7 and Parallel Search ship as examples). Pi calls them at `$SPEAKER_URL/<service>`.
+- Templates: `want`, `label`, `duration` (shipped templates use `group:<id>` for 1 day); an old `bundle` key fails loudly.
+- A sandbox-only grant shows as `applying` until bottle-school reports it in force; held calls wait for it, except `mcp:` and `ext:`, which need Pi idle.
+- bottle-school reports its shares on every connection and drops all grants after 30 seconds without speaker.
+- `config.json` gains `speaker.proxyPort`, which must equal speaker's `PROXY_PORT`.
+- Not yet verified in a real VM: `gh`/`git` through the hook, hosted-model keys, Pi with the new instructions, Krun routing.
