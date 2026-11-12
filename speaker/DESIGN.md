@@ -293,4 +293,42 @@ Where it fits best: sandboxes, where the sandbox host already holds a WebSocket 
 
 ## Planned after the core build: speaker inserts secrets itself
 
-To trust the sandbox host less, the sandbox host would pass each intercepted request to a secret-bearing host (such as `api.github.com`) to speaker with the placeholder still in it; speaker swaps in the real token, forwards the request, and returns the response. `gh` and `git` in the sandbox work unchanged, and the sandbox host never holds the token. Cost: traffic to those hosts, including large `git clone`s, flows through speaker, and the sandbox host's interception needs this hand-off.
+Goal: a real secret is never handed to the sandbox host. Speaker keeps it and puts it into each request itself. The sandbox and the sandbox host only ever see a placeholder.
+
+### Worked example: `gh` and `git` in a sandbox
+
+**Once, in speaker's Setup.** The owner adds a secret:
+
+- name `GITHUB_TOKEN`;
+- value: a GitHub fine-grained token limited to the repositories and permissions tasks should have;
+- allowed hosts `api.github.com` and `github.com`.
+
+**At task start.** The sandbox host sets `GH_TOKEN=speaker-placeholder-<random, per task>` in the VM and runs `gh auth setup-git`, so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
+
+**The agent asks.** Pi requests `secret:GITHUB_TOKEN` with a reason, for example "open a pull request for the fix". The owner's card shows the secret, its allowed hosts, and the write tint. Granting it also allows the sandbox to reach those two hosts; no separate `site:` items are needed. Speaker tells the sandbox host over its WebSocket that the agent holds `secret:GITHUB_TOKEN` for `api.github.com` and `github.com`, until the grant's end. The value is not sent.
+
+**Each request, for example `gh pr create`:**
+
+1. `gh` sends `POST https://api.github.com/repos/<owner>/<repo>/pulls` with `Authorization: token speaker-placeholder-…`.
+2. The VM's only network route is the sandbox host's interception. It terminates TLS with the sandbox's own certificate authority, which the VM trusts, and sees a request to a host covered by an active secret grant.
+3. Instead of sending it to GitHub, the sandbox host passes the whole request to speaker over its authenticated channel, naming the agent and the destination URL.
+4. Speaker checks that the agent holds `secret:GITHUB_TOKEN`, that `api.github.com` is one of its allowed hosts, and that the grant is still active. It replaces the placeholder with the real token, in the `Authorization` header and, for `git`, inside HTTP Basic credentials (`git` sends the token as the Basic password), and nowhere else.
+5. Speaker sends the request to GitHub over its own TLS connection, streams the response back to the sandbox host, and logs agent, host, method, path and status, never the token and never the bodies.
+6. The sandbox host returns the response to `gh`, which works as usual. `git clone`, `git push` and `gh api` go the same way to `github.com` and `api.github.com`.
+
+**Revoke or expiry.** Speaker stops forwarding at once: the next `gh` or `git` call gets a 403 whose message says the access ended.
+
+**What each party holds:**
+
+| | Real token | Requests and responses | Placeholder |
+| --- | --- | --- | --- |
+| Speaker | yes, encrypted at rest, in memory after unlock | passes through, not stored | knows which placeholder belongs to which agent |
+| Sandbox host | never | sees them (it already sees all sandbox traffic) | sets it in the VM |
+| Agent in the VM | never | its own | sees it |
+| GitHub | yes, on each request | yes | never |
+
+**If the sandbox host is taken over,** it can make GitHub requests through speaker only while a `secret:GITHUB_TOKEN` grant is active, only to the allowed hosts, and every request is logged. It cannot copy the token for later or for use elsewhere.
+
+**Costs.** All traffic to the secret's hosts, including large `git clone`s, goes through speaker, so speaker needs the bandwidth and adds one hop of latency. The sandbox host's interception gains one hand-off rule: requests to hosts covered by an active secret grant go to speaker instead of the internet.
+
+Direct agents are not involved: they hold their own `gh` login on their own machine.
