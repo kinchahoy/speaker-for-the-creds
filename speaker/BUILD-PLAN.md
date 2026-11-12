@@ -28,6 +28,22 @@ How the design in [DESIGN.md](DESIGN.md) gets built. The design is the specifica
 
 Phases 4 and 5a run in parallel; 5b follows 5a; 6 comes last.
 
+## Status
+
+All six phases are merged into main and pass their tests. Verified on a live speaker: enrollment from the help page's sh steps, a held call approved through a card, sign-in and the locked state, the secrets proxy with real `curl` (bearer and Basic), and SSH commands, `scp` and `sftp` run exactly as `/me` prints them against a real `sshd`. Not yet verified: `sshfs`, the PowerShell setup steps, and anything inside a real bottle-school VM (`gh`/`git` through the proxy hook, Pi with its new instructions, Krun routing).
+
+## Redeploying speaker and bottle-school together
+
+Both must move at once; the API, admin sign-in and secret handling changed.
+
+1. **speaker settings** (`speaker/.env`): remove `ADMIN_USER` and `ADMIN_PASSWORD`; set `TRUSTED_PROXY` to the reverse proxy's address; set `PROXY_PORT` (secrets proxy) and `SSH_PORT` (jump server) and publish both (they do not go through the web proxy).
+2. **Start speaker and open `/admin`:** set the owner password. Existing plaintext key files are imported into the encrypted store and deleted. From then on, after every restart, sign in to unlock.
+3. **Secrets:** re-enter each secret from bottle-school's old `secrets.env` in speaker's Setup (name, value, allowed hosts, variable name), then delete `secrets.env`; bottle-school refuses to start while it exists.
+4. **bottle-school:** set `speaker.proxyPort` in `config.json` to speaker's `PROXY_PORT`; rerun `mise run setup` (templates and catalog changed format); register it again (`mise run bottle-cli register`), approve it in `/admin`, and remove the old one.
+5. **SSH targets:** in Setup, add each target and put the shown line into the chosen account's `authorized_keys`.
+6. **Guest image:** rebuild `pi-v5-guest`, then restart bottle-school.
+7. **Agents:** direct agents enroll again by following `$SPEAKER_URL/_speaker/help`.
+
 ## To explore later
 
 - One WebSocket per agent instead of most routes (DESIGN.md).
@@ -84,3 +100,9 @@ Calls made where the design left room; each can be revisited.
 - bottle-school reports its shares on every connection and drops all grants after 30 seconds without speaker.
 - `config.json` gains `speaker.proxyPort`, which must equal speaker's `PROXY_PORT`.
 - Not yet verified in a real VM: `gh`/`git` through the hook, hosted-model keys, Pi with the new instructions, Krun routing.
+
+**Phase 6 (skill and help)**
+- The core skill is about 250 tokens and is served at `/` and `/skill.md`; the one help page (`skill/help.md`, about 1,350 tokens) replaces the per-topic pages.
+- Held calls use `Speaker-Wait: 60` with curl's `--max-time 70`.
+- The help page keeps the agent's throwaway SSH key at `$d/ssh_key`, next to the header file, and assumes its sh steps run in one shell.
+- Remote MCP services appear in `/me` with `mcp: true`; the MCP client points at `$SPEAKER_URL/<service>` with the header file's `Authorization`.
