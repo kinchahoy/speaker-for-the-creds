@@ -7,7 +7,7 @@ import { createSocket } from 'node:dgram'
 import { existsSync, rmSync } from 'node:fs'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { connect, createServer, type Server, type Socket } from 'node:net'
-import { userInfo } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -116,10 +116,8 @@ export async function createJump(env: Env) {
   const login = userInfo().username
   const sessions = new Map<string, Session>()
   const enabled = env.port !== undefined
-  if (enabled && !existsSync('/dev/shm'))
-    throw new Error("SSH_PORT needs /dev/shm (memory-backed storage) for speaker's key and the jump server")
-
-  // Runtime state, all under one memory-backed directory made when speaker unlocks.
+  // Runtime state, all under one private temporary directory (mode 700) made when speaker unlocks. It holds the
+  // ssh-agent socket, public keys and the jump server's per-start host key; speaker's private key never touches it.
   let dir = ''
   let publicKey = ''
   let agentProcess: ChildProcess | undefined
@@ -137,7 +135,7 @@ export async function createJump(env: Env) {
   // --- Speaker's key: a stock ssh-agent holds it; nothing else sees it. ---
   async function start(key: { private: string; public: string }) {
     if (!enabled || dir) return
-    dir = await mkdtemp('/dev/shm/speaker-')
+    dir = await mkdtemp(join(tmpdir(), 'speaker-'))
     process.once('exit', cleanup)
     publicKey = key.public
     await writeFile(path('speaker.pub'), `${publicKey}\n`)
@@ -461,7 +459,7 @@ export async function createJump(env: Env) {
         `HostKey ${path('host_key')}`,
         'PidFile none',
         `AuthorizedKeysFile ${path('authorized_keys')}`,
-        // The key file lives in /dev/shm, which StrictModes would reject.
+        // authorized_keys lives in the temporary directory, outside a home directory, which StrictModes would reject.
         'StrictModes no',
         'PasswordAuthentication no',
         'KbdInteractiveAuthentication no',
