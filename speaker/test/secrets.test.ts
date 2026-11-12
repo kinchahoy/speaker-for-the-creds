@@ -135,8 +135,8 @@ async function setup(t: TestContext) {
       })
       assert.equal(reply.status, 202, await reply.clone().text())
       const { id } = (await reply.json()) as { id: string }
-      const live = (await (await call('/admin/live', { headers: owner })).json()) as { approvals: string }
-      const card = live.approvals.split('<li class="ticket" id="request-').find((c) => c.startsWith(id)) ?? ''
+      const inbox = await (await call('/admin/panel/inbox', { headers: owner })).text()
+      const card = inbox.split('<article id="request-').find((c) => c.startsWith(id)) ?? ''
       const body = new URLSearchParams({ duration: '1h' })
       for (const [, item] of card.matchAll(/name="shown" type="hidden" value="([^"]*)"/g)) {
         body.append('items', item)
@@ -149,11 +149,9 @@ async function setup(t: TestContext) {
     return { token, headers, ask, me }
   }
   const grantIds = async () =>
-    [
-      ...((await (await call('/admin/live', { headers: owner })).json()) as { grants: string }).grants.matchAll(
-        /<li id="grant-([^"]+)"/g,
-      ),
-    ].map((m) => m[1])
+    [...(await (await call('/admin/panel/active', { headers: owner })).text()).matchAll(/<li id="grant-([^"]+)"/g)].map(
+      (m) => m[1],
+    )
   const revokeAll = async () => {
     for (const id of await grantIds()) await ownerForm('/grants/revoke', { id })
   }
@@ -235,7 +233,10 @@ test('placeholders become the real secret for covered hosts only, in Bearer and 
   const agent = await s.agent('gh')
   const card = await agent.ask(['secret:GITHUB_TOKEN'])
   // The card shows where the value goes, in the tint of the other items that can change things.
-  assert.match(card, /class="cap pickable risky[^"]*"[\s\S]*secret:GITHUB_TOKEN[\s\S]*sent to localhost/)
+  assert.match(
+    card,
+    /<label class="risky"><input type="checkbox" name="items" value="secret:GITHUB_TOKEN"[\s\S]*sent to localhost/,
+  )
 
   const { secrets } = await agent.me()
   const grant = secrets.GITHUB_TOKEN

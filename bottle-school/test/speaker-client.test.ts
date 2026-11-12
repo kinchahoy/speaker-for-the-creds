@@ -131,8 +131,8 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
     });
     assert.equal(response.status, 303, `approve answered ${response.status}`);
   };
-  const live = async () =>
-    (await (await fetch(`${url}/admin/live`, { headers: owner })).json()) as { grants: string; approvals: string };
+  const panel = async (name: string) => (await fetch(`${url}/admin/panel/${name}`, { headers: owner })).text();
+  const live = async () => ({ grants: await panel("active"), approvals: await panel("inbox") });
   /** An approved sandbox host, its client, and one task agent. */
   const host = async (kinds: string[]) => {
     const token = "host-token";
@@ -201,8 +201,8 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
 
   reportApplied([lease.id]);
   const active = async () => {
-    const { grants } = (await (await fetch(`${url}/admin/live`, { headers: owner })).json()) as { grants: string };
-    return grants.includes('<span class="sr">active</span>');
+    const grants = await (await fetch(`${url}/admin/panel/active`, { headers: owner })).text();
+    return grants.includes('<li id="grant-') && !grants.includes("data-state=");
   };
   await until(active);
 });

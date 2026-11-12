@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { type Context, Hono } from 'hono'
 import { getCookie, setCookie } from 'hono/cookie'
 import { csrf } from 'hono/csrf'
@@ -18,7 +19,7 @@ import {
 } from './core.ts'
 import { hostTable, transition } from './lifecycle.ts'
 import { WrongPassword } from './store.ts'
-import { adminPage, livePanels, setPasswordPage, signInPage } from './ui.ts'
+import { active, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
 
 export function adminApp(core: Core) {
   const {
@@ -60,8 +61,8 @@ export function adminApp(core: Core) {
     secureHeaders({
       contentSecurityPolicy: {
         defaultSrc: ["'none'"],
-        styleSrc: ["'unsafe-inline'"],
-        scriptSrc: [NONCE],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", NONCE],
         connectSrc: ["'self'"],
         formAction: ["'self'"],
         frameAncestors: ["'none'"],
@@ -89,6 +90,16 @@ export function adminApp(core: Core) {
         403,
       )
     await next()
+  })
+  // Pico's stylesheet and htmx, served from the installed packages.
+  const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
+  const assets = {
+    'pico.css': [asset('@picocss/pico/css/pico.classless.min.css'), 'text/css'],
+    'htmx.js': [asset('htmx.org/dist/htmx.min.js'), 'text/javascript'],
+  }
+  admin.get('/assets/:name{pico\\.css|htmx\\.js}', (c) => {
+    const [body, type] = assets[c.req.param('name') as keyof typeof assets]
+    return c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
   })
   // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
@@ -150,7 +161,8 @@ export function adminApp(core: Core) {
   })
   // Newest entries first, optionally narrowed to one grant, agent, service, target or share.
   admin.get('/log', (c) => {
-    const { grant, agent, service, target, share } = c.req.query()
+    const query = c.req.query()
+    const { grant, agent, service, target, share } = query
     const entries = logged.filter(
       (e) =>
         (!grant || e.grant === grant) &&
@@ -161,57 +173,64 @@ export function adminApp(core: Core) {
           e.service === service ||
           (Array.isArray(e.items) && e.items.some((i) => String(i).startsWith(`${service}.`)))),
     )
+    const now = view(),
+      ssh = jump.setup()
+    const ids = (record: object) => Object.keys(record).map((id): [string, string] => [id, id])
     return c.html(
-      adminPage(
-        services,
-        secrets,
-        view(),
-        undefined,
+      layout(
         c.get('secureHeadersNonce'),
         'log',
-        groups,
-        undefined,
-        {},
-        { entries, query: { grant, agent, service, target, share } },
-        undefined,
-        jump.setup(),
+        log(entries, query, {
+          agent: now.agents.map((a) => [a.id, a.label]),
+          grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
+          service: ids(services),
+          target: ids(ssh.targets),
+          share: ids(ssh.shares),
+        }),
       ),
     )
   })
-  admin.get('/', (c) =>
-    c.html(
-      adminPage(
+  const panels = {
+    inbox: () => inbox(view(), groups, unlocked().vault.secrets),
+    active: () => active(view()),
+  }
+  admin.get('/', (c) => {
+    const section = c.req.query('section') ?? (c.req.query('service') ? 'services' : 'approvals')
+    const nonce = c.get('secureHeadersNonce')
+    if (section === 'services' || section === 'groups') {
+      const mcp = Object.fromEntries(
+        [...mcpTools].map(([id, { tools }]) => {
+          const list = [...tools.values()]
+          const read = list.filter((tool) => tool.readOnly).length
+          return [id, { read, write: list.length - read, unannotated: list.filter((tool) => !tool.annotated).length }]
+        }),
+      )
+      const owned = Object.fromEntries(
+        Object.entries(unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
+      )
+      const ssh = jump.setup(c.req.query('sshError'))
+      const data = {
         services,
         secrets,
-        view(),
-        c.req.query('service'),
-        c.get('secureHeadersNonce'),
-        c.req.query('section'),
+        owned,
         groups,
-        c.req.query('error'),
-        Object.fromEntries(
-          [...mcpTools].map(([id, { at, tools }]) => {
-            const list = [...tools.values()]
-            return [
-              id,
-              {
-                at,
-                read: list.filter((tool) => tool.readOnly).length,
-                write: list.filter((tool) => !tool.readOnly).length,
-                unannotated: list.filter((tool) => !tool.annotated).length,
-              },
-            ]
-          }),
-        ),
-        undefined,
-        Object.fromEntries(
-          Object.entries(unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
-        ),
-        jump.setup(c.req.query('sshError')),
-      ),
-    ),
-  )
-  admin.get('/live', (c) => c.json(livePanels(view(), groups, unlocked().vault.secrets)))
+        ssh,
+        mcp,
+        selected: c.req.query('service'),
+        error: c.req.query('error'),
+      }
+      return c.html(layout(nonce, 'services', setup(data)))
+    }
+    if (['active', 'grants', 'agents'].includes(section))
+      return c.html(layout(nonce, 'active', live('active', panels.active())))
+    return c.html(layout(nonce, 'approvals', live('inbox', panels.inbox())))
+  })
+  // A live panel again, or 204 when it shows the same as the hash the page holds.
+  admin.get('/panel/:name{inbox|active}', (c) => {
+    const name = c.req.param('name') as keyof typeof panels
+    const inner = panels[name]()
+    return unchanged(inner, c.req.query('h')) ? c.body(null, 204) : c.html(live(name, inner))
+  })
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
   const redirect = (c: Context) => c.redirect('/admin', 303)
   admin.post('/services/save', async (c) => {
