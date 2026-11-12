@@ -63,10 +63,10 @@ One guest image serves both backends. `guest/Dockerfile` is a Debian slim image 
 
 <sub>AI-written</sub>
 
-`PI_V2_VMM` selects Gondolin's VMM for the service (and `mise run doctor`). It defaults to `qemu`. One guest image boots under both backends, so switching needs no rebuild: set `PI_V2_VMM=krun` in `bottle-school/.env` and restart `mise run bottle`.
+`PI_V2_VMM` selects Gondolin's VMM for the service (and `mise run doctor`). It defaults to `krun` (libkrun); set `PI_V2_VMM=qemu` in `bottle-school/.env` to use QEMU. One guest image boots under both, so switching needs no rebuild. Both need `qemu-utils` (`qemu-img` creates each task's copy-on-write disk); only `PI_V2_VMM=qemu` needs `qemu-system-*`. On x86_64, build the Krun runner once with `mise run krun-runner` (the published runner uses AVX-512, which many CPUs lack); `start.sh` stops with that instruction if it is missing.
 {.ai}
 
-**QEMU (default).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
+**QEMU (`PI_V2_VMM=qemu`).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
 {.ai}
 
 **Krun (libkrun, no QEMU process).** Needs a Krun runner that matches the host CPU:

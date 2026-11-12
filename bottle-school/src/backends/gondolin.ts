@@ -191,7 +191,8 @@ const boot = async (
       info,
     );
 
-  const krun = process.env.PI_V2_VMM === "krun";
+  // libkrun is the default VMM; PI_V2_VMM=qemu selects QEMU.
+  const krun = process.env.PI_V2_VMM !== "qemu";
   const vm = await VM.create({
     sandbox: {
       vmm: krun ? "krun" : "qemu",
