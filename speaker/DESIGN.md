@@ -121,10 +121,10 @@ The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"
 
 ### Using SSH and folders over SSH
 
-Speaker runs an SSH jump server (stock OpenSSH, in speaker's container). It listens only while at least one SSH or folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
+Speaker runs an SSH jump server in its container (see The jump server and relay). It listens only while at least one SSH or over-SSH folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The login name (`<account>` below) is the account speaker runs as. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
 
-- **Commands** (`ssh:<target>`): `ssh … s@<speaker> <target> '<command>'`; for anything multi-line, `ssh … s@<speaker> <target> 'sh -s' <<'EOF'`. The grant also allows `scp` and `sftp` as that account. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
-- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> s@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> s@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `sshfs` first, so the agent works on the share in place rather than copying files around; `scp` and `sftp` are for a one-off copy. `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
+- **Commands** (`ssh:<target>`): `ssh … <account>@<speaker> <target> '<command>'`; for anything multi-line, `ssh … <account>@<speaker> <target> 'sh -s' <<'EOF'`. The grant also allows `scp` and `sftp` as that account. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
+- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> <account>@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> <account>@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `sshfs` first, so the agent works on the share in place rather than copying files around; `scp` and `sftp` are for a one-off copy. `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
 
 ### Knowing where it stands
 
@@ -158,7 +158,8 @@ Speaker generates one SSH key for all targets. It is stored encrypted with the o
 
 ### The jump server and relay
 
-- Speaker writes, in memory-backed storage, one `authorized_keys` line per agent with an active SSH or folder grant: `restrict,from="<agent's address>",command="relay <agent>",expiry-time="<last grant's end>" <agent's throwaway key>`. The agent never gets a shell on speaker. The jump server's own host key is generated at each start.
+- Speaker itself listens on `SSH_PORT` only while an SSH or over-SSH folder grant is active, and hands each connection to a stock, non-root `sshd -i` (inetd mode), so there is no daemon to start or reap. The jump server's own host key is generated at each start.
+- Speaker writes, in memory-backed storage, one `authorized_keys` line per agent with an active SSH or folder grant: `restrict,from="<agent's address>",command="relay <agent>",expiry-time="<last grant's end>" <agent's throwaway key>`. The agent never gets a shell on speaker.
 - `relay` reads the target (first word of the command) or share (first part of each path), checks the agent's grant for it with speaker, and runs the system `ssh` client to the target with the agent's exact command, without a local shell, authenticating through a stock `ssh-agent` that holds speaker's key in memory. It keeps a connection open to speaker for the session.
 - At the grant's end, on revoke, or when speaker restarts, speaker closes that connection, `relay` ends the session, and the grant's line is removed. `expiry-time` stops new logins even if speaker stalls.
 
@@ -199,9 +200,11 @@ All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in
 
 **Sign-in:** a login form with the owner's password (rate limited, session cookie). Plain HTTP works, for example on a single laptop; the sign-in page notes when the password is about to cross the network unencrypted. Network identity (for example a tailnet login) is never accepted as the owner: agents on the owner's machines share it.
 
-- **Inbox:** pending requests as cards. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and VM mount or over SSH; items that can change things (`<service>.full`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
-- **Active:** grants and agents, each with time left, **Extend** (labelled with the amount, such as "Extend 1h": one more span of its original length) and **Revoke**; open SSH sessions with **End**.
-- **Setup:** services (URL, key, read and write rules, notes for agents), secrets with their allowed hosts, targets, shares, groups, sandbox hosts.
+The pages use Pico's classless CSS and htmx, both served from their npm packages under `/admin/assets`. Inbox and Active are live panels: they poll every 5 seconds (`/admin/panel/inbox`, `/admin/panel/active`) and are swapped only when their content changed, so ticked boxes stay put. Times are shown in UTC.
+
+- **Inbox:** pending requests as cards, and sandbox hosts waiting for approval. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and VM mount or over SSH; items that can change things (`<service>.full`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
+- **Active:** agents with their grants, each with time left, **Extend** (labelled with the amount, such as "Extend 1h": one more span of its original length) and **Revoke**; open SSH sessions with **End**; approved sandbox hosts.
+- **Setup** (`/admin?section=services`): services (URL, key, read and write rules, notes for agents), secrets with their allowed hosts, groups, SSH targets and shares, and the owner password.
 - **Log:** recent forwarded calls, SSH sessions and file operations, decisions, and requests for unknown names, filterable by agent, grant, service, target or share. It is an in-memory buffer; standard output is the full record.
 
 New requests and the locked state go to the owner's phone as a push notification that carries only a link to the card.
@@ -257,6 +260,10 @@ Placement:
 ## Data
 
 On disk, in speaker's data volume: settings (services with rules and notes, secrets' allowed hosts, targets with pinned host keys, shares, groups, sandbox hosts) and the encrypted keys with their wrapped data key. In memory only: agents, grants, requests, SSH sessions, usage counters. The log goes to standard output, for Docker's log handling.
+
+## Code
+
+`server.ts` composes the parts and starts listening: `core.ts` (schemas, settings, in-memory state, request, grant and decision logic), `api.ts` (agent and sandbox-host API, service proxy), `admin.ts` (owner pages and forms), `ui.ts` (page templates), `proxy.ts` (secrets proxy), `jump.ts` (targets, shares, `ssh-agent`, the jump server), `relay.ts` (the forced command) with `sftp.ts` (folder limits), `store.ts` (encrypted keys), `lifecycle.ts` (state transition tables).
 
 ## Rules in detail
 

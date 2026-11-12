@@ -7,7 +7,7 @@
 The owner approves what agents may use from a phone, for a chosen duration.
 {.ai}
 
-- [speaker](speaker/README.md) stores homelab keys, lets the owner approve what agents may use, proxies APIs, and issues grants.
+- [speaker](speaker/README.md) ([design](speaker/DESIGN.md)) stores homelab keys, lets the owner approve what agents may use, proxies APIs, and issues grants.
 - [bottle-school](bottle-school/README.md) runs Pi in microsandbox micro-VMs and enforces site, secret, folder, and MCP grants as a speaker sandbox host.
 
 <!-- author: ai -->
