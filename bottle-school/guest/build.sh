@@ -3,6 +3,8 @@
 # Usage: guest/build.sh [image-tag]   (default: pi-v5-guest; set it as "guestImage" in config.json)
 # Docker (buildx) builds guest/Dockerfile for the host architecture under the tag, then microsandbox loads it into
 # <stateRoot>/microsandbox (stateRoot from config.json, or PI_V2_CONFIG).
+# microsandbox refuses storage another account could write to; keep everything it and we create private.
+umask 077
 set -eu
 IMAGE=${1:-pi-v5-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)

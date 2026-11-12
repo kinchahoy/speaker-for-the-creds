@@ -12,7 +12,8 @@ const home = process.env.BOTTLE_HOME ?? join(homedir(), ".local", "share", "bott
 const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) =>
   join(home, name),
 );
-for (const directory of [configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true });
+// Private (700): microsandbox refuses a storage root with a group- or world-writable ancestor, and a umask of 002 would make one.
+for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
 
 const config = JSON.parse(readFileSync(join(here, "config.example.json"), "utf8"));
 Object.assign(config, {

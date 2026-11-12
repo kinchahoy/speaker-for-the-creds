@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# microsandbox refuses storage another account could write to; keep everything it and we create private.
+umask 077
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 

@@ -1,6 +1,8 @@
 #!/bin/sh
 # Preflight for the bottle-school host (Linux or macOS). Prints one line per check and the fix for anything missing.
 set -u
+# microsandbox refuses storage another account could write to; keep everything it and we create private.
+umask 077
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 failed=0
 config=${PI_V2_CONFIG:-$root/config.json}
