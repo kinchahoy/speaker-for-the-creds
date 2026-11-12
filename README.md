@@ -67,7 +67,7 @@ Pi needs a model server. `init` asks for an OpenAI-compatible one. To use a host
 
 <sub>AI-written</sub>
 
-Speaker is a candidate for supervised pilots. Before you rely on it, check the real upstream URL, TLS, private routing, and the approval flow. bottle-school still needs an end-to-end guest run and host storage quotas before unattended use. To run speaker in Docker, see [its README](speaker/README.md#docker-and-home-server-deployment).
+Ready for supervised use on your own network. Not yet tested on macOS or for long unattended runs. Before you rely on it, check the real upstream URL, TLS, private routing, and the approval flow. To run speaker in Docker, see [its README](speaker/README.md#docker-and-home-server-deployment).
 {.ai}
 
 <!-- author: ai -->
