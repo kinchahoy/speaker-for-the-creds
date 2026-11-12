@@ -30,25 +30,26 @@ const COMMANDS = {
     positional: 0,
     help: `usage: ${SELF} register [--name NAME]
 
-Registers this host as a speaker sandbox host, writes its token and learns speaker's proxy and SSH ports. Approve
-the sandbox host in speaker /admin, then start the service.`,
+Registers this host as a speaker sandbox host. Writes its token to the config and learns speaker's proxy and SSH
+ports. Then approve the sandbox host in speaker /admin and start the service.`,
   },
   run: {
     positional: 0,
     help: `usage: ${SELF} run [--template T] [--name NAME] [--model M] [--prompt TEXT] [--hours H]
                      [--attended | --unattended]
 
-Starts a task. --template defaults to offline, which asks speaker for nothing at launch. With --prompt the
-task runs once and archives when Pi writes /output/DONE. --hours sets the calendar deadline.
-An attended task expects you at its terminal: Pi may ask you questions there. An unattended task is told
-nobody is watching, so it records assumptions instead of asking. The default is attended without --prompt
-and unattended with it; a template may fix the mode, and a contradicting flag is refused.`,
+Starts a task. --template defaults to offline, which asks speaker for nothing at launch. With --prompt, the
+task runs once and archives when Pi writes /output/DONE. --hours sets a wall-clock deadline, in hours from launch.
+
+An attended task expects you at its terminal, where Pi may ask you questions. An unattended task is told
+nobody is watching, so it records assumptions instead of asking. Without --prompt a task is attended; with
+--prompt, unattended. A template may fix the mode, and a contradicting flag is refused.`,
   },
   ls: {
     positional: 0,
     help: `usage: ${SELF} ls
 
-Lists live tasks with state, attended or unattended mode, pending approvals, age, model, name, and Pi's
+Lists live tasks with state, mode (attended or unattended), pending approvals, age, model, name, and Pi's
 latest message.`,
   },
   attach: {
@@ -157,7 +158,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       });
     } catch (error) {
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
-      throw new Error(`cannot reach ${url} (${cause}); is bottle-school running? config: ${configPath}`);
+      throw new Error(`cannot reach ${url} (${cause}). Is bottle-school running? Config: ${configPath}`);
     }
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) throw new Error(plain(payload.error ?? `HTTP ${response.status} from ${url}`));
@@ -168,15 +169,15 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
 
   /** Exact id or name first, then unique id or name prefix. */
   const resolveTask = async (wanted: string): Promise<Task> => {
-    if (!wanted.trim()) throw new UsageError(`${command} expects a task id; see \`${SELF} ls\``);
+    if (!wanted.trim()) throw new UsageError(`${command} expects a task id. See \`${SELF} ls\``);
     const all = await tasks();
     const exact = all.filter((task) => task.id === wanted || task.name === wanted);
     const matches =
       exact.length > 0 ? exact : all.filter((task) => task.id.startsWith(wanted) || task.name.startsWith(wanted));
     if (matches.length === 1) return matches[0]!;
-    if (matches.length === 0) throw new Error(`no task matches "${wanted}"; see \`${SELF} ls\``);
+    if (matches.length === 0) throw new Error(`no task matches "${wanted}". See \`${SELF} ls\``);
     throw new Error(
-      `"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}); use a longer id`,
+      `"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}). Use a longer id`,
     );
   };
 
@@ -233,13 +234,13 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     list.forEach((task, index) => {
       console.log(line(rows[index]!));
       for (const request of task.pendingRequests)
-        console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}); approve in speaker /admin`);
+        console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it in speaker /admin`);
     });
   } else if (command === "attach") {
     const task = await resolveTask(positionals[0]!);
     if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
-      throw new Error(`task ${task.id} is ${task.state}; it has no terminal to attach to`);
-    console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches; Pi keeps running.`);
+      throw new Error(`task ${task.id} is ${task.state}, so it has no terminal to attach to`);
+    console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches, and Pi keeps running.`);
     const terminal = attach(config, task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
     const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => {
@@ -267,7 +268,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
   } else if (command === "stop") {
     const task = await resolveTask(positionals[0]!);
     await api("POST", `${control}/api/tasks/${task.id}/close`);
-    console.log(`Closing ${task.id} (${task.name}). The archive lands in ${config.outputRoot}; follow progress with ${SELF} ls.`);
+    console.log(`Closing ${task.id} (${task.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
   }
 }
 
@@ -293,7 +294,7 @@ if (first === "" || first === "help" || first === "--help" || first === "-h") {
       if (positionals.length !== expected)
         throw new UsageError(
           expected === 0
-            ? `${command} takes no positional arguments; pass the prompt with --prompt "..."`
+            ? `${command} takes no positional arguments. Pass the prompt with --prompt "..."`
             : `${command} takes exactly one task id, got ${positionals.length}`,
         );
       await main(command, values, positionals);

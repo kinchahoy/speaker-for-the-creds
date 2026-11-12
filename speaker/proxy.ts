@@ -185,13 +185,13 @@ export function createProxy(hooks: ProxyHooks): Server {
       if (!token)
         throw new Refusal(
           407,
-          'speaker: proxy credentials needed: http://agent:<your speaker token>@<speaker>:<proxy port>',
+          'speaker: proxy credentials needed. Use http://agent:<your speaker token>@<speaker>:<proxy port>',
         )
       const { agent } = hooks.authenticate(token, socket.remoteAddress?.replace(/^::ffff:/, ''))
       if (!hooks.secrets(agent).some(({ hosts }) => hosts.some((pattern) => covers(pattern, host))))
         throw new Refusal(
           403,
-          `speaker: no secret grant of yours covers ${host}; speaker is not a general proxy. Ask the owner for the secret via POST /_speaker/requests (see GET /_speaker/me).`,
+          `speaker: no secret grant of yours covers ${host}; speaker is not a general proxy. Ask the owner for the secret with POST /_speaker/requests (see GET /_speaker/me).`,
         )
       const { key, cert } = await leaf(host)
       const tunnel = createHttpsServer({ key, cert }, tunnelHandler(agent, host, port))

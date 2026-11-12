@@ -16,7 +16,7 @@ case "$(uname -m)" in
   x86_64) PLATFORM=linux/amd64 ;;
   *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
-[ -f "$CONFIG" ] || { echo "$CONFIG not found: run mise run init bottle-school first" >&2; exit 1; }
+[ -f "$CONFIG" ] || { echo "$CONFIG not found. Fix: run mise run init bottle-school first" >&2; exit 1; }
 STATE=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).stateRoot" "$CONFIG")
 
 # PI_GUEST_PLATFORMS=linux/amd64,linux/arm64 builds both (needs binfmt/QEMU emulation and Docker's containerd image store).

@@ -9,9 +9,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 for dir in /opt/homebrew/opt/util-linux/bin /usr/local/opt/util-linux/bin; do
 	command -v setsid >/dev/null 2>&1 || [ ! -x "$dir/setsid" ] || PATH="$dir:$PATH"
 done
-command -v setsid >/dev/null || { echo "setsid is required" >&2; exit 1; }
+command -v setsid >/dev/null || { echo "setsid is missing. Fix: sudo apt install util-linux (macOS: brew install util-linux)" >&2; exit 1; }
 config="${PI_V2_CONFIG:-$root/config.json}"
-[ -f "$config" ] || { echo "$config is missing: run mise run init bottle-school" >&2; exit 1; }
+[ -f "$config" ] || { echo "$config is missing. Fix: run mise run init bottle-school" >&2; exit 1; }
 # microsandbox refuses a storage root that is, or sits under, a group- or world-writable directory (sticky ones such as /tmp are fine).
 node -e '
 	const { readFileSync, statSync } = require("node:fs"), { dirname, join, resolve } = require("node:path");
