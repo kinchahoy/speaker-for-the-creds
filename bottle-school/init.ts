@@ -42,7 +42,7 @@ const fail = (what: string, fix: string): never => {
 };
 const answered = <T,>(value: T | symbol): Exclude<T, symbol> => {
   if (p.isCancel(value)) {
-    p.cancel("Cancelled; nothing further was changed.");
+    p.cancel("Cancelled. Nothing more was changed.");
     process.exit(1);
   }
   return value as Exclude<T, symbol>;
@@ -141,16 +141,16 @@ export async function initBottleSchool(flags: BottleFlags) {
   const configPath = resolve(flags.config ?? process.env.PI_V2_CONFIG ?? join(here, "config.json"));
   if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "delete it, or pass --force to replace it");
   checkHost(!flags["skip-build"]);
-  p.log.success("KVM access, setsid and Docker are available.");
+  p.log.success("KVM access, setsid, and Docker are available.");
 
   const defaultHome = join(homedir(), ".local", "share", "bottle-school");
-  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: "Where should bottle-school keep its config, state and output?", placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
+  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: "Where should bottle-school keep its config, state, and output?", placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
   const disk = statfsSync(existingAncestor(home));
   const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
   if (freeGiB < MIN_FREE_GIB) fail(`${home} has ${freeGiB.toFixed(1)} GiB free and bottle-school needs ${MIN_FREE_GIB}`, "choose a home on a larger filesystem with --home");
   const stateHome = join(home, "state", "microsandbox");
   if (Buffer.byteLength(stateHome) + SOCKET_ROOM >= SOCKET_LIMIT)
-    fail(`${stateHome} is too long for microsandbox's unix sockets (${Buffer.byteLength(stateHome)} bytes plus about ${SOCKET_ROOM}, under ${SOCKET_LIMIT})`, "choose a shorter --home");
+    fail(`${stateHome} is too long for microsandbox's unix sockets (${Buffer.byteLength(stateHome)} bytes, plus about ${SOCKET_ROOM} for the socket; the limit is ${SOCKET_LIMIT})`, "choose a shorter --home");
   // Everything private (700): microsandbox refuses a storage root with a group- or world-writable ancestor. Checked now so a
   // bad home fails before the other questions.
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
@@ -168,7 +168,7 @@ export async function initBottleSchool(flags: BottleFlags) {
   const urlProblem = speakerUrlProblem(speakerUrl);
   if (urlProblem) fail(`speaker URL ${speakerUrl} is not usable`, urlProblem);
   const healthy = await fetch(`${speakerUrl}/_speaker/health`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.ok, () => false);
-  if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker) or correct the URL");
+  if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker), or correct the URL");
   p.log.success(`Speaker answers at ${speakerUrl}.`);
 
   const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server (host:port, OpenAI-compatible)", placeholder: "192.168.1.20:8080" }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
@@ -192,11 +192,11 @@ export async function initBottleSchool(flags: BottleFlags) {
   try {
     validateConfig(config);
   } catch (error) {
-    fail(`these settings are not valid: ${(error as Error).message}`, "correct the answer and run init again");
+    fail(`these settings are not valid: ${(error as Error).message}`, "correct the answer, then run init again");
   }
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
-  p.log.success(`Wrote ${configPath}; config, state and output are under ${home}.`);
+  p.log.success(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
 
   const env = { ...process.env, PI_V2_CONFIG: configPath };
   if (!flags["skip-build"]) {
@@ -225,11 +225,11 @@ export async function initBottleSchool(flags: BottleFlags) {
     const server = startDetached(logFile, env);
     const control = `http://127.0.0.1:${controlPort}`;
     await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () => fetch(`${control}/api/state`).then((r) => r.ok, () => false));
-    p.log.info(`bottle-school runs in the background (pid ${server.pid}); stop it with: kill ${server.pid}`);
+    p.log.info(`bottle-school runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
     const created = await fetch(`${control}/api/tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT }) });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
     if (!id) fail(`the smoke-test task did not start: ${error ?? created.status}`, `read ${logFile}`);
-    await waitFor(`Smoke-test task ${id} is running ("${SMOKE_PROMPT}")`, `Task ${id} archived.`, `task ${id} did not finish; see: mise run bottle-cli ls`, async () => {
+    await waitFor(`Smoke-test task ${id} is running ("${SMOKE_PROMPT}")`, `Task ${id} archived.`, `task ${id} did not finish. See: mise run bottle-cli ls`, async () => {
       const { tasks } = (await (await fetch(`${control}/api/state`)).json()) as { tasks: { id: string; state: string }[] };
       const task = tasks.find((entry) => entry.id === id);
       if (task?.state === "failed" || task?.state === "failed-archive") fail(`the smoke-test task ${task.state}`, `read ${logFile} and the archive under ${outputRoot}`);

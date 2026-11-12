@@ -35,7 +35,7 @@ export const fail = (what: string, fix: string): never => {
 // Ends the run when the owner presses Ctrl-C at a prompt.
 const answered = <T>(value: T | symbol): Exclude<T, symbol> => {
   if (p.isCancel(value)) {
-    p.cancel('Cancelled; nothing further was changed.')
+    p.cancel('Cancelled. Nothing more was changed.')
     process.exit(1)
   }
   return value as Exclude<T, symbol>
@@ -86,7 +86,7 @@ async function pickPort(
           : undefined
     if (!problem) return port
     if (value !== undefined || yes) fail(`${label} port ${raw} ${problem}`, `choose another with --${flag}`)
-    p.log.warn(`${raw} ${problem}; choose another.`)
+    p.log.warn(`${raw} ${problem}. Choose another.`)
   }
 }
 
@@ -162,7 +162,7 @@ export async function initSpeaker(flags: SpeakerFlags) {
   if (existsSync(join(dataDir, 'store.json')))
     fail(
       `${dataDir} already holds an owner password`,
-      'choose another data directory, or delete store.json there to reset (every stored key is lost)',
+      'choose another data directory, or delete store.json there to start over (this loses every stored key)',
     )
 
   const port = await pickPort(flags.port, yes, 'Web', 'port', 3000, [])
@@ -214,7 +214,7 @@ export async function initSpeaker(flags: SpeakerFlags) {
     } catch (error) {
       return fail(
         `these settings are not valid:\n${(error as Error).message}`,
-        'correct the flag or answer and run init again',
+        'correct the flag or answer, then run init again',
       )
     }
   })()
@@ -246,14 +246,14 @@ export async function initSpeaker(flags: SpeakerFlags) {
       : yes || answered(await p.confirm({ message: 'Start speaker now (in the background)?', initialValue: true }))
   if (start) {
     const pid = await startSpeaker(envFile, dataDir, port)
-    p.log.success(`Speaker is running (pid ${pid}); log: ${join(dataDir, 'speaker.log')}. Stop it with: kill ${pid}`)
+    p.log.success(`Speaker is running (pid ${pid}). Log: ${join(dataDir, 'speaker.log')}. Stop it with: kill ${pid}`)
   } else p.log.info(`Start speaker with: ${command}`)
   p.log.info(
-    `Open ${publicUrl}/admin and sign in with the owner password; speaker stays locked until you do, after every restart.`,
+    `Open ${publicUrl}/admin and sign in with the owner password. Speaker stays locked until you do, and again after every restart.`,
   )
   if (trustedProxy)
     p.log.warn(
-      `Behind a reverse proxy: open ports ${proxyPort} (secrets proxy) and ${sshPort} (SSH) on this machine directly, since the proxy cannot carry them, and raise the proxy's timeout above 120 s (speaker holds requests up to 120 s).`,
+      `Open ports ${proxyPort} (secrets proxy) and ${sshPort} (SSH) on this machine directly: the reverse proxy cannot carry them. Raise the proxy's timeout above 120 s, because speaker holds requests for up to 120 s.`,
     )
   p.outro('Speaker is set up.')
   return { url: publicUrl, started: start }
