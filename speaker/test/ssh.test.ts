@@ -65,8 +65,18 @@ test('an approved SSH request returns a certificate limited to its principal, wi
   const page = await (await call('/admin', { headers: owner })).text()
   assert.ok(page.includes('raist@nas.lan:22') && page.includes('SHA256:'))
 
-  assert.equal((await post(`/admin/api/requests/${id}/approve`, { duration: '1d' }, owner)).status, 400)
-  assert.equal((await post(`/admin/api/requests/${id}/approve`, { duration: '30m' }, owner)).status, 200)
+  const tap = (duration: string) =>
+    call(`/admin/requests/${id}/approve`, {
+      method: 'POST',
+      headers: owner,
+      body: new URLSearchParams([
+        ['duration', duration],
+        ['items', 'ssh-cert:raist@nas'],
+        ['shown', 'ssh-cert:raist@nas'],
+      ]),
+    })
+  assert.equal((await tap('1d')).status, 400)
+  assert.equal((await tap('30m')).status, 303)
   const issued = (
     (await (await call('/_speaker/me', { headers: agent })).json()) as {
       requests: {

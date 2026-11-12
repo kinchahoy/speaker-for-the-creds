@@ -79,15 +79,48 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
     await rm(dataDir, { recursive: true, force: true })
   })
   const call = (path: string, init: RequestInit = {}) => fetch(url + path, { redirect: 'manual', ...init })
-  const owner = (path: string, body: object = {}) =>
-    call(`/admin${path}`, { method: 'POST', headers: ownerHeaders, body: JSON.stringify(body) })
   const ownerForm = (path: string, body: Record<string, string>) =>
     call(`/admin${path}`, {
       method: 'POST',
       headers: { authorization: ownerHeaders.authorization, origin: ownerHeaders.origin },
       body: new URLSearchParams(body),
     })
-  const grants = async () => (await call('/admin/api/grants', { headers: ownerHeaders })).json() as Promise<Grant[]>
+  const live = async () =>
+    (await (await call('/admin/live', { headers: ownerHeaders })).json()) as { approvals: string; grants: string }
+  // The pending request cards, as the owner's page renders them.
+  const pending = async () =>
+    (await live()).approvals
+      .split('<li class="ticket" id="request-')
+      .slice(1)
+      .map((card) => ({ id: card.slice(0, card.indexOf('"')), html: card }))
+  // Taps Approve or Deny on a card: posts the ticked items (default all) and the items the card showed.
+  const decide = async (
+    id: string,
+    decision: 'approve' | 'deny',
+    { duration = '1h', items, shown }: { duration?: string; items?: string[]; shown?: string[] } = {},
+  ) => {
+    const card = (await pending()).find((c) => c.id === id)
+    const listed =
+      shown ?? [...(card?.html ?? '').matchAll(/name="shown" type="hidden" value="([^"]*)"/g)].map((m) => m[1])
+    const body = new URLSearchParams({ duration })
+    for (const item of items ?? listed) body.append('items', item)
+    for (const item of listed) body.append('shown', item)
+    return call(`/admin/requests/${id}/${decision}`, {
+      method: 'POST',
+      headers: { authorization: ownerHeaders.authorization, origin: ownerHeaders.origin },
+      body,
+    })
+  }
+  const grants = async (): Promise<Grant[]> =>
+    (await live()).grants
+      .split('<li id="grant-')
+      .slice(1)
+      .map((row) => ({
+        id: row.slice(0, row.indexOf('"')),
+        item: /<code>(.*?)<\/code>/.exec(row)?.[1] ?? '',
+        expiresAt: /<time class="left" datetime="([^"]*)"/.exec(row)?.[1] ?? null,
+        state: /chip \w+">(granted|waiting for sandbox host)</.test(row) ? 'granted' : 'active',
+      }))
   const saved = await ownerForm('/services/save', {
     id: 'notes',
     baseUrl: `http://127.0.0.1:${port(upstream)}/base`,
@@ -97,7 +130,7 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
     write: 'ask',
   })
   assert.equal(saved.status, 303)
-  return { url, call, owner, ownerForm, grants, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
+  return { url, call, ownerForm, pending, decide, grants, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
@@ -170,7 +203,7 @@ test('enroll with a first request, approval, then the proxy injects the credenti
   assert.equal(f.calls.length, 0)
   const help = async () => (await f.call('/_speaker/help/notes', { headers: bearer('agent-token') })).text()
   assert.match(await help(), /needs `notes\.read`; not granted yet\./)
-  assert.equal((await f.owner(`/api/requests/${request.id}/approve`, { duration: '30m' })).status, 200)
+  assert.equal((await f.decide(request.id, 'approve', { duration: '30m' })).status, 303)
   const decided = (await me(f, 'agent-token')).requests[0]
   assert.deepEqual([decided.status, decided.granted, decided.denied], ['decided', ['notes.read'], []])
   assert.ok(Date.parse(decided.expiresAt ?? '') > Date.now())
@@ -187,10 +220,7 @@ test('the owner decides per item: unticked items are denied, and .full covers re
     await askFor(f, 'tok', { want: ['notes.read', 'notes.full'], reason: 'edit' })
   ).json()) as Outcome
   assert.equal(made.status, 'pending')
-  assert.equal(
-    (await f.owner(`/api/requests/${made.id}/approve`, { duration: '1h', items: ['notes.full'] })).status,
-    200,
-  )
+  assert.equal((await f.decide(made.id, 'approve', { duration: '1h', items: ['notes.full'] })).status, 303)
   const [request] = (await me(f, 'tok')).requests
   assert.deepEqual([request.granted, request.denied], [['notes.full'], ['notes.read']])
   assert.deepEqual(
@@ -268,7 +298,7 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   assert.deepEqual([pending.status, pending.what, pending.reason], ['pending', 'site:example.com', 'docs'])
 
   inbox = []
-  await f.owner(`/api/requests/${pending.id}/approve`, { duration: '1h' })
+  await f.decide(pending.id, 'approve', { duration: '1h' })
   const grant = (await until((s) => s.grants.length)).grants[0]
   assert.deepEqual([grant.item, grant.agentId], ['site:example.com', agent.id])
   assert.equal((await f.grants())[0].state, 'granted')
@@ -278,7 +308,7 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   assert.equal((await f.grants())[0].state, 'active')
 
   inbox = []
-  await f.owner(`/api/grants/${grant.id}/revoke`)
+  await f.ownerForm('/grants/revoke', { id: grant.id })
   await until((s) => s.grants.length === 0)
   assert.deepEqual(await f.grants(), [])
 
@@ -294,7 +324,7 @@ test('a group request creates one grant per item with the same expiry', async (t
   const made = (await (
     await hostRequest(f, agent.id, { want: ['group:pack'], reason: 'both', duration: '1d' })
   ).json()) as Outcome
-  await f.owner(`/api/requests/${made.id}/approve`, { duration: '1d' })
+  await f.decide(made.id, 'approve', { duration: '1d' })
   const grants = await f.grants()
   assert.deepEqual(grants.map((g) => g.item).sort(), ['site:a.example', 'site:b.example'])
   assert.equal(new Set(grants.map((g) => g.expiresAt)).size, 1)
@@ -351,7 +381,7 @@ test('the proxy returns redirects without following them', async (t) => {
   const f = await setup(t)
   await enroll(f, 'st')
   const request = await firstRequest(f, 'st', '/notes/redirect')
-  await f.owner(`/api/requests/${request}/approve`, { duration: '30m' })
+  await f.decide(request, 'approve', { duration: '30m' })
   const response = await f.call('/notes/redirect', { headers: bearer('st') })
   assert.equal(response.status, 302)
   assert.equal(response.headers.get('location'), '/must-not-follow')
@@ -418,12 +448,12 @@ test('enrollment with Speaker-Wait holds until the owner decides and answers per
     { want: ['notes.read'], reason: 'read one note', duration: '30m' },
     { 'speaker-wait': '5' },
   )
-  let pending: { id: string }[] = []
-  while (!pending.length) {
+  let waiting: { id: string }[] = []
+  while (!waiting.length) {
     await sleep(50)
-    pending = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as { id: string }[]
+    waiting = await f.pending()
   }
-  assert.equal((await f.owner(`/api/requests/${pending[0].id}/approve`, { duration: '1h' })).status, 200)
+  assert.equal((await f.decide(waiting[0].id, 'approve', { duration: '1h' })).status, 303)
   const response = await held
   const { id, request } = (await response.json()) as { id: string; request: Outcome }
   assert.deepEqual([request.status, request.granted, request.denied], ['decided', ['notes.read'], []])
@@ -458,12 +488,64 @@ test('an open read needs no grant or card, is never listed in /me, and counts as
   await enrolled(f, 'open-token')
   assert.equal((await f.call('/lights/x', { headers: bearer('open-token') })).status, 200)
   assert.ok(!('lights' in (await me(f, 'open-token')).services))
-  assert.deepEqual(await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json(), [])
+  assert.deepEqual(await f.pending(), [])
   assert.match(await (await f.call(`/admin?section=agents`, { headers: ownerHeaders })).text(), /1 use/)
   // Asking for the open read is answered at once without a card; writes still need a grant.
   const asked = (await (await askFor(f, 'open-token', { want: ['lights.read'], reason: 'x' })).json()) as Outcome
   assert.deepEqual([asked.status, asked.granted], ['decided', ['lights.read']])
   assert.equal((await f.call('/lights/x', { method: 'POST', headers: bearer('open-token'), body: '{}' })).status, 403)
+  // Once the agent holds a grant for the service, it is listed even though its reads are open.
+  const write = (await (await askFor(f, 'open-token', { want: ['lights.full'], reason: 'x' })).json()) as Outcome
+  await f.decide(write.id, 'approve')
+  assert.equal((await me(f, 'open-token')).services.lights.full.state, 'granted')
+})
+
+test('a card lists groups and loose items, and Approve decides only the items it showed', async (t) => {
+  const f = await setup(t, { dev: { description: 'Notes work', items: ['notes.read', 'notes.full'] } })
+  await f.ownerForm('/services/save', {
+    id: 'extra',
+    baseUrl: `${f.upstreamOrigin}/base`,
+    authType: 'bearer',
+    secret: 's',
+    read: 'ask',
+    write: 'ask',
+  })
+  await enroll(f, 'tok')
+  await askFor(f, 'tok', { want: ['group:dev', 'extra.read'], reason: 'work', duration: '1d' })
+  const [card] = await f.pending()
+  assert.match(card.html, /<strong>dev<\/strong><span class="meta">Notes work · 2 items/)
+  assert.match(card.html, /<option value="1d" selected>/)
+  assert.match(card.html, /Not in a group/)
+  assert.match(card.html, /pickable risky[^>]*><label[^>]*><input type="checkbox" name="items" value="notes.full"/)
+  assert.match(card.html, /pickable {2}loose/)
+  // An item added after the card was rendered is not part of the decision.
+  await askFor(f, 'tok', { want: ['extra.full'], reason: 'work' })
+  assert.equal(
+    (
+      await f.decide(card.id, 'approve', {
+        items: ['notes.read', 'extra.read'],
+        shown: ['notes.read', 'notes.full', 'extra.read'],
+      })
+    ).status,
+    303,
+  )
+  const [request] = (await me(f, 'tok')).requests
+  assert.deepEqual(
+    [request.status, request.granted, request.denied],
+    ['pending', ['notes.read', 'extra.read'], ['notes.full']],
+  )
+  // Deny refuses exactly what the card showed; here that is the one item left.
+  assert.equal((await f.decide(card.id, 'deny', { shown: ['extra.full'] })).status, 303)
+  const [done] = (await me(f, 'tok')).requests
+  assert.deepEqual([done.status, done.denied], ['decided', ['notes.full', 'extra.full']])
+  // A card that shows nothing pending decides nothing.
+  assert.equal((await f.decide(card.id, 'deny', { shown: ['extra.full'] })).status, 409)
+})
+
+test('the admin pages have no JSON routes', async (t) => {
+  const f = await setup(t)
+  for (const path of ['/admin/api/requests', '/admin/api/grants'])
+    assert.equal((await f.call(path, { headers: ownerHeaders })).status, 404)
 })
 
 test('a service set to never answers denied at once, and a POST read path counts as a read', async (t) => {
@@ -531,10 +613,8 @@ test('an MCP service classifies tool calls by their read-only hints', async (t) 
   const blocked = await rpc('tools/call', { name: 'delete_automation', arguments: {} })
   assert.equal(blocked.status, 403)
   assert.equal(((await blocked.json()) as { item: string }).item, 'ha.full')
-  const requests = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as {
-    trigger: string
-  }[]
-  assert.match(requests[0].trigger, /delete_automation \(destructive\)/)
+  const requests = await f.pending()
+  assert.match(requests[0].html, /delete_automation \(destructive\)/)
 })
 
 test('the log lists proxied calls per agent, with no grant for an open call', async (t) => {
@@ -578,13 +658,13 @@ test('Speaker-Wait holds a call until approval; without it the call answers at o
   const held = f.call('/notes/doc', {
     headers: { ...bearer('tok'), 'speaker-wait': '10', 'speaker-reason': 'read doc' },
   })
-  let listed: { id: string; reason: string }[] = []
-  while (!listed.some((r) => r.reason === 'read doc')) {
+  let listed: { id: string; html: string }[] = []
+  while (!listed.some((r) => r.html.includes('read doc'))) {
     await sleep(100)
-    listed = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as typeof listed
+    listed = await f.pending()
   }
   assert.equal(listed.length, 1)
-  assert.equal((await f.owner(`/api/requests/${listed[0].id}/approve`, { duration: '30m' })).status, 200)
+  assert.equal((await f.decide(listed[0].id, 'approve', { duration: '30m' })).status, 303)
   const response = await held
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { ok: true })
@@ -599,7 +679,7 @@ test('the third denial of an item locks it with an ISO retry_after; other items 
     const asked = await f.call('/notes/x', { headers: bearer('tok') })
     const { request, error } = (await asked.json()) as { request: string; error: string }
     assert.equal(error, 'approval_required', `denial ${strike} was still asked`)
-    assert.equal((await f.owner(`/api/requests/${request}/deny`)).status, 200)
+    assert.equal((await f.decide(request, 'deny')).status, 303)
   }
   const locked = await f.call('/notes/x', { headers: bearer('tok') })
   const body = (await locked.json()) as { error: string; next: string; retry_after: string }
@@ -631,7 +711,7 @@ test('agents cannot extend; the owner extends a grant by its granted span', asyn
   const f = await setup(t)
   await enrolled(f, 'tok')
   const request = await firstRequest(f, 'tok')
-  await f.owner(`/api/requests/${request}/approve`, { duration: '30m' })
+  await f.decide(request, 'approve', { duration: '30m' })
   for (const path of [`/_speaker/requests/${request}/extend`, '/_speaker/grants/extend']) {
     const gone = await f.call(path, { method: 'POST', headers: bearer('tok'), body: '{"duration":"30m"}' })
     assert.equal(gone.status, 404)
@@ -647,7 +727,7 @@ test('agents cannot extend; the owner extends a grant by its granted span', asyn
 test('revoking an agent ends its grants, and its token then answers denied rather than enroll', async (t) => {
   const f = await setup(t)
   const id = await enrolled(f, 'tok')
-  await f.owner(`/api/requests/${await firstRequest(f, 'tok')}/approve`, { duration: '1h' })
+  await f.decide(await firstRequest(f, 'tok'), 'approve', { duration: '1h' })
   assert.equal((await f.call('/notes/x', { headers: bearer('tok') })).status, 200)
   assert.equal((await f.ownerForm(`/agents/${id}/revoke`, {})).status, 303)
   assert.deepEqual(await f.grants(), [])

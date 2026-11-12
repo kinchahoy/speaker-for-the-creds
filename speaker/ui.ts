@@ -35,7 +35,6 @@ const extend = (
       )
     : ''
 const durations = ['30m', '1h', '2h', '1d', '30d']
-const permanentOverride = html`<label class="override" title="Creates grants that stay until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
 
 const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
 <symbol id="i-brand" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3.2"/><path d="m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700"/></symbol><symbol id="i-service" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
@@ -107,11 +106,15 @@ async function refresh() {
         panel.querySelectorAll('details[id]').forEach((details) => { details.open = opened.has(details.id); });
         panel.querySelectorAll('form').forEach((form) => {
           const saved = choices.get(form.action);
-          if (saved) for (const field of form.elements) {
-            if (field.type === 'checkbox') field.checked = saved.has(field.name);
-            else if (saved.has(field.name)) field.value = saved.get(field.name);
+          if (!saved) return;
+          // Items the owner saw keep their tick; an item added since stays ticked.
+          const seen = saved.getAll('shown'), kept = saved.getAll('items');
+          for (const field of form.elements) {
+            if (field.type === 'checkbox' && field.name === 'items') { if (seen.includes(field.value)) field.checked = kept.includes(field.value); }
+            else if (field.type === 'select-one' && saved.has(field.name)) field.value = saved.get(field.name);
           }
         });
+        syncGroups(panel);
       }
       count(panels.pending);
       filter();
@@ -125,9 +128,18 @@ async function refresh() {
   }
   setTimeout(refresh, 5000);
 }
+function syncGroups(root) {
+  root.querySelectorAll('details.group').forEach((group) => {
+    const members = [...group.querySelectorAll('input[name=items]')], on = members.filter((m) => m.checked).length;
+    const box = group.querySelector('.g');
+    box.checked = on === members.length;
+    box.indeterminate = on > 0 && on < members.length;
+  });
+}
 document.addEventListener('change', ({target}) => {
-  const form = target.closest('#approvals form');
-  if (form) choices.set(form.action, new FormData(form));
+  if (target.classList.contains('g')) target.closest('details').querySelectorAll('input[name=items]').forEach((m) => { m.checked = target.checked; });
+  const form = target.form;
+  if (form && form.closest('#approvals')) { choices.set(form.action, new FormData(form)); syncGroups(form.closest('.ticket')); }
 });
 document.addEventListener('toggle', ({target}) => { if (target.id) target.open ? opened.add(target.id) : opened.delete(target.id); }, true);
 document.addEventListener('click', ({target}) => {
@@ -215,7 +227,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .rows{list-style:none;margin:0;padding:0}
 .rows>li{padding:12px 0;border-top:1px solid var(--line)}.rows>li:first-child{border-top:0}
 .rows[data-nomatch]::after{content:"Nothing matches this filter.";display:block;padding:14px 0;color:var(--dim)}
-.inbox .rows{display:grid;gap:14px}.inbox .rows>li{border:0}.rows>li.ticket{padding:var(--tp) var(--tp) 0}
+.inbox .rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:14px;align-items:start}.inbox .rows>li{border:0}.rows>li.ticket{padding:var(--tp) var(--tp) 0}
 .empty{padding:6px 0;color:var(--dim)}.empty strong{display:block;color:var(--ink);font-size:1.05rem;margin-bottom:2px}
 .inbox .empty{padding:24px 6px}
 .mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}
@@ -233,6 +245,12 @@ details{min-width:0}summary{display:flex;flex-wrap:wrap;align-items:center;gap:1
 summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .15s}
 details[open]>summary::after{transform:rotate(225deg)}
 .rows details .caps{padding:6px 0 14px}
+.tick{display:flex;align-items:center;gap:10px;min-height:44px;font-size:1rem;font-weight:400;color:var(--ink)}.tick input{width:22px;min-height:22px;margin:0;flex:none}
+.pickable{padding:0 8px;border-radius:10px}.pickable.risky{background:var(--warn-bg)}.pickable.loose{box-shadow:inset 3px 0 var(--accent);background:var(--sunk)}.pickable.loose.risky{background:var(--warn-bg)}
+.group{border:1px solid var(--line);border-radius:12px;padding:0 10px}.group>summary{min-height:48px}.group>summary .tick{flex:1}.group .caps{padding:0 0 8px}
+.t-items{display:grid;gap:8px;margin-top:12px}.t-items h3{margin:6px 0 0;font-size:.82rem;color:var(--dim);font-weight:600}
+.active-agent>.row{padding-bottom:4px}.sub-grants{list-style:none;margin:0 0 0 46px;padding:0}.sub-grants>li{padding:8px 0;border-top:1px solid var(--line)}.sub-grants .row-title{font-size:.92rem}
+.logform{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:end;margin-bottom:16px}.logform label{flex:1 1 180px}.logform button{flex:none}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700;background:var(--sunk);color:var(--dim);white-space:nowrap}
 .chip.good,.chip.warn,.chip.bad{padding-left:8px}.chip.good::before,.chip.warn::before,.chip.bad::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .chip.good{background:var(--good-bg);color:var(--good)}.chip.warn{background:var(--warn-bg);color:var(--warn)}.chip.bad{background:var(--bad-bg);color:var(--bad)}
@@ -330,59 +348,23 @@ export function adminPage(
   groups: Record<string, Group> = {},
   error?: string,
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
-  log?: { entries: LogEntry[]; filter: string },
+  log?: { entries: LogEntry[]; query: Record<string, string | undefined> },
 ) {
   const selected = selectedId && Object.hasOwn(services, selectedId) ? services[selectedId] : undefined
   const activeSection = selected
     ? 'services'
     : log
       ? 'log'
-      : ['grants', 'agents', 'services', 'groups'].includes(section)
-        ? section
-        : 'approvals'
+      : section === 'grants' || section === 'agents'
+        ? 'active'
+        : ['active', 'services', 'groups'].includes(section)
+          ? section
+          : 'approvals'
   const serviceList = Object.entries(services).map(
     ([id, service]) =>
       html`<li data-search="${searchable(id, service.baseUrl)}" data-kinds="service"><div class="row wrap">${mark('service')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${service.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${service.read} · write ${service.write} · notes ${service.notes ? 'yes' : 'no'}${service.mcp ? ' · MCP' : ''}${service.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}" aria-label="Edit service ${id}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}" aria-label="Log for service ${id}">Log</a>${form('/admin/services/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete service ${id}`, `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></div></li>`,
   )
-  const panels = livePanels(view)
-  const agentRows = [
-    ...view.hosts
-      .filter((h) => h.status === 'approved')
-      .map((h) =>
-        row(
-          'host',
-          `Sandbox host ${h.name}`,
-          h.kinds.join(', ') || 'no item kinds',
-          [...h.kinds],
-          h.name,
-          form(
-            `/admin/hosts/${h.id}/remove`,
-            '',
-            'Remove',
-            'inline danger',
-            `Remove sandbox host ${h.name}`,
-            `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`,
-          ),
-        ),
-      ),
-    ...view.agents.map((a) =>
-      row(
-        'agent',
-        `${a.sandboxHost ? 'Sandboxed' : 'Direct'} agent ${a.label}`,
-        html`${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${plural(a.grants, 'grant', 'grants')} · ${activity(a, `agent=${encodeURIComponent(a.id)}`)}`,
-        ['service'],
-        `${a.label} ${a.agent}`,
-        form(
-          `/admin/agents/${a.id}/revoke`,
-          '',
-          'Revoke agent',
-          'inline danger',
-          `Revoke agent ${a.label}`,
-          `Revoke agent ${a.label}? Its token and all its grants end immediately.`,
-        ),
-      ),
-    ),
-  ]
+  const panels = livePanels(view, groups)
   const serviceFields = html`${input('id', 'Service id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], selected?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], selected?.write ?? 'ask')}<label>POST paths that only read, one per line (for example a search endpoint)<textarea name="readPaths" rows="2" placeholder="/search/simple">${selected?.readPaths?.join('\n')}</textarea></label><label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Notes for agents (markdown, optional)<textarea name="notes" rows="5">${selected?.notes}</textarea></label>`
   const serviceEditor = selected
     ? html`<section class="editor"><h3>Edit service: ${selectedId}</h3>${form('/admin/services/save', serviceFields, 'Save service', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
@@ -408,31 +390,28 @@ export function adminPage(
     return html`<li data-search="${searchable(id, group.description ?? '', list.join(' '))}" data-kinds="${[...new Set(list.map(itemKind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div>${group.description ? html`<div class="row-sub">${group.description}</div>` : ''}<div class="row-sub">${plural(list.length, 'item', 'items')}, granted together by one approval</div></div><div class="row-act">${form('/admin/groups/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete group ${id}`, `Delete group ${id}? Agents can no longer request it. Existing grants stay.`)}</div></div><details id="group-${id}"><summary>${strip(list.map(itemKind))}<span class="meta">Items and editing</span></summary>${caps(list)}${groupForm(id, group)}</details></li>`
   })
   const sections: [string, string, string][] = [
-    ['approvals', 'Approvals', 'Sandbox hosts and access requests waiting for your yes or no.'],
-    ['grants', 'Grants', "Access you've granted that is active right now, until it expires or you revoke it."],
-    ['agents', 'Agents', 'Agents and sandbox hosts; revoke one to cut it off.'],
+    ['approvals', 'Inbox', 'Sandbox hosts and access requests waiting for your yes or no.'],
+    ['active', 'Active', 'Agents and the access granted to them right now; extend or revoke any of it.'],
     ['services', 'Services', 'Upstream APIs Speaker proxies, with their stored credentials and read/write rules.'],
     ['groups', 'Groups', 'Named sets of items an agent can request with a single approval.'],
     ['log', 'Log', 'Log: recent calls and decisions, newest first.'],
   ]
   const nav = html`<nav class="nav" aria-label="Admin sections">${sections.map(
     ([id, label, tip], i) =>
-      html`${i === 1 || i === 3 || i === 5 ? html`<span class="sep" aria-hidden="true"></span>` : ''}<a href="${id === 'log' ? '/admin/log' : `/admin?section=${id}`}" title="${tip}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
+      html`${i === 1 || i === 2 || i === 4 ? html`<span class="sep" aria-hidden="true"></span>` : ''}<a href="${id === 'log' ? '/admin/log' : `/admin?section=${id}`}" title="${tip}" ${raw(activeSection === id ? 'aria-current="page"' : '')}>${label}${id === 'approvals' ? html`<span class="count" id="pending-count" ${raw(panels.pending ? '' : 'hidden')}>${panels.pending}</span>` : ''}</a>`,
   )}</nav>`
   const intro = html`<p class="muted intro">${sections.find(([id]) => id === activeSection)?.[2]}</p>`
   const tools = (withKinds: boolean) =>
     html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, item or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
   const content = log
-    ? logPanel(log.entries, log.filter)
-    : activeSection === 'grants'
-      ? html`${tools(true)}<section class="panel wide"><div id="grants">${raw(panels.grants)}</div></section>`
-      : activeSection === 'agents'
-        ? html`${tools(false)}<section class="panel"><h2>Agents</h2><ul class="rows">${agentRows.length ? agentRows : empty('No agents', 'Agents appear here once they enroll, and can be revoked.')}</ul></section>`
-        : activeSection === 'services'
-          ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section><p class="muted">Credentials stay on this server.</p>`
-          : activeSection === 'groups'
-            ? html`${tools(false)}<section class="panel"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="notice" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupList.length ? groupList : empty('No groups', 'A group collects items so an agent can request them with one approval.')}</ul>${groupEditor('', { items: [] })}</section><p class="muted">A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</p>`
-            : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="grants">${raw(panels.grants)}</div></section></div><p class="muted">Expiry and revocation block new calls; a response already streaming may finish.</p>`
+    ? logPanel(log.entries, log.query, services, view)
+    : activeSection === 'active'
+      ? html`${tools(true)}<section class="panel"><div id="grants">${raw(panels.grants)}</div></section>`
+      : activeSection === 'services'
+        ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section><p class="muted">Credentials stay on this server.</p>`
+        : activeSection === 'groups'
+          ? html`${tools(false)}<section class="panel"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="notice" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupList.length ? groupList : empty('No groups', 'A group collects items so an agent can request them with one approval.')}</ul>${groupEditor('', { items: [] })}</section><p class="muted">A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</p>`
+          : html`${tools(true)}<section class="inbox" id="approvals">${raw(panels.approvals)}</section><p class="muted">Expiry and revocation block new calls; a response already streaming may finish.</p>`
   return page(nav, html`${intro}${content}`, nonce ?? '')
 }
 
@@ -460,20 +439,43 @@ const logResult = (e: LogEntry) =>
     : e.expiresAt === undefined
       ? ''
       : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
-const logPanel = (entries: LogEntry[], filter: string) =>
-  html`<section class="panel wide"><h2>Log ${filter ? html`<span class="meta">${filter} · <a href="/admin/log">show all</a></span>` : ''}</h2>${
+// Narrow the log to one agent, grant or service; the GET form keeps the filters in the address.
+const logFilter = (query: Record<string, string | undefined>, services: Record<string, Service>, view: View) => {
+  const choose = (name: string, label: string, options: [string, string][]) =>
+    html`<label>${label}<select name="${name}"><option value="">Any</option>${options.map(([value, text]) => html`<option value="${value}" ${raw(query[name] === value ? 'selected' : '')}>${text}</option>`)}</select></label>`
+  return html`<form class="logform" method="get" action="/admin/log">${choose(
+    'agent',
+    'Agent',
+    view.agents.map((a) => [a.id, a.label]),
+  )}${choose(
+    'grant',
+    'Grant',
+    view.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
+  )}${choose(
+    'service',
+    'Service',
+    Object.keys(services).map((id) => [id, id]),
+  )}<button>Filter</button><a href="/admin/log">Clear</a></form>`
+}
+const logPanel = (
+  entries: LogEntry[],
+  query: Record<string, string | undefined>,
+  services: Record<string, Service>,
+  view: View,
+) =>
+  html`<section class="panel wide"><h2>Log <span class="meta">${plural(entries.length, 'entry', 'entries')}, newest first</span></h2>${logFilter(query, services, view)}${
     entries.length
       ? html`<table class="log"><thead><tr><th>Time</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
           (e) =>
             html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.agentName].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
         )}</tbody></table>`
-      : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen.')}</ul>`
+      : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen, or nothing matches this filter.')}</ul>`
   }</section>`
 
-// One compact line naming who is asking, as the agent reported itself.
-const who = (a: { agent: string }) => a.agent
+// Items that can change things (or reach out with a credential) get a warmer tint on the card.
+const risky = (item: string) => /^(ssh(-cert)?|secret):|\.full$|^folder:.+:rw$/.test(item)
 
-export function livePanels({ hosts, agents, requests, grants }: View) {
+export function livePanels({ hosts, agents, requests, grants }: View, groups: Record<string, Group> = {}) {
   const byId = new Map(agents.map((a) => [a.id, a]))
   // Flags an agent whose identity (same label and agent string) enrolled in the 30 minutes before it.
   const twin = (a: View['agents'][number]) => {
@@ -489,8 +491,8 @@ export function livePanels({ hosts, agents, requests, grants }: View) {
     const minutes = Math.round((a.createdAt - Math.max(...earlier.map((o) => o.createdAt))) / 60_000)
     return html` <span class="chip warn">same agent enrolled ${minutes} min earlier</span>`
   }
-  const decide = (path: string, picker: unknown, subject: string, approve = 'Approve', deny = 'deny') =>
-    html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/${deny}" aria-label="Deny: ${subject}">Deny</button></div></form>`
+  const hostDecision = (id: string, name: string) =>
+    html`<form class="decision" method="post" action="/admin/hosts/${id}/approve"><div class="go"><button class="approve" aria-label="Approve: sandbox host ${name}">Approve</button><button class="deny" formaction="/admin/hosts/${id}/remove" aria-label="Deny: sandbox host ${name}">Deny</button></div></form>`
   const ticket = (
     id: string,
     search: string,
@@ -500,6 +502,26 @@ export function livePanels({ hosts, agents, requests, grants }: View) {
     stub: unknown,
   ) =>
     html`<li class="ticket" id="${id}" data-search="${search.toLowerCase()}" data-kinds="${kindList.join(' ')}"><div class="t-head">${head}</div>${body}<div class="stub">${stub}</div></li>`
+  // One tickable item; its checkbox belongs to the card's form wherever the row sits.
+  const pickItem = (formId: string, item: string, loose = false) =>
+    html`<li class="cap pickable ${risky(item) ? 'risky' : ''} ${loose ? 'loose' : ''}"><label class="tick"><input type="checkbox" name="items" value="${item}" form="${formId}" checked>${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${itemKind(item)}</span></div></label></li>`
+  // The groups a request asked for, each with the members still awaiting a decision.
+  const groupsAsked = (r: View['requests'][number]) =>
+    r.want
+      .filter((w) => w.startsWith('group:') && Object.hasOwn(groups, w.slice(6)))
+      .map((w) => ({
+        name: w.slice(6),
+        description: groups[w.slice(6)].description,
+        members: groups[w.slice(6)].items.filter((item) => r.items.includes(item)),
+      }))
+      .filter((g) => g.members.length)
+  // A request's items as the card shows them: one row per group asked for, then the items asked for on their own.
+  const itemRows = (r: View['requests'][number], formId: string) => {
+    const asked = groupsAsked(r)
+    const inGroup = new Set(asked.flatMap((g) => g.members))
+    const loose = r.items.filter((item) => !inGroup.has(item))
+    return html`<div class="t-items">${asked.map(({ name, description, members }) => html`<details class="group" id="group-${r.id}-${name}"><summary><label class="tick"><input type="checkbox" class="g" form="${formId}" checked aria-label="All of group ${name}"><div><strong>${name}</strong><span class="meta">${description ? `${description} · ` : ''}${plural(members.length, 'item', 'items')}</span></div></label></summary><ul class="caps">${members.map((item) => pickItem(formId, item))}</ul></details>`)}${asked.length && loose.length ? html`<h3>Not in a group</h3>` : ''}${loose.length ? html`<ul class="caps">${loose.map((item) => pickItem(formId, item, asked.length > 0))}</ul>` : ''}</div>`
+  }
   const items = [
     ...hosts
       .filter((h) => h.status === 'pending')
@@ -510,7 +532,7 @@ export function livePanels({ hosts, agents, requests, grants }: View) {
           h.kinds,
           html`${mark('host')}<strong>Sandbox host ${h.name}</strong><span class="chip">wants to register</span>`,
           html`<div class="t-grant"><div class="meta">Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'} ${strip(h.kinds)}</div></div>`,
-          decide(`hosts/${h.id}`, '', `sandbox host ${h.name}`, 'Approve', 'remove'),
+          hostDecision(h.id, h.name),
         ),
       ),
     ...requests
@@ -522,52 +544,67 @@ export function livePanels({ hosts, agents, requests, grants }: View) {
           ? html`<div class="meta">SSH certificate for <code>${r.ssh.user}@${r.ssh.hostname}:${r.ssh.port}</code> · key <code>${r.ssh.fingerprint}</code> · ${[r.ssh.agentForwarding && 'agent forwarding', r.ssh.portForwarding && 'port forwarding'].filter(Boolean).join(', ') || 'no forwarding'}${r.ssh.sourceAddress ? html` · only from <code>${r.ssh.sourceAddress}</code>` : ''} · cannot be revoked before it expires</div>`
           : ''
         const sshMax = r.ssh?.maxDuration
-        const groupNames = r.want.filter((w) => w.startsWith('group:'))
-        const note = groupNames.length
-          ? html`<div class="meta">From ${groupNames.join(', ')}; one approval grants every ticked item for the chosen time.</div>`
-          : ''
         const label = agent?.label ?? 'Unknown agent'
+        const formId = `decide-${r.id}`
+        const picker = sshMax
+          ? select('duration', 'Certificate valid for', durations.slice(0, durations.indexOf(sshMax) + 1), r.duration)
+          : select('duration', 'Allow access for', [...durations, 'permanent'], r.duration)
         return ticket(
           `request-${r.id}`,
           `${label} ${agent?.agent ?? ''} ${agent?.sandboxHost ?? ''} ${r.reason} ${r.items.join(' ')}`,
           r.items.map(itemKind),
-          html`<strong>${label}</strong>${agent ? html`<span class="meta">${who(agent)}</span>` : ''}${agent?.sandboxHost ? html`<span class="meta">via ${agent.sandboxHost}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
-          html`<div class="t-grant"><div class="meta">Requests access to</div>${caps(r.items)}${note}${ssh}${agent ? html`<div class="meta">from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}${twin(agent)}</div>` : ''}</div>${
+          html`<strong>${label}</strong>${agent ? html`<span class="meta">says it is ${agent.agent}</span>` : ''}${agent?.sandboxHost ? html`<span class="meta">via ${agent.sandboxHost}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
+          html`<div class="t-grant">${agent ? html`<div class="meta">from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}${twin(agent)}</div>` : ''}</div>${
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
               : html`<p class="why"><span class="meta">Reason:</span> ${r.reason || html`<span class="meta">none supplied yet</span>`}</p>`
-          }${r.trigger || notices[r.notification] ? html`<div class="t-meta">${r.trigger ? html`<span class="meta">Triggered by <code>${r.trigger}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
-          decide(
-            `requests/${r.id}`,
-            sshMax
-              ? select(
-                  'duration',
-                  'Certificate valid for',
-                  durations.slice(0, durations.indexOf(sshMax) + 1),
-                  r.duration,
-                )
-              : html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
-            label,
-            r.items.length > 1 ? `Approve all ${r.items.length}` : 'Approve',
-          ),
+          }${itemRows(r, formId)}${ssh}${r.trigger || notices[r.notification] ? html`<div class="t-meta">${r.trigger ? html`<span class="meta">Triggered by <code>${r.trigger}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
+          // The card posts what is ticked and every item it showed; the server decides only those.
+          html`<form class="decision" id="${formId}" method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => input('shown', '', 'hidden', item))}<div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="Approve: ${label}">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny" aria-label="Deny: ${label}">Deny</button></div></form>`,
         )
       }),
   ]
-  // Soonest expiry first so what is about to lapse is on top; "until revoked" grants last.
-  const ordered = [...grants].sort(
-    (a, b) => (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity),
-  )
-  const grantList = ordered.map((g) => {
+  const grantRow = (g: View['grants'][number]) => {
     const [tone, state] = chips[g.state]
-    return html`<li id="grant-${g.id}" data-search="${searchable(g.label, g.agent, g.item)}" data-kinds="${itemKind(g.item)}"><div class="row">${mark(itemKind(g.item))}<div class="row-main"><div class="row-title"><code>${g.item}</code></div><div class="row-sub">${g.label}${g.agent ? ` · ${g.agent}` : ''}${itemKind(g.item) === 'service' ? html` · ${g.uses ? activity(g, `grant=${encodeURIComponent(g.id)}`) : 'unused'}` : ''}</div><div class="expiry">${g.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(g.expiresAt)}"><i></i></span><time class="left" datetime="${g.expiresAt}" data-expires-at="${Date.parse(g.expiresAt)}">expires ${g.expiresAt}</time>`}${g.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${extend('/admin/grants/extend', input('id', '', 'hidden', g.id), g.expiresAt, g.grantedMs, `grant ${g.label} ${g.item}`)}${form('/admin/grants/revoke', input('id', '', 'hidden', g.id), 'Revoke', 'inline danger', `Revoke grant: ${g.label} ${g.item}`, `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></div></li>`
-  })
+    return html`<li id="grant-${g.id}" data-search="${searchable(g.label, g.agent, g.item)}" data-kinds="${itemKind(g.item)}"><div class="row wrap">${mark(itemKind(g.item), true)}<div class="row-main"><div class="row-title"><code>${g.item}</code></div><div class="expiry">${g.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(g.expiresAt)}"><i></i></span><time class="left" datetime="${g.expiresAt}" data-expires-at="${Date.parse(g.expiresAt)}">expires ${g.expiresAt}</time>`}${g.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}${itemKind(g.item) === 'service' ? html`<span class="meta">${g.uses ? activity(g, `grant=${encodeURIComponent(g.id)}`) : 'unused'}</span>` : ''}</div></div><div class="row-act">${extend('/admin/grants/extend', input('id', '', 'hidden', g.id), g.expiresAt, g.grantedMs, `grant ${g.label} ${g.item}`)}${form('/admin/grants/revoke', input('id', '', 'hidden', g.id), 'Revoke', 'inline danger', `Revoke grant: ${g.label} ${g.item}`, `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></div></li>`
+  }
+  // Soonest expiry first so what is about to lapse is on top; "until revoked" grants last.
+  const endOf = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Infinity)
+  const byEnd = [...grants].sort((a, b) => endOf(a) - endOf(b))
+  const soonest = (a: View['agents'][number]) =>
+    Math.min(Infinity, ...byEnd.filter((g) => g.agentId === a.id).map(endOf))
+  const agentBlocks = [...agents]
+    .sort((a, b) => soonest(a) - soonest(b))
+    .map((a) => {
+      const mine = byEnd.filter((g) => g.agentId === a.id)
+      return html`<li class="active-agent" id="agent-${a.id}" data-search="${searchable(a.label, a.agent, mine.map((g) => g.item).join(' '))}" data-kinds="${[...new Set(mine.map((g) => itemKind(g.item)))].join(' ')}"><div class="row wrap">${mark('agent')}<div class="row-main"><div class="row-title">${a.label}</div><div class="row-sub">${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${activity(a, `agent=${encodeURIComponent(a.id)}`)}</div></div><div class="row-act">${form(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', 'inline danger', `Revoke agent ${a.label}`, `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></div>${mine.length ? html`<ul class="sub-grants">${mine.map(grantRow)}</ul>` : ''}</li>`
+    })
+  const hostRows = hosts
+    .filter((h) => h.status === 'approved')
+    .map((h) =>
+      row(
+        'host',
+        `Sandbox host ${h.name}`,
+        h.kinds.join(', ') || 'no item kinds',
+        [...h.kinds],
+        h.name,
+        form(
+          `/admin/hosts/${h.id}/remove`,
+          '',
+          'Remove',
+          'inline danger',
+          `Remove sandbox host ${h.name}`,
+          `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`,
+        ),
+      ),
+    )
   return {
     pending: items.length,
     approvals: String(
-      html`<h2>Approvals ${items.length ? html`<span class="chip warn">${items.length} pending</span>` : ''}</h2><ul class="rows">${items.length ? items : empty('Nothing to approve', 'New requests appear here as soon as an agent asks for access. This page updates by itself.')}</ul>`,
+      html`<h2>Inbox ${items.length ? html`<span class="chip warn">${items.length} pending</span>` : ''}</h2><ul class="rows">${items.length ? items : empty('Nothing to approve', 'New requests appear here as soon as an agent asks for access. This page updates by itself.')}</ul>`,
     ),
     grants: String(
-      html`<h2>Grants ${grantList.length ? html`<span class="meta">${grantList.length} active</span>` : ''}</h2><ul class="rows">${grantList.length ? grantList : empty('No active grants', 'Granted access is listed here until it expires or you revoke it.')}</ul>`,
+      html`<h2>Active ${grants.length ? html`<span class="meta">${plural(grants.length, 'grant', 'grants')}</span>` : ''}</h2><ul class="rows">${agentBlocks.length || hostRows.length ? [...agentBlocks, ...hostRows] : empty('Nothing active', 'Agents and the access you have granted are listed here until they expire or you revoke them.')}</ul>`,
     ),
   }
 }
