@@ -6,6 +6,6 @@ cp /etc/pi-v2/models.json /etc/pi-v2/settings.json /etc/pi-v2/APPEND_SYSTEM.md /
 cd /work
 set --
 while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/pi-v2/args
-# Always-on extensions baked into the image (pinned in guest/mise-config.toml); opt-in ones arrive as -e args
+# Always-on extensions baked into the image (pinned in guest/pi-package.json); opt-in ones arrive as -e args
 for extension in /opt/pi-extensions/*; do set -- "$@" -e "$extension"; done
 exec pi "$@"

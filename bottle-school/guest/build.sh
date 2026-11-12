@@ -1,14 +1,17 @@
 #!/bin/sh
-# Builds one pinned guest image through Gondolin's supported build configuration.
-# Usage: guest/build.sh [image-tag]   (default: pi-v5-guest)
-# The image boots under both QEMU and Krun (x86_64: guest/boot-assets.mjs fills the Krun slots); the service picks the
-# backend at run time with PI_V2_VMM=qemu|krun.
-# PI_GUEST_BROWSER=1 adds Playwright and Chromium, for example: PI_GUEST_BROWSER=1 guest/build.sh pi-v5-guest-browser
-# Docker builds the Ubuntu rootfs from guest/Dockerfile; Gondolin imports it through guest/build.json.
+# Builds the one guest image and prepares it for both backends.
+# Usage: guest/build.sh [image-tag]   (default: pi-v5-guest; set it as "guestImage" in config.json)
+# 1. Docker (buildx) builds guest/Dockerfile for the host architecture. PI_GUEST_PLATFORMS=linux/amd64,linux/arm64 builds
+#    both (needs binfmt/QEMU emulation for the foreign one and Docker's containerd image store).
+# 2. Gondolin turns the image into VM assets (guest/build.json), boot-assets.mjs reshapes them for QEMU and Krun, and
+#    they are imported under the tag.
+# 3. microsandbox loads the same image into <stateRoot>/microsandbox (stateRoot from config.json, or PI_V2_CONFIG).
 set -eu
 IMAGE=${1:-pi-v5-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 GONDOLIN=${GONDOLIN:-"$ROOT/node_modules/.bin/gondolin"}
+MSB=${MSB:-"$ROOT/node_modules/.bin/msb"}
+CONFIG=${PI_V2_CONFIG:-"$ROOT/config.json"}
 
 # Ensure e2fsprogs (keg-only on macOS) is on PATH for mke2fs.
 if ! command -v mke2fs >/dev/null 2>&1; then
@@ -20,22 +23,19 @@ if ! command -v mke2fs >/dev/null 2>&1; then
 fi
 
 case "$(uname -m)" in
-  arm64|aarch64)
-    ARCH="aarch64"
-    ;;
-  x86_64)
-    ARCH="x86_64"
-    ;;
-  *)
-    ARCH="$(uname -m)"
-    ;;
+  arm64|aarch64) ARCH=aarch64 PLATFORM=linux/arm64 ;;
+  x86_64) ARCH=x86_64 PLATFORM=linux/amd64 ;;
+  *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
+[ -f "$CONFIG" ] || { echo "$CONFIG not found: run mise run setup first" >&2; exit 1; }
+STATE=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).stateRoot" "$CONFIG")
 
-docker build --build-arg BROWSER="${PI_GUEST_BROWSER:-0}" --build-arg REFRESH="$(date +%F)" -t pi-guest-base:v5 "$ROOT/guest"
-ASSETS=$(mktemp -d "${TMPDIR:-/tmp}/pi-v3-assets.XXXXXX")
+# build.json names this tag as its rootfs source.
+docker buildx build --load --platform "${PI_GUEST_PLATFORMS:-$PLATFORM}" -t pi-guest-shared "$ROOT/guest"
+
+ASSETS=$(mktemp -d "${TMPDIR:-/tmp}/pi-assets.XXXXXX")
 cleanup() { rm -rf "$ASSETS"; }
 trap cleanup EXIT INT TERM
-
 # Gondolin refreshes cached Alpine indexes only on a 404, so a warm cache would keep shipping old kernel packages.
 "$GONDOLIN" build cache update --config "$ROOT/guest/build.json" --arch "$ARCH"
 "$GONDOLIN" build --config "$ROOT/guest/build.json" --arch "$ARCH" --output "$ASSETS"
@@ -48,3 +48,6 @@ fi
 node "$ROOT/guest/boot-assets.mjs" "$ASSETS"
 "$GONDOLIN" build --verify "$ASSETS"
 "$GONDOLIN" image import "$ASSETS" --tag "$IMAGE"
+
+mkdir -p -m 700 "$STATE/microsandbox"
+docker save --platform "$PLATFORM" pi-guest-shared | MSB_HOME="$STATE/microsandbox" "$MSB" load --tag "$IMAGE"

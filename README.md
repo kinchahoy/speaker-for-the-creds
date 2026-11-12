@@ -57,7 +57,7 @@ One Linux machine can run speaker, bottle-school, and a direct agent together. T
 4. **Add what agents can use** under Setup (the Services page): a service (the `demo` service works without a key), a secret (name, value, allowed hosts, variable name; the agent only ever sees a placeholder), an SSH target (put the line Setup shows into that account's `authorized_keys` first, then add it), and a share on that target (`VM mount`, `over SSH`, or both).
 5. **Connect a direct agent.** Give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`; its sh steps in `/_speaker/help` enroll it, and each request it makes appears as a card in `/admin`.
 6. **Configure bottle-school.** Copy `bottle-school/.env.example` to `bottle-school/.env` and set `SPEAKER_URL`, `SPEAKER_PROXY_PORT` (speaker's `PROXY_PORT`) and the model (`LLM_UPSTREAM`, `LLM_MODEL`), then `mise run setup`. `SPEAKER_URL` must be an address the VM can reach: use the machine's LAN address (for example `http://192.168.1.10:3000`), not `127.0.0.1`, which inside a VM is the VM itself. To use a different guest image tag or ports, edit `bottle-school/config.json`.
-7. **Build the guest image:** `mise run guest-build pi-v5-guest` (a few GiB and several minutes; the tag must match `guestImage` in `config.json`).
+7. **Build the guest image:** `mise run guest-build pi-v5-guest` (about 10 GiB and several minutes; the tag must match `guestImage` in `config.json`). One build serves both backends: it imports the image into Gondolin and loads it into microsandbox.
 8. **Register and approve the sandbox host.** `mise run bottle-cli register`, then approve the pending sandbox host in speaker's `/admin`. If you later change `SPEAKER_URL`, remove the old host in `/admin`, delete `speaker.token` from the state directory (under `BOTTLE_HOME`, default `~/.local/share/bottle-school/state`) and register again.
 9. **Start bottle-school:** `mise run bottle`. It prints `speaker connected`.
 10. **Launch a task:** `mise run bottle-cli run --template offline --prompt "..."` (add `--attended` or omit `--prompt` to work at its terminal). A `site:`, `secret:` or `folder:` item shows up in `/admin` as a card; once you approve it the VM can use it, and Revoke stops it within seconds. Model ids carry their provider, as in `local/<id>`.
@@ -86,7 +86,7 @@ Pi needs a model endpoint to do any work. Point `LLM_UPSTREAM` at an OpenAI-comp
 | `mise run bottle-cli ls` | List tasks |
 | `mise run bottle-cli attach <id>` | Join Pi in a running guest |
 | `mise run bottle-cli stop <id>` | Stop and archive a task |
-| `mise run guest-build pi-v5-guest` | Build and import the guest image |
+| `mise run guest-build pi-v5-guest` | Build the guest image and import it into Gondolin and microsandbox |
 
 <!-- author: ai -->
 

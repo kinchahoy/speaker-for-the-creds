@@ -98,7 +98,7 @@ resolve_virtio_port_path() {
 " "/dev/virtio-ports/${expected}"
 }
 
-# Ubuntu's update-ca-certificates re-reads every system CA with several forks each and rehashes the directory:
+# Debian's update-ca-certificates re-reads every system CA with several forks each and rehashes the directory:
 # ~1.8s of a ~3.5s cold boot. The image's /etc/ssl/certs already holds exactly the system CAs, so adding one local CA
 # directly gives the state update-ca-certificates would leave: its .pem link, its OpenSSL subject-hash link, and the
 # cert appended to the bundle. Every boot starts from the pristine image (rootfs.mode=cow).

@@ -29,7 +29,7 @@ Sources: README, `src/gondolin.ts`, `tasks.ts`, `leases.ts`, `pi.ts`, `server.ts
 
 | # | Capability | Where it is used | Rating | Notes |
 |---|---|---|---|---|
-| 1 | Boot a VM from a built image (Ubuntu 26.04 rootfs, Alpine `linux-virt` kernel, trimmed initramfs) | `bootGuest` -> `VM.create` in `src/gondolin.ts`; `guest/build.sh`, `build.json`, `Dockerfile`, `boot-assets.mjs`, `rootfs-init.sh` | E | The Gondolin-specific part is large: a 372-line init copied from Gondolin's built-in script, a script that rewrites Gondolin's boot assets and reseals its manifest, and an image import step. |
+| 1 | Boot a VM from a built image (Debian slim rootfs, Alpine `linux-virt` kernel, trimmed initramfs) | `bootGuest` -> `VM.create` in `src/gondolin.ts`; `guest/build.sh`, `build.json`, `Dockerfile`, `boot-assets.mjs`, `rootfs-init.sh` | E | The Gondolin-specific part is large: a 372-line init copied from Gondolin's built-in script, a script that rewrites Gondolin's boot assets and reseals its manifest, and an image import step. |
 | 2 | Boot speed | README measurement: 0.95 s median create to first exec (QEMU), 1.05 s (Krun) | N | Matters for launch latency only; tasks run for hours. |
 | 3 | Run a command in the guest and get exit code and output | `Guest.exec` in `gondolin.ts`; all of `pi.ts` (`start`, `abort`, `restart`, `quit`, `running`, `kill`, `export`) drives Pi under `dtach` | E | Needs only "run this, give me output". |
 | 4 | Owner attaches to the running Pi | `src/cli.ts` runs `gondolin attach <sessionId> -- dtach -a /run/pi.dtach`; `server.ts` exposes `task.guest.sessionId`; `gcSessions()` at startup | E (attended tasks) | Needs an interactive terminal with a PTY. |

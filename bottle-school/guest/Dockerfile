@@ -1,27 +1,28 @@
 # syntax=docker/dockerfile:1
-# Guest base for the v5 image. Gondolin imports this filesystem as its rootfs (see build.json).
-# BuildKit cache mounts keep apt, mise, npm, and uv downloads on the build host, so a rebuild
-# after a tool change reuses earlier downloads. The caches never enter the image.
-FROM ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
-
-# Tool choices live in three files: apt-packages.txt (Ubuntu), mise-config.toml (binaries and npm),
-# and python/requirements.in (the default uv environment). Builds take the latest versions;
-# guest/build.sh passes the date as REFRESH so the first build each day refreshes every layer.
-ARG REFRESH
+# The one guest image for both backends, on Debian slim, in five layers (least-changing first). Latest releases
+# throughout, except the pinned Pi extensions. guest/build.sh builds it for the host architecture (linux/amd64 and
+# linux/arm64 share this file), imports it into Gondolin (which turns it into a VM rootfs, see build.json) and loads it
+# into microsandbox (which runs it as is).
+# microsandbox needs socat (vsock doors), sshfs (folders, later), dtach (attach), openssh-client, git, curl, ca-certificates.
+# Gondolin needs kmod (modprobe), iproute2, udhcpc (network) and e2fsprogs (resize2fs, to grow the root disk); all sit in this layer.
+FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
+
+# 1. System: only what mise does not provide (the git client, C libraries and their tools, kernel-facing tools, compilers).
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    --mount=type=bind,source=apt-packages.txt,target=/tmp/apt-packages.txt \
     rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
- && sed 's/#.*//' /tmp/apt-packages.txt | xargs apt-get install -y --no-install-recommends \
- # Gondolin's init runs udhcpc with this script path; it writes the route and resolv.conf.
- && mkdir -p /usr/share/udhcpc && ln -sf /etc/udhcpc/default.script /usr/share/udhcpc/default.script
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl wget git openssh-client socat sshfs fuse3 dtach \
+      build-essential cmake ninja-build pkg-config sqlite3 universal-ctags parallel \
+      ffmpeg imagemagick poppler-utils qpdf tesseract-ocr tesseract-ocr-eng graphviz mediainfo libimage-exiftool-perl \
+      fonts-dejavu-core fonts-liberation \
+      strace lsof iproute2 udhcpc kmod e2fsprogs procps zip unzip xz-utils file tree less rsync vim-tiny
 
-ARG TARGETARCH
-
-# mise 2026.10.25 (checksum from the release SHASUMS256.txt)
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
+# 2. Node, via mise (checksum from the release SHASUMS256.txt). Playwright needs it. `mise use -g` writes
+# /etc/mise/config.toml; the later layers add their tools as /etc/mise/conf.d/*.toml. Shims are on PATH.
+RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       MISE_BIN="mise-v2026.10.25-linux-arm64"; \
       MISE_SHA="bb09e88b13164ca90691a5cc042726d079f0ba26ab55527344cb173c2e83c998"; \
     else \
@@ -31,55 +32,56 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
  && curl -fsSL -o /usr/local/bin/mise "https://github.com/jdx/mise/releases/download/v2026.10.25/$MISE_BIN" \
  && echo "$MISE_SHA  /usr/local/bin/mise" | sha256sum -c - \
  && chmod 755 /usr/local/bin/mise
-
-COPY mise-config.toml /etc/mise/config.toml
 ENV MISE_DATA_DIR=/opt/mise \
     MISE_GLOBAL_CONFIG_FILE=/etc/mise/config.toml \
-    MISE_YES=1
-# Symlink every installed tool binary into /usr/local/bin so the guest runs without mise on PATH.
-# Always-on Pi extensions are linked into /opt/pi-extensions; pi-launch loads each one in every task.
-# Every other Pi package is linked to /opt/pi-plugins/<name>, the stable path a catalog.json `extensions` entry
-# names; a task loads it only through an approved `extension` lease (or attended mode, for ask-user-question).
-# The owner exempted these low-download Pi extensions (a few hundred to ~1.6k weekly downloads when pinned) from
-# aube's reputation checks; OSV malware checks still apply.
+    MISE_YES=1 \
+    PATH=/usr/local/bin:/opt/mise/shims:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_PYTHON_BIN_DIR=/usr/local/bin \
+    UV_PYTHON_PREFERENCE=only-managed \
+    UV_LINK_MODE=copy
 RUN --mount=type=cache,target=/root/.cache/mise \
+    mise use -g node@latest && mise reshim
+
+# 3. Browser: Playwright and its Chromium with the system libraries it installs through apt.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    --mount=type=cache,target=/root/.cache/mise \
     --mount=type=cache,target=/root/.npm \
-    AUBE_ALLOWED_UNPOPULAR_PACKAGES=pi-loop-police,pi-token-speed,pi-cc-loop,pi-cc-monitor mise install \
- && for d in $(mise bin-paths); do \
-      find "$d" -maxdepth 1 \( -type f -o -type l \) -perm -u+x -exec ln -sf {} /usr/local/bin/ \; ; \
-    done \
- && link() { dir="$(mise where "npm:$1")/node_modules/$1"; jq -e .pi "$dir/package.json" >/dev/null && ln -s "$dir" "$2/${1##*/}"; } \
+    mise use -g npm:playwright@latest \
+ && mise reshim \
+ && playwright install --with-deps chromium
+
+# 4. Toolchain: every other mise tool (mise.toml), then uv's managed CPython as the default python and python3 (there is
+# no Debian python3) and the agent's default environment (python/requirements.in, first on PATH). Add tools here;
+# layers 1-3 stay cached.
+COPY mise.toml /etc/mise/conf.d/tools.toml
+COPY python/requirements.in /tmp/requirements.in
+ENV VIRTUAL_ENV=/opt/uv/venv
+ENV PATH=/opt/uv/venv/bin:$PATH
+RUN --mount=type=cache,target=/root/.cache/mise \
+    --mount=type=cache,target=/root/.cache/uv \
+    mise install \
+ && mise reshim \
+ && uv python install --default --preview 3.13 \
+ && uv venv --python 3.13 /opt/uv/venv \
+ && uv pip install --python /opt/uv/venv --only-binary :all: -r /tmp/requirements.in \
+ && git lfs install --system
+
+# 5. Agent: Pi and its extensions in one pnpm project (pi-package.json; their install scripts stay unrun), so the extensions share a single Pi instead of
+# each installing their own as a peer dependency. Always-on extensions are linked into /opt/pi-extensions (pi-launch loads
+# them in every task); the rest into /opt/pi-plugins, the paths catalog.json names.
+COPY pi-package.json /opt/pi/package.json
+RUN --mount=type=cache,target=/root/.local/share/pnpm \
+    --mount=type=cache,target=/root/.cache/pnpm \
+    cd /opt/pi && pnpm install --config.strictDepBuilds=false \
+ && ln -s /opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js /usr/local/bin/pi \
+ && link() { dir="/opt/pi/node_modules/$1"; jq -e .pi "$dir/package.json" >/dev/null && ln -s "$dir" "$2/${1##*/}"; } \
  && mkdir -p /opt/pi-extensions /opt/pi-plugins \
  && for p in pi-loop-police pi-token-speed; do link "$p" /opt/pi-extensions || exit 1; done \
  && for p in @juicesharp/rpiv-ask-user-question pi-web-access pi-cc-loop pi-cc-monitor; do link "$p" /opt/pi-plugins || exit 1; done \
- && ln -s "$(mise where npm:@earendil-works/pi-coding-agent)/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent" /opt/pi-plugins/subagent \
- && test -f /opt/pi-plugins/subagent/index.ts \
- && mise ls --current > /opt/pi-v2-tool-versions.txt
+ && ln -s /opt/pi/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent /opt/pi-plugins/subagent \
+ && test -f /opt/pi-plugins/subagent/index.ts
 
-# uv-managed CPython 3.13 and the default agent environment (glibc lock)
-ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python \
-    UV_PYTHON_PREFERENCE=only-managed \
-    UV_PYTHON_DOWNLOADS=automatic \
-    UV_LINK_MODE=copy
-COPY python/requirements.in /opt/uv/requirements.in
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv python install 3.13 \
- && uv venv --python 3.13 /opt/uv/venv \
- && uv pip install --python /opt/uv/venv --only-binary :all: -r /opt/uv/requirements.in \
- && rm /opt/uv/requirements.in
-ENV UV_PYTHON_DOWNLOADS=never
-
-# Optional browser automation (guest/build.sh with PI_GUEST_BROWSER=1): Python Playwright and its Chromium.
-ARG BROWSER=0
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    if [ "$BROWSER" = 1 ]; then \
-      uv pip install --python /opt/uv/venv --only-binary :all: playwright \
-   && ln -s /opt/uv/venv/bin/playwright /usr/local/bin/playwright \
-   && playwright install --with-deps --only-shell chromium; \
-    fi
-
-# Trusted host scripts and config (Pi launchers)
 COPY rootfs/ /

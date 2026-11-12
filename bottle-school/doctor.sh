@@ -6,6 +6,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 os=$(uname -s)
 case "$(uname -m)" in arm64|aarch64) arch=aarch64 qemu=qemu-system-aarch64 ;; *) arch=x86_64 qemu=qemu-system-x86_64 ;; esac
 failed=0
+config=${PI_V2_CONFIG:-$root/config.json}
+cfg() { node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))[process.argv[2]] ?? ''" "$config" "$1" 2>/dev/null; }
+backend=$(cfg backend); backend=${backend:-gondolin}
 check() { # check <label> <fix> <command...>
 	label=$1 fix=$2
 	shift 2
@@ -20,14 +23,14 @@ else
 fi
 check "node and pnpm (mise run install)" "mise install" sh -c 'command -v node && command -v pnpm'
 check "docker daemon reachable" "install Docker and start it" docker info
-check "qemu-img" "$utils_fix" command -v qemu-img
+[ "$backend" = gondolin ] && check "qemu-img" "$utils_fix" command -v qemu-img
 check "setsid" "$setsid_fix" command -v setsid
 if [ "$os" = Darwin ]; then
 	check "hardware virtualization (Hypervisor.framework)" "use a Mac with Hypervisor support" sh -c '[ "$(sysctl -n kern.hv_support)" = 1 ]'
 else
 	check "/dev/kvm readable and writable" "sudo usermod -aG kvm \$USER, then log in again (WSL: wsl --shutdown)" sh -c 'test -r /dev/kvm && test -w /dev/kvm'
 fi
-if [ "${PI_V2_VMM:-qemu}" = krun ]; then
+if [ "$backend" = gondolin ] && [ "${PI_V2_VMM:-qemu}" = krun ]; then
 	# Same runner choice as start.sh: the locally built one, else Gondolin's published package.
 	runner=$root/.runtime/krun-runner/bin/gondolin-krun-runner
 	[ -x "$runner" ] || runner=$(ls "$root"/node_modules/.pnpm/@earendil-works+gondolin-krun-runner-*/node_modules/@earendil-works/*/bin/gondolin-krun-runner 2>/dev/null | head -n 1)
@@ -36,14 +39,19 @@ if [ "${PI_V2_VMM:-qemu}" = krun ]; then
 	# The published Linux x86_64 runner is built with AVX-512 and dies with SIGILL on CPUs without it (Zig builds for the build host's CPU).
 	[ "$os" = Linux ] && check "Krun runner has no AVX-512 (zmm) instructions" "mise run krun-runner" sh -c '[ "$(objdump -d "$1" | grep -c zmm)" = 0 ]' sh "$runner"
 fi
-if [ "${PI_V2_VMM:-qemu}" != krun ]; then
+if [ "$backend" = gondolin ] && [ "${PI_V2_VMM:-qemu}" != krun ]; then
 	check "$qemu" "$qemu_fix" command -v "$qemu"
 fi
-config=${PI_V2_CONFIG:-$root/config.json}
 check "config.json (mise run setup)" "mise run setup" test -f "$config"
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
-if [ "$failed" = 0 ]; then
-	image=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).guestImage" "$config")
+if [ "$failed" = 0 ] && [ "$backend" = microsandbox ]; then
+	image=$(cfg guestImage)
+	export MSB_HOME="$(cfg stateRoot)/microsandbox"
+	check "guest image $image loaded into microsandbox" "mise run guest-build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
+	check "guest image $image boots and runs a command (microsandbox)" "mise run guest-build $image" \
+		sh -c '"$1" run -q --no-net --replace --name pi-doctor "$2" -- true; rc=$?; "$1" rm pi-doctor; exit $rc' sh "$root/node_modules/.bin/msb" "$image"
+elif [ "$failed" = 0 ]; then
+	image=$(cfg guestImage)
 	if [ "${PI_V2_VMM:-qemu}" = krun ] && [ "$arch" = x86_64 ]; then
 		# guest/boot-assets.mjs points the Krun slots at the ELF vmlinux and the initramfs; Gondolin's stock raw libkrunfw kernel does not boot.
 		check "guest image $image has Krun boot assets" "mise run guest-build $image" node -e '
