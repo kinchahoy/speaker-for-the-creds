@@ -50,6 +50,8 @@ export type Live = {
 
 
 export type Guest = {
+  /** The task's throwaway SSH public key, when the backend mounts folders over SSH; it goes to speaker with the task's requests. */
+  sshKey?: string;
   /** Backend session id; `Backend.attach` turns it into the owner's terminal command. */
   sessionId: string;
   exec: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;

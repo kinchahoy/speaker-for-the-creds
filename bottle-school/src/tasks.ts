@@ -304,7 +304,7 @@ export class Tasks {
       try {
         // The template's want list is the task's first request. A hosted model's key is a speaker secret, asked for here too.
         const first = launchRequest(template, task.subjectId, this.#providerSecrets(model));
-        if (first) await this.speaker.request(first);
+        if (first) await this.speaker.request({ ...first, ...(guest.sshKey ? { sshKey: guest.sshKey } : {}) });
         // A launch prompt is sent once, to a fresh session: if the hosted model's key were still missing, that first turn
         // would fail for good. Pi then starts when the key arrives (#fetchProviderKey restarts it with the key in place).
         if (!(input.prompt && this.#providerSecrets(model).length)) await pi.start(guest);
@@ -347,13 +347,9 @@ export class Tasks {
     for (const task of this.byId.values()) {
       const mine = leases.filter((lease) => {
         if (lease.subjectId !== task.subjectId) return false;
-        if (lease.kind === "folder" && !backends[this.config.backend].folders) {
-          this.#event(task, `refused folder ${lease.ref}: folders are not available on the ${this.config.backend} backend yet`);
-          return false;
-        }
         const valid = lease.kind === "credential" ||
           (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && secretHosts.safeParse(lease.hosts).success) ||
-          (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && Object.hasOwn(this.config.shareRoots, lease.ref.split(":")[0]!)) ||
+          (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && this.#shareRoot(lease.ref.split(":")[0]!) !== undefined) ||
           (lease.kind === "site" && siteRef.safeParse(lease.ref).success) ||
           (lease.kind === "mcp" && Object.hasOwn(this.catalog.mcps, lease.ref)) ||
           (lease.kind === "extension" && Object.hasOwn(this.catalog.extensions, lease.ref));
@@ -412,6 +408,10 @@ export class Tasks {
   #wantedExtensions = (task: Task) =>
     [...new Set(this.#leased(task, "extension").map((lease) => lease.ref))].filter((id) => this.catalog.extensions[id]);
 
+  /** A share's host directory. On microsandbox shares live on speaker's targets and are mounted over SSH, so none is needed. */
+  #shareRoot = (share: string) =>
+    Object.hasOwn(this.config.shareRoots, share) ? this.config.shareRoots[share] : this.config.backend === "microsandbox" ? "" : undefined;
+
   #leased = (task: Task, kind: string) => unexpired(task.leases).filter((lease) => lease.kind === kind);
 
   /** Moves the live task view to its leases. Hosts and shares are replaced as a whole, so no lease outlives its snapshot. */
@@ -430,8 +430,8 @@ export class Tasks {
     task.live.shares.clear();
     for (const { ref, expiresAt } of this.#leased(task, "folder")) {
       const [share, mode] = ref.split(":");
-      const root = this.config.shareRoots[share!];
-      if (!root) {
+      const root = this.#shareRoot(share!);
+      if (root === undefined) {
         this.#event(task, `folder lease names unknown share ${share}`);
         continue;
       }

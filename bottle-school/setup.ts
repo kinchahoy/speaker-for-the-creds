@@ -1,5 +1,5 @@
 // Creates bottle-school/config.json and its config, state and output directories for a single-host setup.
-// Usage: node setup.ts   (env: BOTTLE_HOME, SPEAKER_URL, SPEAKER_PROXY_PORT,LLM_UPSTREAM host:port, LLM_MODEL id)
+// Usage: node setup.ts   (env: BOTTLE_HOME, SPEAKER_URL, SPEAKER_PROXY_PORT, SPEAKER_SSH_PORT, LLM_UPSTREAM host:port, LLM_MODEL id)
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,7 @@ Object.assign(config, {
   speaker: {
     url: process.env.SPEAKER_URL ?? "http://127.0.0.1:3000",
     ...(process.env.SPEAKER_PROXY_PORT ? { proxyPort: Number(process.env.SPEAKER_PROXY_PORT) } : {}),
+    ...(process.env.SPEAKER_SSH_PORT ? { sshPort: Number(process.env.SPEAKER_SSH_PORT) } : {}),
   },
   configRoot,
   stateRoot,

@@ -12,7 +12,7 @@ import test, { type TestContext } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
-import { WebSocketServer } from 'ws'
+import WebSocket, { WebSocketServer } from 'ws'
 import { createApp, readConfig } from '../server.ts'
 import { setOwnerPassword } from './owner.ts'
 
@@ -164,7 +164,7 @@ async function fixture(t: TestContext) {
     assert.ok(text, `${item} has a ${which} line in /me`)
     return Object.entries({ '<key>': join(dir, 'agent_key'), ...fill }).reduce((l, [k, v]) => l.replaceAll(k, v), text)
   }
-  return { dir, world, owner, ownerGet, ownerForm, agent, enroll, approve, me, line, sshPort }
+  return { dir, world, url, owner, ownerGet, ownerForm, agent, enroll, approve, me, line, sshPort }
 }
 
 test('a command runs through the jump server as the target account and is logged; revoke ends a running session', async (t) => {
@@ -349,3 +349,48 @@ test('a folder the sandbox mounts needs no sshKey from the agent', async (t) => 
   // The same agent still needs a key for anything delivered over SSH.
   assert.equal((await ask(['folder:pics'])).status, 400)
 })
+
+// A sandbox host that mounts folders itself (kind `folder`) takes VM mounts; one without the kind mounts over-SSH
+// folders with sshfs, so it must hear those grants to do it.
+for (const [kinds, hears] of [
+  [['site'], true],
+  [['site', 'folder'], false],
+] as const) {
+  test(`a sandbox host with kinds ${kinds.join(', ')} ${hears ? 'hears' : 'does not hear'} its agent's over-SSH folder grant`, async (t) => {
+    const f = await fixture(t)
+    const post = (path: string, token: string, body: object) =>
+      f.agent(path, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    const created = await post('/_speaker/hosts', '', { name: 'sandbox', kinds, tokenHash: sha('host-token') })
+    const { id } = (await created.json()) as { id: string }
+    assert.equal((await f.ownerForm(`/hosts/${id}/approve`, [])).status, 303)
+    const { token } = (await (
+      await post('/_speaker/hosts/agents', 'host-token', { label: 'pi', agent: 'Pi' })
+    ).json()) as {
+      token: string
+    }
+    const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
+      headers: { authorization: 'Bearer host-token' },
+    })
+    t.after(() => ws.terminate())
+    const grants: { item: string }[][] = []
+    ws.on('message', (data) => grants.push((JSON.parse(String(data)) as { grants: { item: string }[] }).grants))
+    const sshKey = (await readFile(join(f.dir, 'agent_key.pub'), 'utf8')).trim()
+    const asked = await post('/_speaker/requests', token, {
+      want: ['folder:pics'],
+      reason: 'test',
+      duration: '1h',
+      sshKey,
+    })
+    assert.equal(asked.status, 202)
+    await f.approve()
+    for (let i = 0; i < 40 && !grants.some((list) => list.length); i++) await sleep(50)
+    assert.equal(
+      grants.some((list) => list.some((grant) => grant.item === 'folder:pics')),
+      hears,
+    )
+  })
+}

@@ -47,7 +47,7 @@ export type Snapshot = {
   secrets?: SecretInfo[];
 };
 const Agent = z.object({ id: z.string(), token: z.string() });
-export type RequestBody = { agentId: string; want: string[]; reason: string; duration: string };
+export type RequestBody = { agentId: string; want: string[]; reason: string; duration: string; sshKey?: string };
 
 /** `bottle register` writes the sandbox host token that speaker's owner approved. */
 export const readHostToken = (config: Config) => {
@@ -108,12 +108,15 @@ export const speakerProxy = async (config: Config, agentToken: string) => {
   });
 };
 
-/** The shares this host holds and whether the VM can mount each (its directory is readable), for speaker's choice of delivery. */
+/**
+ * The shares this host holds and whether the VM can mount each (its directory is readable), for speaker's choice of
+ * delivery. The microsandbox guest has no VM mount: it reaches folders over SSH through speaker.
+ */
 export const shareReport = (config: Config) =>
   Object.entries(config.shareRoots).map(([name, root]) => {
     try {
       accessSync(root, constants.R_OK | constants.X_OK);
-      return { name, mount: true };
+      return { name, mount: config.backend !== "microsandbox" };
     } catch {
       return { name, mount: false };
     }

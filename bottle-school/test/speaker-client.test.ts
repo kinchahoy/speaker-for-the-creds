@@ -239,6 +239,16 @@ test("bottle-school reports the shares it holds, and whether it can mount them, 
   await until(async () => (await f.live()).grants.includes("shares: documents (VM mount), ghost (no VM mount)"));
 });
 
+test("a microsandbox host reports its shares as not mountable, since its folders arrive over SSH", async (t) => {
+  const f = await fixture(t);
+  const { token } = await f.host([]);
+  const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
+  t.after(() => rm(documents, { recursive: true, force: true }));
+  const config = { ...f.config, backend: "microsandbox", shareRoots: { documents } } as Config;
+  watchLeases(config, token, () => {}, (message) => assert.fail(message));
+  await until(async () => (await f.live()).grants.includes("shares: documents (no VM mount)"));
+});
+
 test("without word from speaker for 30 seconds the grants are dropped until it is back", async (t) => {
   assert.equal(SPEAKER_LIMITS.dropMs, 30_000);
   const f = await fixture(t);
