@@ -39,7 +39,8 @@ ENV MISE_DATA_DIR=/opt/mise \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_PYTHON_BIN_DIR=/usr/local/bin \
     UV_PYTHON_PREFERENCE=only-managed \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=hardlink \
+    UV_CACHE_DIR=/opt/uv/cache
 RUN --mount=type=cache,target=/root/.cache/mise \
     mise use -g node@latest && mise reshim
 
@@ -54,7 +55,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
  && playwright install --with-deps chromium
 
 # 4. Toolchain: every other mise tool (mise.toml), then uv's managed CPython as the default python and python3 (there is
-# no Debian python3) and the agent's default environment (python/requirements.in, first on PATH). Add tools here;
+# no Debian python3) and the agent's default environment (python/requirements.in, first on PATH). The uv cache stays in the image (/opt/uv/cache, the venv hard-linked to it) so new environments install offline. Add tools here;
 # layers 1-3 stay cached.
 COPY mise.toml /etc/mise/conf.d/tools.toml
 COPY python/requirements.in /tmp/requirements.in
