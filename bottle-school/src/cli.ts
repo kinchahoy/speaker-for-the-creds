@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
+import { backends } from "./backends/index.ts";
 import { controlOrigin, loadConfig, type Config } from "./config.ts";
 
 /** The owner's terminal client: `mise run bottle-cli register | run | ls | attach | stop`. */
@@ -246,13 +247,10 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
       throw new Error(`task ${task.id} is ${task.state}; it has no terminal to attach to`);
     console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches; Pi keeps running.`);
-    const child = spawn(
-      `${import.meta.dirname}/../node_modules/.bin/gondolin`,
-      ["attach", task.sessionId, "--", "dtach", "-a", "/run/pi.dtach"],
-      { stdio: "inherit" },
-    );
+    const terminal = backends[config.backend].attach(task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => {
-      console.error(`error: cannot start gondolin: ${error.message}`);
+      console.error(`error: cannot start the terminal: ${error.message}`);
       process.exit(1);
     });
     const pane = process.env.HERDR_PANE_ID;

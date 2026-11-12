@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import type { Config } from "./config.ts";
-import type { Guest } from "./gondolin.ts";
+import type { Guest } from "./backend.ts";
 import { unexpired } from "./leases.ts";
 import type { Lease, SecretInfo } from "./speaker.ts";
 
