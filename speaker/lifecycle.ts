@@ -48,3 +48,11 @@ export const hostTable: Table<HostState, HostEvent> = {
   pending: { approve: 'approved' },
   approved: {},
 }
+
+// One relay connection: it opens once it names a granted target or share, and closes once.
+export type SessionState = 'connecting' | 'open' | 'closed'
+export const sessionTable: Table<SessionState, 'begin' | 'close'> = {
+  connecting: { begin: 'open', close: 'closed' },
+  open: { close: 'closed' },
+  closed: {},
+}

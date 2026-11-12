@@ -46,28 +46,14 @@ const statusOf = (id: number, status: number, message: string) =>
   body(fxp.status, u32(id), u32(status), str(message), str(''))
 const nameOf = (id: number, path: string) => body(fxp.name, u32(id), u32(1), str(path), str(path), u32(0))
 
-class Reader {
-  pos = 0
-  buf: Buffer
-  constructor(buf: Buffer) {
-    this.buf = buf
-  }
-  u32() {
-    const n = this.buf.readUInt32BE(this.pos)
-    this.pos += 4
-    return n
-  }
-  str() {
-    const length = this.u32()
-    if (this.pos + length > this.buf.length) throw new Error('Truncated SFTP packet')
-    const s = this.buf.toString('utf8', this.pos, this.pos + length)
-    this.pos += length
-    return s
-  }
-  rest() {
-    return this.buf.subarray(this.pos)
-  }
+// The string at `at` in a packet, and where the next field starts.
+const readString = (buf: Buffer, at: number) => {
+  const end = at + 4 + buf.readUInt32BE(at)
+  if (end > buf.length) throw new Error('Truncated SFTP packet')
+  return { text: buf.toString('utf8', at + 4, end), next: end }
 }
+// The first path of a NAME reply (type, id, count, then the name).
+const firstName = (reply: Buffer) => readString(reply, 9).text
 
 // Calls `each` with every complete packet body in the stream.
 const framer = (each: (packet: Buffer) => void) => {
@@ -100,14 +86,12 @@ const pathOps: Record<number, { name: string; paths: 1 | 2; write: boolean; foll
   [fxp.realpath]: { name: 'realpath', paths: 1, write: false, follow: true },
 }
 // Operations on an open handle: the path was checked when it was opened. Symlinks and extensions are not here.
-const handleOps: Record<number, { write: boolean }> = {
-  [fxp.close]: { write: false },
-  [fxp.read]: { write: false },
-  [fxp.fstat]: { write: false },
-  [fxp.readdir]: { write: false },
-  [fxp.write]: { write: true },
-  [fxp.fsetstat]: { write: true },
-}
+const handleOps = new Map(
+  [fxp.close, fxp.read, fxp.fstat, fxp.readdir, fxp.write, fxp.fsetstat].map((k) => [
+    k,
+    { write: k === fxp.write || k === fxp.fsetstat },
+  ]),
+)
 
 // One mount: a share (paths stay inside it; the target's sftp-server starts in it) or a whole target account
 // (`absolute`: paths are absolute on the target and not contained).
@@ -161,10 +145,7 @@ export function relaySftp(input: Readable, output: Writable, hooks: Hooks): Prom
   // What the target says a path resolves to, or the status reply it answered instead.
   async function realpath(backend: Backend, path: string) {
     const reply = await ask(backend, fxp.realpath, str(path))
-    if (reply[0] !== fxp.name) return reply
-    const r = new Reader(reply.subarray(5))
-    r.u32()
-    return r.str()
+    return reply[0] === fxp.name ? firstName(reply) : reply
   }
 
   async function start(mount: Mount) {
@@ -216,16 +197,17 @@ export function relaySftp(input: Readable, output: Writable, hooks: Hooks): Prom
     const id = p.readUInt32BE(1)
     const op = pathOps[kind]
     if (!op) {
-      const handleOp = handleOps[kind]
+      const handleOp = handleOps.get(kind)
       if (!handleOp) return refuse(id, `SFTP operation ${kind} is not supported`, code.unsupported)
       if (!mounted) return refuse(id, 'Name a share first: paths start with <share>/', code.failure)
       if (handleOp.write && mounted.mount.readOnly) return refuse(id, 'This grant is read-only')
       const reply = await ask(mounted.backend, kind, p.subarray(5))
       return answer(id, reply)
     }
-    const r = new Reader(p.subarray(5))
-    const comps = [r.str(), ...(op.paths === 2 ? [r.str()] : [])].map(parts)
-    const tail = r.rest()
+    const first = readString(p, 5)
+    const second = op.paths === 2 ? readString(p, first.next) : undefined
+    const comps = [first.text, ...(second ? [second.text] : [])].map(parts)
+    const tail = p.subarray((second ?? first).next)
     // OPEN carries its flags after the path: anything beyond reading is a write.
     const writes = op.write || (kind === fxp.open && (tail.readUInt32BE(0) & ~1) !== 0)
     // The top of the namespace answers REALPATH and nothing else: shares are never listed.
@@ -259,9 +241,7 @@ export function relaySftp(input: Readable, output: Writable, hooks: Hooks): Prom
     const reply = await ask(backend, kind, ...rests.map((rest) => str(onTarget(rest))), tail)
     if (reply[0] !== fxp.name) return answer(id, reply)
     // REALPATH and READLINK name a path on the target; the client sees it in the share's namespace.
-    const named = new Reader(reply.subarray(5))
-    named.u32()
-    const text = named.str()
+    const text = firstName(reply)
     const shown = virtual(current, text)
     if (kind === fxp.realpath && shown === undefined) return refuse(id, 'Outside the share')
     send(nameOf(id, shown ?? text))

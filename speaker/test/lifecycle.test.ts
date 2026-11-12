@@ -13,6 +13,7 @@ import {
   type RequestEvent,
   requestStates,
   requestTable,
+  sessionTable,
   transition,
 } from '../lifecycle.ts'
 import { createApp, readConfig } from '../server.ts'
@@ -23,6 +24,7 @@ test('every table target is a known state and terminal states accept no event', 
     [requestStates, requestTable],
     [grantStates, grantTable],
     [hostStates, hostTable],
+    [['connecting', 'open', 'closed'], sessionTable],
   ] as const) {
     assert.deepEqual(Object.keys(table).sort(), [...states].sort())
     for (const moves of Object.values(table))
