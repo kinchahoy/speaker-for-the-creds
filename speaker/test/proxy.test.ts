@@ -245,7 +245,7 @@ test('a direct agent cannot request sandbox-only items, and invalid input lists 
   const site = await askFor(f, 'st', { want: ['site:example.com'], reason: 'x' })
   assert.equal(site.status, 400)
   assert.equal(((await site.json()) as { error: string }).error, 'invalid')
-  const malformed = (await (await askFor(f, 'st', { want: ['ssh:nas'], reason: 'x' })).json()) as {
+  const malformed = (await (await askFor(f, 'st', { want: ['ssh nas'], reason: 'x' })).json()) as {
     fields: { message: string }[]
   }
   assert.match(malformed.fields[0].message, /group:<name>/)

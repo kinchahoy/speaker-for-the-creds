@@ -15,6 +15,7 @@ import { rateLimiter } from 'hono-rate-limiter'
 import writeFile from 'write-file-atomic'
 import { WebSocketServer } from 'ws'
 import { z } from 'zod'
+import { createJump } from './jump.ts'
 import {
   type GrantEvent,
   type GrantState,
@@ -28,15 +29,6 @@ import {
   transition,
 } from './lifecycle.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
-import {
-  caPublicKey,
-  fingerprint,
-  principalOf,
-  type SshRequest,
-  signCertificate,
-  sshHostsSchema,
-  sshRequestSchema,
-} from './ssh.ts'
 import { createStore, generateSshKey, openStore, type Store, type Vault, WrongPassword } from './store.ts'
 import { adminPage, livePanels, setPasswordPage, signInPage } from './ui.ts'
 
@@ -48,6 +40,13 @@ const urlSchema = z.url().refine((value) => {
   const url = new URL(value)
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
 }, 'Use an HTTP(S) URL without credentials, query, or fragment')
+const sshKeySchema = z
+  .string()
+  .trim()
+  .regex(
+    /^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+( [^\r\n]*)?$/,
+    'Send one ed25519 or ECDSA public key',
+  )
 const durations = { '30m': 1800_000, '1h': 3600_000, '2h': 7200_000, '1d': 86_400_000, '30d': 2_592_000_000 }
 const durationSchema = z.enum(['30m', '1h', '2h', '1d', '30d']).default('2h')
 const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
@@ -108,6 +107,7 @@ const itemPatterns = {
   service: /^[a-zA-Z0-9_-]+\.(read|full)$/,
   site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
   secret: /^secret:[A-Za-z0-9_]+(@[^@\s]+)?$/,
+  ssh: /^ssh:[a-zA-Z0-9_-]+$/,
   folder: /^folder:[a-zA-Z0-9_-]+(:rw)?$/,
   mcp: /^mcp:[a-zA-Z0-9_-]+$/,
   ext: /^ext:[a-zA-Z0-9_-]+$/,
@@ -118,6 +118,7 @@ const itemForms = [
   '<service>.full',
   'site:<host>',
   'secret:<NAME>',
+  'ssh:<target>',
   'folder:<share>[:rw]',
   'mcp:<id>',
   'ext:<id>',
@@ -160,7 +161,7 @@ const requestSchema = z.object({
   want: z.array(itemSchema).min(1).max(50),
   reason: reasonSchema,
   duration: durationSchema,
-  sshKey: sshRequestSchema.shape.publicKey.optional(),
+  sshKey: sshKeySchema.optional(),
 })
 // Enrollment carries the identity and, optionally, the first request (want may be empty).
 const enrollSchema = identitySchema
@@ -169,7 +170,7 @@ const enrollSchema = identitySchema
     want: z.array(itemSchema).max(50).default([]),
     reason: reasonSchema.optional(),
     duration: durationSchema,
-    sshKey: sshRequestSchema.shape.publicKey.optional(),
+    sshKey: sshKeySchema.optional(),
   })
   .refine((value) => value.want.length === 0 || value.reason, {
     message: 'reason is required with want',
@@ -246,20 +247,21 @@ export type Request = {
   // When the granted items end (null: until revoked).
   expiresAt?: number | null
   grantIds: string[]
-  ssh?: SshRequest & {
-    hostname: string
-    port: number
-    fingerprint: string
-    maxDuration: z.infer<typeof durationSchema>
-  }
-  certificate?: string
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
   decidedAt?: number
 }
 export type GrantView = Grant & { label: string; agent: string; state: 'active' | 'granted' | 'waiting' }
 export type AgentView = Agent & { sandboxHost?: string; grants: number }
-export type View = { hosts: Host[]; agents: AgentView[]; requests: Request[]; grants: GrantView[] }
+export type View = {
+  hosts: Host[]
+  agents: AgentView[]
+  requests: Request[]
+  grants: GrantView[]
+  // Open SSH sessions, and what an ssh: or folder: item reaches for an agent (keyed `agentId item`).
+  sessions: { id: string; agent: string; what: string; started: number }[]
+  details: Record<string, { text: string; warning?: string }>
+}
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
 type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
@@ -268,6 +270,7 @@ const demoSecret = 'speaker-demo-credential-not-for-real-services'
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const union = (...lists: string[][]) => [...new Set(lists.flat())]
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
   return z
@@ -282,11 +285,10 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
         .regex(/^[a-zA-Z0-9_-]+$/)
         .optional(),
       NTFY_TOKEN: z.string().optional(),
-      // Enables SSH certificates; DATA_DIR/ssh-hosts.json must then list the target hosts.
-      SSH_CA_KEY: z.string().min(1).optional(),
-      SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
       // Port of the HTTPS proxy that inserts secrets (see proxy.ts); the proxy is off when unset.
       PROXY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+      // The jump server's port; without it SSH and folders over SSH are off.
+      SSH_PORT: z.coerce.number().int().min(1).max(65535).optional(),
       // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
     })
@@ -347,13 +349,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       .map((host) => [host.id, host]),
   )
   const saveHosts = () => save(hostsFile, [...hosts.values()])
-  const ssh = config.SSH_CA_KEY
-    ? {
-        caKey: config.SSH_CA_KEY,
-        caPublicKey: await caPublicKey(config.SSH_CA_KEY),
-        hosts: sshHostsSchema.parse(JSON.parse(await readFile(file('ssh-hosts.json'), 'utf8'))),
-      }
-    : undefined
   // Service keys in clear, empty until the owner unlocks the encrypted store (see "Keys and sign-in" below).
   const secrets = new Map<string, string>()
   // Keys and sign-in. The store appears when the owner first sets a password; after every restart speaker is locked
@@ -365,9 +360,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     if (!store) throw new Error('Speaker is locked')
     return store
   }
-  const unlock = (opened: Store) => {
+  const unlock = async (opened: Store) => {
     store = opened
     for (const [id, key] of Object.entries(opened.vault.services)) secrets.set(id, key)
+    // Speaker's SSH key goes into a stock ssh-agent; nothing else holds it in clear.
+    await jump.start(opened.vault.ssh)
   }
   // A service's key, or '' for a keyless service; undefined when a keyed service has none yet.
   const credentialOf = (id: string) => (services[id]?.auth.type === 'none' ? '' : secrets.get(id))
@@ -421,6 +418,17 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     grant.expiresAt === null || Date.parse(grant.expiresAt) > Date.now()
   const expiry = (duration: Duration) =>
     duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
+  // SSH and folders over SSH: targets, shares, the jump server and its relay (see jump.ts).
+  const jump = await createJump({
+    port: config.SSH_PORT,
+    dataDir,
+    agent: (id) => agents.get(id),
+    grants: () => [...grants.values()].filter(live),
+    mountable: (agentId) => Boolean(hostOf(agents.get(agentId) ?? {})?.kinds.includes('folder')),
+    audit,
+    expire: () => sweep(),
+  })
+  const syncJump = () => void jump.sync().catch(() => undefined)
   function moveRequest(request: Request, event: RequestEvent) {
     const from = request.status
     request.status = transition('request', requestTable, from, event)
@@ -574,7 +582,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     type: 'snapshot',
     version,
     grants: [...grants.values()]
-      .filter((grant) => live(grant) && agents.get(grant.agentId)?.host === hostId)
+      .filter((grant) => live(grant) && agents.get(grant.agentId)?.host === hostId && !jump.overSsh(grant))
       .map(({ id, agentId, item, expiresAt }) => ({ id, agentId, item, expiresAt })),
     requests: [...requests.values()]
       .filter((request) => agents.get(request.agentId)?.host === hostId)
@@ -588,6 +596,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   })
   function push() {
     version++
+    syncJump()
     for (const [id, ws] of sockets) ws.send(JSON.stringify(snapshot(id)))
   }
   setInterval(() => {
@@ -686,30 +695,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const until = Math.max(0, ...items.map((item) => lockedUntil(agentId, item) ?? 0))
     return until ? new Date(until).toISOString() : undefined
   }
-  // An SSH approval signs a certificate instead of creating grants; it cannot be revoked before it expires.
-  async function issueCertificate(request: Request, order: NonNullable<Request['ssh']>, duration: Duration) {
-    if (!ssh) throw new HTTPException(409, { message: 'SSH certificates are disabled' })
-    if (duration === 'permanent' || durations[duration] > durations[order.maxDuration])
-      throw new HTTPException(400, { message: `SSH access is limited to ${order.maxDuration}` })
-    const principal = request.items[0].slice('ssh-cert:'.length)
-    request.certificate = await signCertificate(ssh.caKey, {
-      ...order,
-      principal,
-      keyId: `speaker:${request.id}:${request.agentId}`,
-      seconds: durations[duration] / 1000,
-    })
-    audit('ssh_certificate_issued', {
-      request: request.id,
-      agent: request.agentId,
-      principal,
-      hostname: order.hostname,
-      fingerprint: order.fingerprint,
-      sourceAddress: order.sourceAddress,
-      agentForwarding: order.agentForwarding,
-      portForwarding: order.portForwarding,
-      expiresAt: new Date(Date.now() + durations[duration]).toISOString(),
-    })
-  }
   // The owner's decision on what the card showed: grants the ticked items and denies the other shown ones. An item
   // added to the request after the card was rendered stays pending, and so does the request.
   function decide(id: string, approved: string[], shown: string[], duration: Duration) {
@@ -723,15 +708,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       const yes = request.items.filter((item) => seen.has(item) && take.has(item))
       const no = request.items.filter((item) => seen.has(item) && !take.has(item))
       if (!yes.length && !no.length) throw new HTTPException(409, { message: 'None of the shown items are pending' })
-      if (request.ssh && yes.length) await issueCertificate(request, request.ssh, duration)
       const expiresAt = expiry(duration)
-      if (!request.ssh) for (const item of yes) addGrant(request, item, expiresAt, duration)
+      for (const item of yes) addGrant(request, item, expiresAt, duration)
+      // The agent is told "granted" only once the jump server is listening for its new grants.
+      if (yes.length) await jump.sync()
       for (const item of no)
-        if (!request.ssh)
-          strikes.set(strikeKey(request.agentId, item), [
-            ...recentStrikes(strikeKey(request.agentId, item)),
-            Date.now(),
-          ])
+        strikes.set(strikeKey(request.agentId, item), [...recentStrikes(strikeKey(request.agentId, item)), Date.now()])
       request.granted.push(...yes)
       request.denied.push(...no)
       request.items = request.items.filter((item) => !seen.has(item))
@@ -784,21 +766,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     reason: string,
     duration: Request['duration'],
     trigger?: string,
-    sshOrder?: Request['ssh'],
   ) {
     const outcome = { granted: [] as string[], denied: [] as string[], ask: [] as string[] }
     for (const item of items) {
       const target = serviceItem(item)
       const service = target && services[target.id]
       const rule = service && (target.write ? service.write : service.read)
-      if (rule === 'never' || lockedUntil(agent.id, item) !== undefined) outcome.denied.push(item)
+      const missing = jump.unavailable(agent.id, item)
+      // A name that does not exist or cannot be delivered is denied at once and logged for the owner, with no card.
+      if (missing !== undefined) {
+        audit('request_unavailable', { agent: agent.id, item, why: missing })
+        outcome.denied.push(item)
+      } else if (rule === 'never' || lockedUntil(agent.id, item) !== undefined) outcome.denied.push(item)
       else if (rule === 'open') outcome.granted.push(item)
       else outcome.ask.push(item)
     }
-    // SSH requests carry a fresh public key each time, so they never merge.
-    const existing = sshOrder
-      ? undefined
-      : [...requests.values()].find((r) => r.agentId === agent.id && r.status === 'pending' && !r.ssh)
+    const existing = [...requests.values()].find((r) => r.agentId === agent.id && r.status === 'pending')
     const request: Request = existing ?? {
       id: rid(),
       agentId: agent.id,
@@ -811,7 +794,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       status: 'pending',
       trigger,
       grantIds: [],
-      ssh: sshOrder,
       notification: config.NTFY_URL ? 'sending' : 'disabled',
       createdAt: Date.now(),
     }
@@ -935,11 +917,14 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
     while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
-  // Item kinds an agent may ask for: services and groups, secrets when the proxy is on, plus what its sandbox host enforces.
+  // Item kinds an agent may ask for: services, groups, secrets when the proxy is on, SSH and folders, plus what its
+  // sandbox host enforces.
   const allowedKinds = (agent: Agent): string[] => [
     'service',
     'group',
     ...(config.PROXY_PORT ? ['secret'] : []),
+    'ssh',
+    'folder',
     ...(hostOf(agent)?.kinds ?? []),
   ]
   // A group is offered only if every member is a kind the agent can use.
@@ -964,13 +949,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     return union(items)
   }
-  const certificateOf = (request: Request) =>
-    request.certificate && request.ssh
-      ? {
-          certificate: request.certificate,
-          ssh: { hostname: request.ssh.hostname, port: request.ssh.port, user: request.ssh.user },
-        }
-      : {}
   // A request as the agent sees it: per-item outcome, and what to do next.
   const outcome = (c: Context, request: Request) => {
     const retry = retryAfter(request.agentId, request.denied)
@@ -997,8 +975,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   }
   // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
-    const request = createRequest(agent, resolveItems(input.want, agent), input.want, input.reason, input.duration)
-    if (input.sshKey) agent.sshKey = input.sshKey
+    // A newer key replaces the older one.
+    if (input.sshKey) {
+      agent.sshKey = input.sshKey
+      syncJump()
+    }
+    const items = resolveItems(input.want, agent)
+    if (!agent.sshKey && items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '')))
+      throw invalid('ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)')
+    const request = createRequest(agent, items, input.want, input.reason, input.duration)
     await hold(c, () => request.status !== 'pending')
     return outcome(c, request)
   }
@@ -1027,7 +1012,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         throw error
       }
     })
-  if (ssh) app.get('/_speaker/ssh/ca.pub', (c) => c.text(`${ssh.caPublicKey}\n`))
   // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
   app.use('/skill.md', etag())
@@ -1164,7 +1148,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     if (!input.success) return authPage(c, input.error.issues[0].message, 400)
     await serial(async () => {
       if (hasStore) throw new HTTPException(409, { message: 'The owner password is already set' })
-      unlock(await createStore(storeFile, input.data.password, await newVault()))
+      await unlock(await createStore(storeFile, input.data.password, await newVault()))
       hasStore = true
     })
     // Their keys are in the store now: the plaintext files of earlier versions go.
@@ -1177,7 +1161,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const { password } = z.object({ password: z.string() }).parse(await c.req.parseBody())
     try {
       const opened = await openStore(storeFile, password)
-      if (!store) unlock(opened)
+      if (!store) await unlock(opened)
     } catch (error) {
       if (!(error instanceof WrongPassword)) throw error
       audit('signin_failed', { source: sourceOf(c) })
@@ -1193,7 +1177,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   })
   const grantState = (grant: Grant): GrantView['state'] => {
     const hostId = agents.get(grant.agentId)?.host
-    if (!hostId || serviceItem(grant.item)) return 'active'
+    if (!hostId || serviceItem(grant.item) || jump.overSsh(grant)) return 'active'
     if (!sockets.has(hostId)) return 'waiting'
     return applied.get(hostId)?.has(grant.id) ? 'active' : 'granted'
   }
@@ -1209,14 +1193,28 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       const agent = agents.get(grant.agentId)
       return { ...grant, label: agent?.label ?? '', agent: agent?.agent ?? '', state: grantState(grant) }
     }),
+    sessions: jump.sessions(),
+    details: Object.fromEntries(
+      [
+        ...[...requests.values()]
+          .filter((r) => r.status === 'pending')
+          .flatMap((r) => r.items.map((i) => [r.agentId, i])),
+        ...[...grants.values()].filter(live).map((g) => [g.agentId, g.item]),
+      ].flatMap(([agentId, item]) => {
+        const detail = jump.describe(agentId, item)
+        return detail ? [[`${agentId} ${item}`, detail]] : []
+      }),
+    ),
   })
-  // Newest entries first, optionally narrowed to one grant, agent or service.
+  // Newest entries first, optionally narrowed to one grant, agent, service, target or share.
   admin.get('/log', (c) => {
-    const { grant, agent, service } = c.req.query()
+    const { grant, agent, service, target, share } = c.req.query()
     const entries = logged.filter(
       (e) =>
         (!grant || e.grant === grant) &&
         (!agent || e.agent === agent) &&
+        (!target || e.target === target) &&
+        (!share || e.share === share) &&
         (!service ||
           e.service === service ||
           (Array.isArray(e.items) && e.items.some((i) => String(i).startsWith(`${service}.`)))),
@@ -1232,7 +1230,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         groups,
         undefined,
         {},
-        { entries, query: { grant, agent, service } },
+        { entries, query: { grant, agent, service, target, share } },
+        undefined,
+        jump.setup(),
       ),
     )
   })
@@ -1265,6 +1265,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         Object.fromEntries(
           Object.entries(unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
         ),
+        jump.setup(c.req.query('sshError')),
       ),
     ),
   )
@@ -1465,6 +1466,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     revokeGrants((grant) => grant.id === id)
     return redirect(c)
   })
+  // Targets, shares and open sessions; a target or share that goes takes its grants with it.
+  jump.routes(admin, fields, () =>
+    revokeGrants(
+      (grant) => /^(ssh|folder):/.test(grant.item) && jump.unavailable(grant.agentId, grant.item) !== undefined,
+    ),
+  )
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   app.route('/admin', admin)
 
@@ -1587,14 +1594,34 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ),
       grants: mine.map(({ item, expiresAt }) => ({ item, expiresAt })),
       ...(config.PROXY_PORT ? { secrets: secretsView(c, agent) } : {}),
-      groups: Object.fromEntries(offered(agent)),
+      // Complete command lines for the agent's SSH and folder grants.
+      ssh: jump.commands(agent.id, new URL(baseOf(c)).hostname.replace(/^\[|\]$/g, '')),
+      // Targets and shares are never named to agents, not even inside a group: only a count shows.
+      groups: Object.fromEntries(
+        offered(agent).map(([name, group]) => {
+          const hidden = (kind: string) => group.items.filter((item) => kindOf(item) === kind).length
+          const also = [
+            hidden('ssh') && plural(hidden('ssh'), 'SSH target', 'SSH targets'),
+            hidden('folder') && plural(hidden('folder'), 'folder', 'folders'),
+          ].filter(Boolean)
+          return [
+            name,
+            also.length
+              ? {
+                  ...group,
+                  items: group.items.filter((item) => !['ssh', 'folder'].includes(kindOf(item) ?? '')),
+                  also: also.join(', '),
+                }
+              : group,
+          ]
+        }),
+      ),
       requests: [...requests.values()]
         .filter((request) => request.agentId === agent.id)
         .map((request) => ({
           ...outcome(c, request),
           want: request.want,
           reason: request.reason,
-          ...certificateOf(request),
         })),
     })
   })
@@ -1611,35 +1638,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     }
     const result = await ask(c, agent, input)
     return c.json(result, result.status === 'pending' ? 202 : 200)
-  })
-  // The existing SSH certificate flow: the reply carries the certificate once the owner approves.
-  app.get('/_speaker/ssh/hosts', (c) => {
-    agentCaller(c)
-    if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
-    return c.json({ hosts: ssh.hosts, maxDuration: config.SSH_MAX_DURATION })
-  })
-  app.post('/_speaker/ssh', async (c) => {
-    const agent = agentCaller(c)
-    if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
-    const input = sshRequestSchema.extend({ reason: reasonSchema, duration: durationSchema }).parse(await c.req.json())
-    const host = Object.hasOwn(ssh.hosts, input.host) ? ssh.hosts[input.host] : undefined
-    if (!host) throw invalid('Unknown SSH host', Object.keys(ssh.hosts))
-    if (!host.users.includes(input.user)) throw invalid('User not allowed on this host', host.users)
-    if (durations[input.duration] > durations[config.SSH_MAX_DURATION])
-      throw invalid(`SSH access is limited to ${config.SSH_MAX_DURATION}`)
-    const { reason, duration, ...order } = input
-    const keyFingerprint = await fingerprint(order.publicKey)
-    if (!keyFingerprint) throw invalid('Public key could not be parsed')
-    const item = `ssh-cert:${principalOf(input.user, input.host)}`
-    const request = createRequest(agent, [item], [item], reason, duration, undefined, {
-      ...order,
-      hostname: host.hostname,
-      port: host.port,
-      fingerprint: keyFingerprint,
-      maxDuration: config.SSH_MAX_DURATION,
-    })
-    await hold(c, () => request.status !== 'pending')
-    return c.json({ ...outcome(c, request), ...certificateOf(request) }, 201)
   })
   // Notes and the caller's current state for one service.
   app.get('/_speaker/help/:name', (c) => {
@@ -1835,7 +1833,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       'unlock',
       `Speaker restarted: sign in at ${config.PUBLIC_URL.replace(/\/$/, '')}/admin to unlock`,
     )
-  return Object.assign(app, { proxy })
+  return Object.assign(app, { proxy, stop: () => jump.stop() })
 }
 
 if (import.meta.main) {

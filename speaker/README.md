@@ -39,7 +39,7 @@ The design is in [DESIGN.md](DESIGN.md); [USECASES.md](USECASES.md) walks the fl
   - A sandbox host registers with `POST /_speaker/hosts`; the owner approves it in `/admin`. It then creates one agent per task with `POST /_speaker/hosts/agents`, which returns the agent's token, bound to the sandbox host's address.
   - The two unauthenticated routes share a budget of 20 calls per 15 minutes and then answer `rate_limited` (429).
 - What is asked: an item is a string: `<service>.read`, `<service>.full`, `site:<host>`, `secret:<NAME>`, `folder:<share>[:rw]`, `mcp:<id>`, `ext:<id>` or `group:<name>`. A request is `{"want":[…],"reason":"…","duration":"2h"}` (durations `30m`, `1h`, `2h`, `1d`, `30d`).
-  - Direct agents may ask for service items and groups whose items are all service items. A sandboxed agent may also ask for the item kinds its sandbox host declared at registration.
+  - Any agent may ask for service items, `ssh:` and `folder:` items, and groups whose items are all of those kinds. A sandboxed agent may also ask for the item kinds its sandbox host declared at registration.
 - What is decided: the owner approves the items on the request when acting (the approve call may list a subset; the rest are denied). Each granted item becomes one grant, replacing an earlier grant of the same item. The answer is per item: `{"granted":[…],"denied":[…],"expiresAt":…}`. Only the owner picks "until revoked".
 - Requests, grants and sandbox hosts move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is `pending`, then `decided` (or `expired` after 2 hours); a grant is `active`, then `expired` or `revoked`.
 - State: services (with rules, notes and POST read paths), groups and sandbox hosts are stored in `DATA_DIR`; service keys, secrets and speaker's SSH key are in the encrypted `DATA_DIR/store.json`. Agents, grants, requests and usage counters live in memory only: after a restart agents enroll and ask again. The log goes to standard output and into an in-memory buffer that the admin Log page shows.
@@ -186,40 +186,19 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 <!-- author: ai -->
 
-## SSH certificates
+## SSH and folders
 
 _AI-drafted_
 
-Speaker can act as an SSH user certificate authority, replacing hand-made ControlMaster sockets. An agent makes a throwaway keypair and asks for `user@host` for a short time. The owner approves it in `/admin` like any request. Speaker then signs an OpenSSH user certificate with OpenSSH's own `ssh-keygen -s`, so the agent connects with plain `ssh` until the certificate expires. The private key never leaves the agent; the CA key never leaves speaker.
+Agents run commands on your hosts and use your folders through a jump server inside speaker's container: stock OpenSSH `sshd` (non-root), `ssh`, `ssh-agent` and `sftp-server`, plus a small relay (`relay.ts`) that speaker starts as each session's forced command. Set `SSH_PORT` to turn it on; without it `ssh:` and `folder:` items are answered `denied`. The jump server listens only while an SSH or over-SSH folder grant is active, with a new host key each time it starts.
 
-- Each certificate carries one principal, `<user>@<host alias>`, so a certificate for one host does not open another. It is valid from one minute before approval until the approved duration ends, and never longer than `SSH_MAX_DURATION` (default `1h`).
-- Certificates permit a PTY only. Agent and port forwarding are added only when the request asks and the owner approves it. A request may pin `sourceAddress` (comma-separated addresses or CIDR blocks).
-- Speaker cannot revoke an issued certificate early; keep durations short. Each issuance is logged as `ssh_certificate_issued` with principal, key fingerprint, options and expiry.
+- **Targets** (Setup): an alias, host, port and the account speaker uses there. Adding one pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first; the address list can be edited per target.
+- **Shares** (Setup): a name, a target, an absolute path and how it may be delivered (`VM mount`, `over SSH`, or both). Cards show the account (and any sudo warning) for `ssh:<target>`, and the share, read-only or read-write, and delivery for `folder:<share>[:rw]`.
+- **Agents** send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Unknown names, or items that cannot be delivered, are answered `denied` at once and logged. After approval `GET /_speaker/me` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode` and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp` and `sftp` for folders. The login name in them is the account speaker runs as.
+- **Commands** run on the target as its account, exactly as given, with no terminal. **Folders** are SFTP only (`sftp`, modern `scp`, `sshfs`): the relay reads each request, keeps every path (resolved on the target) inside the share, refuses symlink and hard-link creation, writes on read-only grants and unknown operations, and starts the target's own `sftp-server -d <share>` (with `-R` when read-only). `rsync`, legacy `scp -O` and commands on a folder grant are refused with a pointer to `sftp`. For an `ssh:` grant, `scp` and `sftp` paths are `<target>/<absolute path on the target>`.
+- **Ending**: when a grant ends, is revoked or speaker restarts, speaker closes the relay's socket and the session stops; the Active page lists open sessions with **End**. Every command and file operation is logged with its path, and each session with exit code and why it ended.
+- Container: the image has `openssh-server` and `openssh-client`; `compose.yaml` publishes `SSH_PORT` (default 2222). The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store and, in clear, only in memory inside `ssh-agent`; the jump server's files are under `/dev/shm`.
 
-Enable it with a CA keypair, a host list, and `SSH_CA_KEY`. Speaker refuses to start if the key or `ssh-hosts.json` is missing, unreadable, or too permissive for `ssh-keygen`.
-
-```sh
-mise run ssh-ca                       # writes speaker/data/ssh_ca and prints the public key
-# Docker: docker compose run --rm speaker ssh-keygen -q -t ed25519 -N '' -C speaker-ssh-ca -f /data/ssh_ca
-```
-
-```json
-// DATA_DIR/ssh-hosts.json: alias -> host and the login users an agent may ask for
-{ "nas": { "hostname": "nas.lan", "port": 22, "users": ["raist"] } }
-```
-
-One-time setup on each target host. The principals file names which certificate principals may log in as that user; normal `authorized_keys` logins keep working.
-
-```sh
-curl -fsS https://speaker.example.com/_speaker/ssh/ca.pub | sudo tee /etc/ssh/speaker_user_ca.pub
-sudo install -d -m 755 /etc/ssh/auth_principals
-echo 'raist@nas' | sudo tee /etc/ssh/auth_principals/raist
-printf '%s\n' 'TrustedUserCAKeys /etc/ssh/speaker_user_ca.pub' \
-  'AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u' | sudo tee /etc/ssh/sshd_config.d/50-speaker-ca.conf
-sudo sshd -t && sudo systemctl reload ssh   # the unit is sshd on some distributions
-```
-
-Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh/hosts`, `POST /_speaker/ssh` with `{host, user, publicKey, reason, duration}`, with the `Speaker-Wait` header; the reply carries the `certificate` once you approve (it also appears in `GET /_speaker/me`).
 
 <!-- author: ai -->
 
