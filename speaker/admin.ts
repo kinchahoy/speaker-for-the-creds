@@ -74,23 +74,23 @@ export function adminApp(core: Core) {
     c.header('cache-control', 'no-store')
     await next()
   })
-  admin.use('*', csrf({ origin: new URL(config.PUBLIC_URL).origin }))
+  // Form posts and JSON clients alike must send an Origin matching PUBLIC_URL. Fetch Metadata identifies browser
+  // same-origin requests even when TLS ends at a reverse proxy. Hono's csrf below stays as the backstop.
+  const publicOrigin = new URL(config.PUBLIC_URL).origin
   admin.use('*', async (c, next) => {
     const origin = c.req.header('origin')
-    // Fetch Metadata identifies browser same-origin requests even when TLS ends at a reverse proxy.
-    // Keep the explicit Origin check for JSON clients, which Hono's form CSRF middleware skips.
+    const form = /^(application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)/i.test(
+      c.req.header('content-type') ?? '',
+    )
     if (
       !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
-      origin &&
-      origin !== new URL(config.PUBLIC_URL).origin &&
+      (origin ? origin !== publicOrigin : form) &&
       c.req.header('sec-fetch-site') !== 'same-origin'
     )
-      return c.text(
-        'Cross-origin request rejected. Open the admin page directly; check PUBLIC_URL if using a proxy.',
-        403,
-      )
+      return c.text(`Cross-origin form post blocked: send an Origin header matching ${config.PUBLIC_URL}.`, 403)
     await next()
   })
+  admin.use('*', csrf({ origin: publicOrigin }))
   // Pico's stylesheet and htmx, served from the installed packages.
   const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
   const assets = {
