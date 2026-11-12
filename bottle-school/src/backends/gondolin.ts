@@ -11,48 +11,19 @@ import {
   normalizeVfsPath,
   type VirtualProvider,
 } from "@earendil-works/gondolin";
-import { randomUUID } from "node:crypto";
-import { BlockList } from "node:net";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import type { Dispatcher } from "undici";
 import {
   countModelRequest,
+  isInternalIp,
   note,
+  recordHttp,
   secretRoute,
   type Backend,
-  type CapturedBody,
   type Live,
 } from "../backend.ts";
 import type { Config } from "../config.ts";
 import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired } from "../leases.ts";
-
-const capturedHeaders = new Set([
-  "accept",
-  "content-length",
-  "content-type",
-  "date",
-  "openai-beta",
-  "openai-processing-ms",
-  "anthropic-version",
-  "anthropic-ratelimit-requests-remaining",
-  "anthropic-ratelimit-tokens-remaining",
-  "anthropic-ratelimit-input-tokens-remaining",
-  "anthropic-ratelimit-output-tokens-remaining",
-  "retry-after",
-  "server",
-  "traceparent",
-  "tracestate",
-  "user-agent",
-  "x-api-version",
-  "x-ratelimit-remaining-requests",
-  "x-ratelimit-remaining-tokens",
-  "x-ratelimit-reset-requests",
-  "x-ratelimit-reset-tokens",
-  "x-request-id",
-  "request-id",
-]);
-const safeHeaders = (headers: Headers) =>
-  Object.fromEntries([...headers].filter(([name]) => capturedHeaders.has(name)));
 
 /**
  * One mutable `/input` router. The first path segment selects a host share, so a lease adds or removes
@@ -138,12 +109,6 @@ for (const operation of Object.getOwnPropertyNames(ReadonlyProvider.prototype).f
 const shareProvider = (hostPath: string, writable: boolean): VirtualProvider =>
   writable ? new RealFSProvider(hostPath) : new ReadonlyProvider(new RealFSProvider(hostPath));
 
-const internal = new BlockList();
-for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["255.0.0.0", 8]] as const)
-  internal.addSubnet(network, prefix, "ipv4");
-internal.addAddress("::1", "ipv6");
-const isInternalIp = (ip: string) => internal.check(ip, ip.includes(":") ? "ipv6" : "ipv4");
-
 /**
  * Boots the one pinned guest image for a task. Every destination is denied until the live policy view allows it. The
  * agent's speaker token reaches the guest as a placeholder Gondolin substitutes for speaker's host only. Secrets are not
@@ -214,89 +179,17 @@ const boot = async (
     getModelOrigins().has(new URL(request.url).origin)
       ? (direction === "request" ? 8 : 32) * 1024 * 1024
       : 1024 * 1024;
-  httpHooks.onResponseComplete = async (response, request, info) => {
-    const responseBody = response ? Buffer.from(await response.arrayBuffer()) : Buffer.alloc(0);
-    const requestBody = Buffer.from(info.requestBody ?? []);
-    const saveBody = (
-      direction: string,
-      body: Buffer,
-      totalBytes: number,
-      limitBytes: number,
-      contentType: string | null,
-      incomplete = false,
-    ): CapturedBody | undefined => {
-      if (!totalBytes) return;
-      const isModel = getModelOrigins().has(new URL(request.url).origin);
-      if (
-        !isModel &&
-        !contentType?.match(
-          /^(text\/|application\/(json|[^;]+\+json|xml|javascript|x-www-form-urlencoded)|application\/.*\+xml)/i,
-        )
-      )
-        return;
-      const name = `${randomUUID()}.${direction}.bin`;
-      writeFileSync(`${paths.capture}/${name}`, body, { flag: "wx" });
-      live.httpBodyBytes += body.length;
-      return {
-        path: `blobs/${name}`,
-        ...(contentType ? { contentType } : {}),
-        capturedBytes: body.length,
-        totalBytes,
-        limitBytes,
-        truncated: body.length < totalBytes || incomplete,
-      };
-    };
-    const requestBytes = Math.max(info.requestBytes ?? 0, requestBody.length);
-    const responseBytes = Math.max(info.bytes ?? 0, responseBody.length);
-    const requestCapture = saveBody(
-      "request",
-      requestBody,
-      requestBytes,
-      info.requestLimit ?? 0,
-      request.headers.get("content-type"),
+  httpHooks.onResponseComplete = async (response, request, info) =>
+    recordHttp(
+      live,
+      paths.capture,
+      getModelOrigins().has(new URL(request.url).origin),
+      request,
+      response,
+      Buffer.from(info.requestBody ?? []),
+      response ? Buffer.from(await response.arrayBuffer()) : Buffer.alloc(0),
+      info,
     );
-    const responseCapture = saveBody(
-      "response",
-      responseBody,
-      responseBytes,
-      info.responseLimit ?? 0,
-      response?.headers.get("content-type") ?? null,
-      !info.complete,
-    );
-    const captureStatus = (total: number, body?: CapturedBody) =>
-      !total
-        ? ("empty" as const)
-        : !body
-          ? ("metadata_only" as const)
-          : body.truncated
-            ? ("truncated" as const)
-            : ("complete" as const);
-    if (live.httpResponses.length === 1_000) {
-      const removed = live.httpResponses.shift()!;
-      for (const body of [removed.requestBody, removed.responseBody])
-        if (body) {
-          rmSync(`${paths.capture}/${body.path.slice("blobs/".length)}`, { force: true });
-          live.httpBodyBytes -= body.capturedBytes;
-        }
-      live.httpResponsesOmitted += 1;
-    }
-    live.httpResponses.push({
-      at: new Date().toISOString(),
-      method: request.method,
-      destination: new URL(request.url).origin,
-      requestHeaders: safeHeaders(request.headers),
-      status: response?.status ?? 0,
-      responseHeaders: response ? safeHeaders(response.headers) : {},
-      durationMs: info.durationMs,
-      ...(info.bytes === undefined ? {} : { bytes: info.bytes }),
-      complete: info.complete,
-      ...(info.error ? { error: info.error } : {}),
-      requestCapture: captureStatus(requestBytes, requestCapture),
-      responseCapture: captureStatus(responseBytes, responseCapture),
-      ...(requestCapture ? { requestBody: requestCapture } : {}),
-      ...(responseCapture ? { responseBody: responseCapture } : {}),
-    });
-  };
 
   const krun = process.env.PI_V2_VMM === "krun";
   const vm = await VM.create({
@@ -357,7 +250,8 @@ const boot = async (
 
 export const gondolin: Backend = {
   boot,
-  attach: (sessionId, command) => ({
+  folders: true,
+  attach: (_config, sessionId, command) => ({
     file: `${import.meta.dirname}/../../node_modules/.bin/gondolin`,
     args: ["attach", sessionId, "--", ...command],
   }),

@@ -187,7 +187,7 @@ export const startBroker = (config: Config) => {
 if (import.meta.main) {
   const configPath = process.env.PI_V2_CONFIG ?? `${import.meta.dirname}/../config.json`;
   const config = loadConfig(configPath);
-  const staleSessions = await backends[config.backend].reconcile();
+  const staleSessions = await backends[config.backend].reconcile(config);
   if (staleSessions) console.log(`reconciled ${staleSessions} stale ${config.backend} session records`);
   const { tasks } = startBroker(config);
 
