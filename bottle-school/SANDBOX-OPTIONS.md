@@ -17,7 +17,9 @@ Written 2026-11-11 against bottle-school at commit 946f6f3. Research only: nothi
 - No project I found is a drop-in replacement. The closest (Matchlock, microsandbox, smolvm) are young, move fast, and none documents the one unusual thing bottle-school needs: sending requests for secret hosts through speaker's proxy without holding the secret.
 - Boot time will not improve much. Today's 0.95 s median (README, QEMU) is mostly Ubuntu user space starting, not the hypervisor. Firecracker's headline 125 ms is for a minimal guest.
 
-**Primary path.** A plain microVM with no network card. The guest's only doors are vsock sockets to a small host-side gateway owned by bottle-school: an allow-list egress proxy that chains secret hosts to speaker's proxy, a model gateway that records and counts model requests, and a status channel. Folders arrive over `sshfs` through speaker (speaker's DESIGN.md already describes this). Exec and attach use SSH over vsock. Start on **Firecracker** (Linux, KVM) and keep the contract (kernel, ext4 disks, vsock) VMM-neutral so libkrun or Apple's framework can be added for macOS later. Before committing, run a short trial of **Matchlock** to see whether it already provides the launcher and exec pieces, which would shrink the code to own.
+**Owner's answers (decided).** macOS is a requirement; a separate backend is acceptable if it is a few dozen lines. Folders over `sshfs` are acceptable. The primary path below therefore starts on **libkrun**, which runs the same guest on Linux (KVM) and macOS (Hypervisor.framework) and is already built by bottle-school today; Firecracker becomes an optional Linux-only backend behind the same VMM-neutral contract.
+
+**Primary path.** A plain microVM with no network card. The guest's only doors are vsock sockets to a small host-side gateway owned by bottle-school: an allow-list egress proxy that chains secret hosts to speaker's proxy, a model gateway that records and counts model requests, and a status channel. Folders arrive over `sshfs` through speaker (speaker's DESIGN.md already describes this). Exec and attach use SSH over vsock. Start on **libkrun** (Linux and macOS, one backend) and keep the contract (kernel, ext4 disks, vsock) VMM-neutral so Firecracker can be added on Linux in a few dozen lines if it proves faster. Before committing, run a short trial of **Matchlock** to see whether it already provides the launcher and exec pieces, which would shrink the code to own.
 
 **Fallback.** Stay on Gondolin but get to zero local patches: send the `upstreamDispatcher` and body-capture hooks upstream, drop the Krun runner and the boot-asset reshaping, and use QEMU only. Least work, keeps macOS and live shares, but keeps depending on an "early project" whose internals the patch touches.
 
@@ -188,7 +190,9 @@ Verdict: it duplicates speaker's job (owner approval, credential placeholders, p
 
 ## 5. Step 3: decision
 
-### Primary: Design B on Firecracker, with a Matchlock trial first
+### Primary: Design B on libkrun (Linux and macOS), with a Matchlock trial first
+
+The owner requires macOS, so the first backend is libkrun, which bottle-school already builds; the reasons below hold for any VMM behind the same contract, and Firecracker stays an optional Linux backend.
 
 Reasons:
 
@@ -258,10 +262,10 @@ Losses:
 8. Matchlock trial: Linux backend actually Firecracker or not, resource flags, vsock-only networking, SDK hooks, behaviour under a 24-hour `loop` task.
 9. Whether speaker's agent API can be reached over plain HTTP from the gateway and whether its token binding (bound to the sandbox host's address) works when the gateway is the caller.
 
-## 7. Things the owner should decide
+## 7. Owner's decisions
 
-- Is macOS a real requirement for bottle-school, or only for the owner's own machine? That decides whether libkrun, not Firecracker, should be the first VMM.
-- Is slower folder metadata over `sshfs` acceptable for the usual shares, or are there repositories that must be fast? If the latter, keep a VM-mount path (Cloud Hypervisor with virtiofsd, or Gondolin).
+- **macOS is a requirement.** A separate backend is fine if it stays a few dozen lines. Consequence: libkrun first (one backend for Linux and macOS); Firecracker optional on Linux. Spike check 1 runs on libkrun on both the Linux server and a Mac, and adds: libkrun with vsock only (no network device) on both platforms.
+- **Folders over `sshfs` are acceptable.** Consequence: no VM-mount path is kept; `ShareRouter` and VM-mount share reporting can be retired in the folders step of the migration.
 
 ## 8. What I could not verify
 
