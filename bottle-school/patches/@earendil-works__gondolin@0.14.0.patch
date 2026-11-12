@@ -218,3 +218,18 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..2781a94e8ed6a16be7a59ca15f9d7183
  function normalizeHookResponseForGuest(response, requestMethod) {
      const status = response.status;
      const isHead = requestMethod.toUpperCase() === "HEAD";
+diff --git a/dist/src/sandbox/controller.js b/dist/src/sandbox/controller.js
+index ef338eba792077892e221d2925acd2aa45162bd0..96702522dc18f339fbed33abb86e6b18b0d589e7 100644
+--- a/dist/src/sandbox/controller.js
++++ b/dist/src/sandbox/controller.js
+@@ -449,7 +449,9 @@ function buildQemuArgs(config) {
+         //
+         // Ensure this is enabled explicitly as older QEMU versions may default it off.
+         // Also keep ISA serial enabled so the kernel console can use ttyS0.
+-        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on");
++        args.push("-machine", "microvm,isa-serial=on,auto-kernel-cmdline=on,rtc=on");
++        // qboot (shipped with QEMU) boots the PVH vmlinux bottle-school installs; the distro SeaBIOS microvm build hangs on it.
++        args.push("-bios", "qboot.rom");
+     }
+     else {
+         args.push("-machine", machineType);
