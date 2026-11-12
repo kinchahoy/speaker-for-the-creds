@@ -258,6 +258,49 @@ Placement:
 
 On disk, in speaker's data volume: settings (services with rules and notes, secrets' allowed hosts, targets with pinned host keys, shares, groups, sandbox hosts) and the encrypted keys with their wrapped data key. In memory only: agents, grants, requests, SSH sessions, usage counters. The log goes to standard output, for Docker's log handling.
 
+## Rules in detail
+
+**Agents and tokens**
+
+- One header file per user per machine; every agent of that user on that machine shares it, and each request carries its own reason.
+- Enrollment may carry an empty `want`: the agent then reads `/me` and asks once it knows what it needs.
+- An agent may send its `sshKey` with any request; a newer key replaces the older one.
+- After **Revoke agent**, its token answers `denied` with "stop" (not `enroll`) until speaker restarts.
+- Commands and links in `/help` and `/me` use the address the caller used to reach speaker, so `localhost` on a single laptop and the LAN or tailnet name elsewhere both work.
+
+**Requests and waiting**
+
+- A request made by a service call (`Speaker-Wait` on `/<service>/<path>`) asks for exactly that service's `.read` or `.full`. The advice to ask for groups applies to `POST /_speaker/requests`.
+- Every hold needs the `Speaker-Wait` header; without it, calls answer at once. `/help` suggests 60 seconds (the maximum is 120), because many agent shells stop commands after 120 seconds.
+- A request the owner does not decide within 2 hours is `expired`; the agent's next call answers `approval_required` again.
+- `retry_after` is an ISO 8601 time.
+- A group is offered to an agent only if every member is an item kind that agent can use; direct agents never see groups containing `site:`, `secret:`, `mcp:` or `ext:`.
+- `/help` explains items and groups in general and never names a group, service, target or share.
+- `site:*.example.org` covers subdomains only, not `example.org` itself.
+
+**SSH**
+
+- On any refusal or ended session, the relay prints one line on standard error saying what happened and to check `GET /_speaker/me`.
+- In Setup, each target shows the address speaker will appear from (the `from=` value); the owner can edit it or list several.
+
+**Sandboxes**
+
+- A sandbox host authenticates with the token it received at registration; agents it creates need no card of their own.
+- At task start the sandbox host gives the VM speaker's address, the agent's token (as a placeholder), and the skill. Speaker is always reachable from the VM. The template's `want`, `label` and `duration` become the task's first request; the task starts at once and Pi works on whatever needs no new access while it waits.
+- The sandbox host tells each task, in its instructions, the names of the `mcp:` and `ext:` entries in its catalog and the secrets it can use. Groups appear in `/me`.
+- A blocked site gets a reply from the sandbox host naming the item to request (`site:<host>`).
+- A grant for a sandbox-only item counts as decided for the agent once the sandbox host reports it in force.
+- After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
+- A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/me` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
+- A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/me` gives the path.
+- After a speaker restart, the sandbox host re-creates the agents of its running tasks and files each task's template request again; the owner sees one card per task.
+
+**Deployment**
+
+- The SSH port does not go through a web reverse proxy; open it separately.
+- Approving from a phone away from home needs a route to speaker, such as the tailnet.
+- On a single machine every local client can share one source address, so address binding adds little there; that setup protects against accidents and keeps a record, not against a hostile agent running as the owner.
+
 ## Alternative to explore: a slimmer VM if every folder goes over SSH
 
 Sandbox folders are delivered as VM mounts today because the VM runtime provides a shared-filesystem device. If every folder instead reached sandboxes over SSH (`sshfs` through speaker), the VM would need no shared-filesystem device at all, which opens up slimmer and faster runtimes:
