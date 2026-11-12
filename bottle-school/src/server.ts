@@ -152,7 +152,7 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
     (context) => {
       const task = context.get("task");
       const { busy, summary } = context.req.valid("json");
-      if (task.state === "idle" || task.state === "busy") task.state = busy ? "busy" : "idle";
+      tasks.report(task, busy);
       if (summary) {
         task.lastMessage = summary;
         task.lastMessageAt = new Date().toISOString();

@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
-import { rmSync, writeFileSync } from "node:fs";
-import type { Live } from "./sandbox.ts";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFileSync, existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { note, type Live } from "./sandbox.ts";
 
 export type HttpResponseRecord = {
   at: string;
@@ -350,3 +350,111 @@ export const createModelRuns = (
     }
     return [run];
   });
+
+type Entry = { path: string; bytes?: number; sha256?: string; type: "file" | "directory" | "symlink" | "other" };
+/** Agent-created links never make the trusted archiver follow paths outside artifacts. */
+const walk = (root: string, prefix = ""): Entry[] =>
+  readdirSync(root, { withFileTypes: true }).flatMap((entry): Entry[] => {
+    const path = `${root}/${entry.name}`;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return [{ path: relative, type: "directory" }, ...walk(path, relative)];
+    if (entry.isFile())
+      return [{ path: relative, bytes: lstatSync(path).size, sha256: createHash("sha256").update(readFileSync(path)).digest("hex"), type: "file" }];
+    return [{ path: relative, type: entry.isSymbolicLink() ? "symlink" : "other" }];
+  });
+
+/** What the archive needs of a task. */
+export type Archived = {
+  id: string;
+  name: string;
+  slug: string;
+  templateId: string;
+  attended: boolean;
+  subjectId: string;
+  model: string;
+  startedAt: string;
+  deadline: string;
+  workDir: string;
+  outputDir: string;
+  live: Live;
+};
+
+/**
+ * Writes a closed task's trusted records into `<outputDir>/_control`: trace.jsonl (the master record, embedding each
+ * captured body; the blob files go once it is written), task.json, policy-events.jsonl and the artifacts manifest.
+ */
+export function writeArchive(task: Archived, modelOrigins: Set<string>, status: "archived" | "failed-archive", error?: string) {
+  const control = `${task.outputDir}/_control`;
+  const closedAt = new Date().toISOString();
+  const session = `${task.workDir}/.pi-session/task.jsonl`;
+  const transcript = `${task.workDir}/transcript.html`;
+  const hasSession = existsSync(session);
+  const nativeRecords: NativeRecord[] = hasSession
+    ? readFileSync(session, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  if (hasSession) copyFileSync(session, `${control}/pi-session.jsonl`);
+  else note(task.live, "Pi session file was unavailable during archival");
+  if (existsSync(transcript)) copyFileSync(transcript, `${control}/transcript.html`);
+  else note(task.live, "Pi transcript export was unavailable during archival");
+  const traceId = randomUUID();
+  const harnessRunId = randomUUID();
+  const sessionId = nativeRecords.find((record) => record.type === "session")?.id;
+  const toolTrace = createToolRuns(nativeRecords, { sessionId, taskId: task.id, traceId, parentRunId: harnessRunId });
+  // A streamed model reply is stored as its finished message; the per-token event stream is dropped.
+  const embed = ({ path, ...body }: CapturedBody, content: boolean) => {
+    if (!content) return body;
+    const bytes = readFileSync(`${control}/${path}`);
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      return { ...body, base64: bytes.toString("base64") };
+    }
+    return text.startsWith("data: ") && !body.truncated ? { ...body, format: "assembled_stream", message: assembleStream(text) } : { ...body, text };
+  };
+  // Model runs carry their bodies; the project run keeps only metadata for those exchanges.
+  const httpRecords = (content: (destination: string) => boolean) =>
+    task.live.httpResponses.map(({ requestBody, responseBody, ...record }) => ({
+      ...record,
+      ...(requestBody ? { requestBody: embed(requestBody, content(record.destination)) } : {}),
+      ...(responseBody ? { responseBody: embed(responseBody, content(record.destination)) } : {}),
+    }));
+  const modelRuns = createModelRuns(
+    httpRecords(() => true),
+    { modelOrigins, model: task.model, taskId: task.id, traceId },
+  );
+  const run = (id: string, name: string, extra: object, outputs: object, metadata: object) => ({
+    id,
+    name,
+    run_type: "chain",
+    trace_id: traceId,
+    ...extra,
+    start_time: task.startedAt,
+    end_time: closedAt,
+    inputs: {},
+    outputs,
+    extra: { metadata: { thread_id: task.id, broker: { schema_version: 1, ...metadata } } },
+  });
+  const projectRun = run(traceId, task.name, {}, { close_status: status }, {
+    source: "broker",
+    capture_status: "native_and_http_runs",
+    http_body_bytes: task.live.httpBodyBytes,
+    http_responses: httpRecords((destination) => !modelOrigins.has(destination)),
+    http_responses_omitted: task.live.httpResponsesOmitted,
+  });
+  const harnessRun = run(harnessRunId, "pi", { parent_run_id: traceId }, { native_record_count: nativeRecords.length }, {
+    source: "harness",
+    harness: "pi",
+    capture_status: hasSession ? "source_file_present" : "source_file_missing",
+    native_records: toolTrace.unassignedRecords,
+  });
+  const lines = (records: object[]) => records.map((record) => JSON.stringify(record)).join("\n");
+  writeFileSync(`${control}/trace.jsonl`, `${lines([projectRun, harnessRun, ...modelRuns, ...toolTrace.runs])}\n`);
+  const { id, name, slug, templateId, attended, subjectId, model, startedAt, deadline } = task;
+  const record = { id, name, slug, state: status, templateId, attended, subjectId, model, startedAt, deadline, closedAt, ...(error ? { error } : {}) };
+  writeFileSync(`${control}/task.json`, JSON.stringify(record, null, 2));
+  writeFileSync(`${control}/policy-events.jsonl`, lines(task.live.events));
+  const manifest = { closed: status === "archived", files: walk(`${task.outputDir}/artifacts`), ...(error ? { error } : {}) };
+  writeFileSync(`${control}/manifest.json`, JSON.stringify(manifest, null, 2));
+  rmSync(`${control}/blobs`, { recursive: true, force: true });
+}
