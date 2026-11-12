@@ -1892,6 +1892,9 @@ if (import.meta.main) {
     }
   })()
   const app = await createApp(config)
+  // Stop the jump server and ssh-agent with speaker: left running, they keep SSH_PORT and block the next start.
+  for (const signal of ['SIGINT', 'SIGTERM'] as const)
+    process.once(signal, () => void app.stop().finally(() => process.exit(0)))
   serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0', websocket: { server: wss } }, (info) =>
     console.log(JSON.stringify({ time: new Date().toISOString(), event: 'listening', port: info.port })),
   )
