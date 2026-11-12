@@ -8,6 +8,8 @@
     "@earendil-works/gondolin": "0.14.0",
     "@hono/node-server": "^2.1.5",
     "hono": "^4.13.16",
+    "microsandbox": "0.7.14",
+    "proxy-chain": "3.0.3",
     "undici": "6.29.1",
     "zod": "^4.6.7"
   },

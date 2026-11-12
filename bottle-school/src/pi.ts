@@ -92,7 +92,11 @@ const modelsJson = (config: Config, keys: Map<string, string>) => ({
       config.hostedProviders.map((provider) => [
         provider.id,
         {
-          baseUrl: provider.baseUrl,
+          // The microsandbox guest has no route to the provider: its model endpoint forwards /hosted/<id>/... there.
+          baseUrl:
+            config.backend === "microsandbox"
+              ? `http://${config.localModel.guestHost}/hosted/${provider.id}${new URL(provider.baseUrl).pathname}`
+              : provider.baseUrl,
           api: "openai-completions",
           // Speaker's proxy swaps this placeholder for the real key in requests to the secret's hosts.
           apiKey: keys.get(provider.credential) ?? `speaker-secret-${provider.credential}-not-granted-yet`,

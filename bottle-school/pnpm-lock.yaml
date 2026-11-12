@@ -178,6 +178,12 @@ importers:
       hono:
         specifier: ^4.13.16
         version: 4.13.16
+      microsandbox:
+        specifier: 0.7.14
+        version: 0.7.14
+      proxy-chain:
+        specifier: 3.0.3
+        version: 3.0.3
       undici:
         specifier: 6.29.1
         version: 6.29.1
@@ -220,6 +226,41 @@ packages:
     engines: {node: '>=20'}
     peerDependencies:
       hono: ^4 || ^5.0.0-0
+
+  '@microsandbox/types@0.7.14':
+    resolution: {integrity: sha512-MsSL1bthxaeIj/bIN5JIy1SvYZ6Bo3Fww6iAdhLdse5H3m3a9kUbM1JCHQWn746zeEch4hws9XSk9idsQcPDMw==}
+
+  '@superradcompany/microsandbox-darwin-arm64@0.7.14':
+    resolution: {integrity: sha512-2W14Y+FlDkSNbFzXuX1VUb7zWgHPtdqh735TfTD+QBut0lTNaKqtk607iTzAF+R9E5SLTWb6g/NE1sX229w/+g==}
+    engines: {node: '>= 22'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@superradcompany/microsandbox-linux-arm64-gnu@0.7.14':
+    resolution: {integrity: sha512-qyZtEd0Z0Gw00SccZtcZOKjahYL7tEF0LqX043kykoXt63XI2E5WqH6dUAP+LsEGRUz3F3PDc294RRTPKyJP0Q==}
+    engines: {node: '>= 22'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@superradcompany/microsandbox-linux-x64-gnu@0.7.14':
+    resolution: {integrity: sha512-Ev52Xw57zN52yln8IYFLWAHCr1ectpnXh86/e8uoVTmAEV4trnw0O69nvh5sYfNAXNfBmf7vzRLU59L+VbZthw==}
+    engines: {node: '>= 22'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@superradcompany/microsandbox-win32-arm64-msvc@0.7.14':
+    resolution: {integrity: sha512-n3KASyV+yE4Sn+FaC2mIP9s0daiNV9azPvqMiClAHEf/kuqPBMq4ghzdu2KzvvTgG9pIPgMPwo0/du7fe+Vl9g==}
+    engines: {node: '>= 22'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@superradcompany/microsandbox-win32-x64-msvc@0.7.14':
+    resolution: {integrity: sha512-j77/lPrQn6oXS3XWEn+2Qr9aJZ8PoXkAkVBf8HmLIZ30cnk3egMLoOgzskQpOoJWZN/SLRMNRizXubzQmpj5Tg==}
+    engines: {node: '>= 22'}
+    cpu: [x64]
+    os: [win32]
 
   '@types/node@26.6.6':
     resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
@@ -344,6 +385,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  agent-base@9.0.0:
+    resolution: {integrity: sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==}
+    engines: {node: '>= 20'}
+
   asn1@0.2.6:
     resolution: {integrity: sha512-ix/FxPn0MDjeyJ7i/yoHGFt/EX6LyNbxSEhPPXODPL+KB0VPk86UYfL0lMdy+KCnv+fmvIzySwaK5COwqVbWTQ==}
 
@@ -362,19 +407,59 @@ packages:
     resolution: {integrity: sha512-9IkYqtX3YHPCzoVg1Py+o9057a3i0fp7S530UWokCSaFVTc7CwXPRiOjRjBQQ18ZCNafx78YfnG+HALxtVmOGA==}
     engines: {node: '>=10.0.0'}
 
+  debug@4.4.3:
+    resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
+    engines: {node: '>=6.0'}
+    peerDependencies:
+      supports-color: '*'
+    peerDependenciesMeta:
+      supports-color:
+        optional: true
+
   hono@4.13.16:
     resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
     engines: {node: '>=16.9.0'}
 
+  ip-address@10.7.6:
+    resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
+    engines: {node: '>= 12'}
+
+  microsandbox@0.7.14:
+    resolution: {integrity: sha512-EcUq88hlPd1HSTzk7f+70p0woHH4DYD8/ifzq1IJJiY0OBbXpLWVwgr0dLWtvWL63ZakECUGaF3tGGSaL4muHg==}
+    engines: {node: '>= 22'}
+    hasBin: true
+
+  ms@2.1.3:
+    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
   nan@2.30.0:
     resolution: {integrity: sha512-P5mokDkSvCGBz6mZDD/2l+w9QoICRXdCyZ9ONGmTePr40oihJg3Kpn0YU3twKd6PJnwSlLBWNQeOT6yWEV2c4A==}
+
+  proxy-chain@3.0.3:
+    resolution: {integrity: sha512-okxE6QDZKsagndl1iUY86+1xPqfZUd8JLQn5JRa/1PpzCVwwprFK/Uc3++78UIBvBOdbeXbdBZLqd3IqpE7ypA==}
+    engines: {node: '>=20.11'}
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
 
+  smart-buffer@4.2.0:
+    resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
+    engines: {node: '>= 6.0.0', npm: '>= 3.0.0'}
+
+  socks-proxy-agent@10.1.0:
+    resolution: {integrity: sha512-WlMj/67cEJ6MDI1OcsnjuYKDNDoyPCCYZ249kuuXPiMDw9F8PXkVaQ7YWu3siTydfQ/4BEZcvGzu+aYvz7dDCQ==}
+    engines: {node: '>= 20'}
+
+  socks@2.8.10:
+    resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
+    engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
+
   ssh2@1.17.0:
     resolution: {integrity: sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ==}
     engines: {node: '>=10.16.0'}
+
+  tslib@2.9.1:
+    resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
 
   tweetnacl@0.14.5:
     resolution: {integrity: sha512-KXXFFdAbFXY4geFIwoyNK+f5Z1b7swfXABfL7HXCmoIWMKU3dmS26672A4EeQtDzLKy7SXmfBu51JolvEKwtGA==}
@@ -416,6 +501,23 @@ snapshots:
   '@hono/node-server@2.1.5(hono@4.13.16)':
     dependencies:
       hono: 4.13.16
+
+  '@microsandbox/types@0.7.14': {}
+
+  '@superradcompany/microsandbox-darwin-arm64@0.7.14':
+    optional: true
+
+  '@superradcompany/microsandbox-linux-arm64-gnu@0.7.14':
+    optional: true
+
+  '@superradcompany/microsandbox-linux-x64-gnu@0.7.14':
+    optional: true
+
+  '@superradcompany/microsandbox-win32-arm64-msvc@0.7.14':
+    optional: true
+
+  '@superradcompany/microsandbox-win32-x64-msvc@0.7.14':
+    optional: true
 
   '@types/node@26.6.6':
     dependencies:
@@ -481,6 +583,8 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
+  agent-base@9.0.0: {}
+
   asn1@0.2.6:
     dependencies:
       safer-buffer: 2.1.2
@@ -502,12 +606,53 @@ snapshots:
       nan: 2.30.0
     optional: true
 
+  debug@4.4.3:
+    dependencies:
+      ms: 2.1.3
+
   hono@4.13.16: {}
+
+  ip-address@10.7.6: {}
+
+  microsandbox@0.7.14:
+    dependencies:
+      '@microsandbox/types': 0.7.14
+    optionalDependencies:
+      '@superradcompany/microsandbox-darwin-arm64': 0.7.14
+      '@superradcompany/microsandbox-linux-arm64-gnu': 0.7.14
+      '@superradcompany/microsandbox-linux-x64-gnu': 0.7.14
+      '@superradcompany/microsandbox-win32-arm64-msvc': 0.7.14
+      '@superradcompany/microsandbox-win32-x64-msvc': 0.7.14
+
+  ms@2.1.3: {}
 
   nan@2.30.0:
     optional: true
 
+  proxy-chain@3.0.3:
+    dependencies:
+      socks: 2.8.10
+      socks-proxy-agent: 10.1.0
+      tslib: 2.9.1
+    transitivePeerDependencies:
+      - supports-color
+
   safer-buffer@2.1.2: {}
+
+  smart-buffer@4.2.0: {}
+
+  socks-proxy-agent@10.1.0:
+    dependencies:
+      agent-base: 9.0.0
+      debug: 4.4.3
+      socks: 2.8.10
+    transitivePeerDependencies:
+      - supports-color
+
+  socks@2.8.10:
+    dependencies:
+      ip-address: 10.7.6
+      smart-buffer: 4.2.0
 
   ssh2@1.17.0:
     dependencies:
@@ -516,6 +661,8 @@ snapshots:
     optionalDependencies:
       cpu-features: 0.0.10
       nan: 2.30.0
+
+  tslib@2.9.1: {}
 
   tweetnacl@0.14.5: {}
 
