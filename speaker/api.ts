@@ -275,7 +275,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     await saveHosts()
     audit('host_registered', { host: host.id, name: host.name })
     void notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
-    return c.json({ id: host.id, status: host.status }, 201)
+    // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
+    return c.json({ id: host.id, status: host.status, proxyPort: config.PROXY_PORT, sshPort: config.SSH_PORT }, 201)
   })
   app.all('/_demo-upstream/*', async (c) => {
     if (c.req.header('authorization') !== `Bearer ${demoSecret}`)
