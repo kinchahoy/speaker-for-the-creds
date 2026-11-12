@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { attach } from "./sandbox.ts";
+import { registerHost } from "./speaker.ts";
 import { controlOrigin, loadConfig, type Config } from "./config.ts";
 
 /** The owner's terminal client: `mise run bottle-cli register | run | ls | attach | stop`. */
@@ -31,8 +30,8 @@ const COMMANDS = {
     positional: 0,
     help: `usage: ${SELF} register [--name NAME]
 
-Registers this host as a speaker sandbox host and writes its token. Approve the sandbox host in speaker /admin,
-then start the service.`,
+Registers this host as a speaker sandbox host, writes its token and learns speaker's proxy and SSH ports. Approve
+the sandbox host in speaker /admin, then start the service.`,
   },
   run: {
     positional: 0,
@@ -182,15 +181,9 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
   };
 
   if (command === "register") {
-    const token = randomBytes(32).toString("hex");
-    writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
     const name = values.name ?? "bottle-school";
-    await api("POST", `${config.speaker.url}/_speaker/hosts`, {
-      name,
-      kinds: ["secret", "site", "folder", "mcp", "ext"],
-      tokenHash: createHash("sha256").update(token).digest("hex"),
-    });
-    console.log(`Registered sandbox host "${name}". Approve it in speaker /admin, then start bottle-school.`);
+    const id = await registerHost(config, configPath, name);
+    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle-school.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     if (values.attended && values.unattended) throw new UsageError("pass at most one of --attended and --unattended");
