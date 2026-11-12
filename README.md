@@ -27,7 +27,7 @@ mise run check
 mise run test
 ```
 
-For speaker, copy `speaker/.env.example` to `speaker/.env`, set a strong admin password and the browser-facing `PUBLIC_URL`, then start the service:
+For speaker, copy `speaker/.env.example` to `speaker/.env`, set the browser-facing `PUBLIC_URL`, then start the service and set the owner password on your first visit to `/admin`:
 {.ai}
 
 ```sh

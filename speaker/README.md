@@ -16,13 +16,13 @@ the owner approves each request from a phone page. Sandbox hosts such as bottle-
 
 ```sh
 mise trust && mise install
-cp .env.example .env   # set ADMIN_PASSWORD
+cp .env.example .env
 chmod 600 .env
 mise run install
 mise run speaker
 ```
 
-Open `http://localhost:3000/admin` and sign in with `ADMIN_USER` / `ADMIN_PASSWORD`.
+Open `http://localhost:3000/admin`. The first visit asks you to set the owner password; after every restart you sign in with it, which unlocks the stored keys (see Keys and sign-in).
 {.ai}
 
 <!-- author: ai -->
@@ -42,7 +42,7 @@ The design is in [DESIGN.md](DESIGN.md); [USECASES.md](USECASES.md) walks the fl
   - Direct agents may ask for service items and groups whose items are all service items. A sandboxed agent may also ask for the item kinds its sandbox host declared at registration.
 - What is decided: the owner approves the items on the request when acting (the approve call may list a subset; the rest are denied). Each granted item becomes one grant, replacing an earlier grant of the same item. The answer is per item: `{"granted":[…],"denied":[…],"expiresAt":…}`. Only the owner picks "until revoked".
 - Requests, grants and sandbox hosts move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is `pending`, then `decided` (or `expired` after 2 hours); a grant is `active`, then `expired` or `revoked`.
-- State: services (with rules, notes and POST read paths), groups and sandbox hosts are stored in `DATA_DIR`, with the existing key files in `DATA_DIR/secrets`. Agents, grants, requests and usage counters live in memory only: after a restart agents enroll and ask again. The log goes to standard output and into an in-memory buffer that the admin Log page shows.
+- State: services (with rules, notes and POST read paths), groups and sandbox hosts are stored in `DATA_DIR`; service keys, secrets and speaker's SSH key are in the encrypted `DATA_DIR/store.json`. Agents, grants, requests and usage counters live in memory only: after a restart agents enroll and ask again. The log goes to standard output and into an in-memory buffer that the admin Log page shows.
 - Speaker enforces service items in its proxy. Sandbox hosts apply the other kinds from the `/_speaker/hosts/ws` snapshots, and `/admin` shows each such grant as granted or active.
 - Waiting: the `Speaker-Wait: <seconds>` header (at most 120) on a service call, `POST /_speaker/requests` or `POST /_speaker/agents` holds the call until the owner decides. Without it every call answers at once. Any reverse proxy must allow requests that long.
 - Errors are JSON with `error` (`enroll`, `approval_required`, `denied`, `invalid`, `rate_limited`), and where useful `next` and `tell_user`. `GET /_speaker/me` shows an agent where it stands.
@@ -82,15 +82,31 @@ A call without access answers `approval_required` with the request's id; with `S
 
 | Service auth type | Stored by | Receives the real credential |
 | --- | --- | --- |
-| Bearer | Speaker in `/data/secrets` | The configured upstream API, in `Authorization: Bearer …` |
-| Basic | Speaker in `/data/secrets` as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
-| Custom header | Speaker in `/data/secrets`; the header name is service configuration | The configured upstream API, in that header |
+| Bearer | Speaker, in the encrypted store | The configured upstream API, in `Authorization: Bearer …` |
+| Basic | Speaker, in the encrypted store, as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
+| Custom header | Speaker, in the encrypted store; the header name is service configuration | The configured upstream API, in that header |
 
-Speaker keeps these values on its host-side data volume and injects them only when forwarding a granted
+Speaker keeps these values encrypted on its host-side data volume (decrypted in memory after you sign in) and injects them only when forwarding a granted
 service request. It strips the agent's authorization and cookie headers first. Agents receive a Speaker
 token, not the upstream credential. The upstream API still receives the real credential
-and the request data. `ADMIN_PASSWORD` is only for Speaker's owner UI; `NTFY_TOKEN`, if configured, is sent
+and the request data. `NTFY_TOKEN`, if configured, is sent
 to the configured notification service.
+{.ai}
+
+<!-- author: ai -->
+
+## Keys and sign-in
+
+<sub>AI-written</sub>
+
+All service keys, secrets and speaker's SSH key live in one file, `DATA_DIR/store.json`: a random data key, wrapped by a key derived (scrypt) from the owner password, and every secret sealed with it (AES-256-GCM). Unwrapping the data key is the password check; no password hash is stored, and clear values exist only in memory after sign-in.
+{.ai}
+
+- The first visit to `/admin` sets the owner password. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited; plain HTTP from another machine works but the sign-in page warns that the password crosses the network unencrypted.
+- Speaker starts locked when a store exists: agent and sandbox-host calls answer `503` `locked` with a `tell_user` line, `/admin` shows only sign-in, and one push (if ntfy is set) says to sign in. Signing in unlocks.
+- Setup lists Secrets: name, value (write-only), allowed hosts, and the environment variable the agent sees. They are stored and held in memory only; the proxy that inserts them is a later phase.
+- Change the password in Setup; it re-wraps the data key. Forgot it: delete `store.json` and speaker resets, and you re-enter every key.
+- Upgrading: plaintext key files from earlier versions (`DATA_DIR/secrets/`) are imported into the store when you set the password, then deleted.
 {.ai}
 
 <!-- author: ai -->
@@ -136,7 +152,7 @@ Run from `speaker/`. The included Compose file builds the image, binds port 3000
 ```sh
 cp .env.example .env
 chmod 600 .env
-# Edit .env: set ADMIN_PASSWORD and PUBLIC_URL before starting.
+# Edit .env: set PUBLIC_URL before starting, then open /admin to set the owner password.
 docker compose config --quiet
 docker compose up --build -d
 docker compose logs --tail=100 speaker
@@ -147,9 +163,9 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 - Configure your own proxy to forward to speaker and serve HTTPS. The sample binds loopback; a containerized proxy needs a shared Docker network or another explicitly configured route. The public example does not configure a proxy or external login service.
 - Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching PUBLIC_URL for form submissions. Cross-origin browser form and JSON writes remain blocked; do not disable CSRF checks or add wildcard origins.
-- Run one replica. Services, groups, sandbox hosts and key files persist in `/data`. Agents, grants and requests live in memory: a restart ends all of them and agents enroll and ask again.
-- Keep the data volume outside the agents' filesystem access. Secret files are owner-only, not encrypted. Back up that volume.
-- The admin page uses speaker's own Basic authentication. Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their API tokens.
+- Run one replica. Services, groups, sandbox hosts and the encrypted store persist in `/data`. Agents, grants and requests live in memory: a restart ends all of them and agents enroll and ask again.
+- Keep the data volume outside the agents' filesystem access. Keys are encrypted at rest, so a copied volume or backup reveals none; keep a copy of it, because without the owner password the keys cannot be read.
+- The admin page uses speaker's own sign-in (a session cookie). Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their API tokens.
 
 <!-- author: ai -->
 
