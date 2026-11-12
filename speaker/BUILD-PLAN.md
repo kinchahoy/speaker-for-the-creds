@@ -32,3 +32,34 @@ Phases 4 and 5a run in parallel; 5b follows 5a; 6 comes last.
 
 - One WebSocket per agent instead of most routes (DESIGN.md).
 - A slimmer VM runtime if every folder goes over SSH (DESIGN.md).
+
+## Decisions taken during the build
+
+Calls made where the design left room; each can be revisited.
+
+**Phase 1 (core model)**
+- A request's `granted` and `denied` list concrete items: groups are expanded when the request is made.
+- A request for an item whose rule is `never` is denied at once, without a card; open reads are answered without a grant.
+- The same token enrolled again from a different address is refused (`invalid`); the agent runs setup again.
+- Agents with no grant and no call for 7 days are dropped; decided and expired requests are kept for 24 hours.
+- Removing a sandbox host ends its agents.
+- `/_speaker/help/<service>` needs an agent token; `/_speaker/help` is public.
+
+**Phase 2 (keys and sign-in)**
+- Locked means "a store exists and nobody has signed in since start"; before the first password is set, agent calls are not locked.
+- The whole vault (service keys, secrets with their hosts and variable names, speaker's SSH key and certificate authority) is one encrypted blob; only service settings stay in plain JSON.
+- Sessions last 12 hours; sign-in allows 5 failed attempts per address per 15 minutes; there is no sign-out button.
+- Secrets and the password form live at the bottom of the Services page.
+
+**Phase 3 (cards and admin)**
+- Cards read group names and descriptions from the current groups at render time; a group deleted since the request shows its items as loose items.
+- Approve with none of the shown items still pending answers 409.
+- Grants and agents are one Active section; time left is shown per grant.
+
+**Phase 5a (secrets proxy)**
+- The proxy listens on `PROXY_PORT`; clients authenticate with their agent token as the proxy password; the user name is ignored.
+- Allowed hosts match by name; any port in `CONNECT` is accepted.
+- Only the `Authorization` header is rewritten; other headers and bodies pass as sent.
+- Certificates: ECDSA P-256 with `@peculiar/x509`; the authority's key is in the vault and its certificate is served at `/_speaker/proxy/ca.pem`.
+- `secret:` is offered to direct agents only when `PROXY_PORT` is set.
+- A `secret:` request for a name not in Setup still makes a card, marked "not set up".
