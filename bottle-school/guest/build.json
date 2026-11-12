@@ -25,6 +25,7 @@
     "PI_OFFLINE": "1",
     "PI_TELEMETRY": "0",
     "PI_SKIP_VERSION_CHECK": "1",
+    "UV_CACHE_DIR": "/opt/uv/cache",
     "UV_PYTHON_INSTALL_DIR": "/opt/uv/python",
     "UV_PYTHON_PREFERENCE": "only-managed",
     "UV_PYTHON_DOWNLOADS": "never",
