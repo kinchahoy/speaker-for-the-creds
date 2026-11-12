@@ -45,7 +45,7 @@ dir = "bottle-school"
 run = "./start.sh"
 
 [tasks.guest-build]
-description = "Build a guest image: mise run guest-build pi-v5-guest"
+description = "Build the guest image for both backends: mise run guest-build pi-v5-guest"
 dir = "bottle-school"
 run = "guest/build.sh"
 

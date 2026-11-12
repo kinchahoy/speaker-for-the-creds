@@ -56,9 +56,8 @@ export type Catalog = z.infer<typeof Catalog>;
 const SESSION = "/work/.pi-session/task.jsonl";
 /** Commands the guest image provides. */
 export const CLI_TOOLS = `
-  rg fd ast-grep ctags jq yq sqlite3 git gh curl wget tree file shellcheck shfmt
-  uv ruff gcc make node tsc go pnpm oxlint oxfmt cmake just pandoc typst
-  pdftotext qpdf tesseract magick dot ffmpeg hyperfine delta bat watchexec ty
+  rg ctags jq sqlite3 git gh curl wget tree file shellcheck uv gcc make node pnpm cmake pandoc
+  pdftotext qpdf tesseract magick dot ffmpeg hyperfine tmux
 `.trim().split(/\s+/);
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 
