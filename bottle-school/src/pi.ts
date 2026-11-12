@@ -334,6 +334,8 @@ const checked = async (operation: string, promise: Promise<CommandResult>) => {
 
 /** Pi runs under dtach in the guest. dtach starts pi-launch; `dtach -p` pushes keystrokes to it. */
 const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
+/** True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone would wait forever. */
+const alive = "ps -C pi -o stat= | grep -qv '^Z'";
 export const pi = {
   start: (guest: Guest) => checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch")),
   abort: (guest: Guest) => guest.exec(keys("\\033")),
@@ -341,10 +343,10 @@ export const pi = {
   restart: (guest: Guest) =>
     checked(
       "Pi restart",
-      guest.exec("pkill -x pi; while pgrep -x pi >/dev/null; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch"),
+      guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`),
     ),
   quit: (guest: Guest) => guest.exec(keys("/quit\\r")),
-  running: async (guest: Guest) => (await guest.exec("pgrep -x pi")).exitCode === 0,
+  running: async (guest: Guest) => (await guest.exec(alive)).exitCode === 0,
   kill: (guest: Guest) => guest.exec("pkill -x pi || true"),
   /** The transcript improves archive browsing, but an exporter failure never discards the session or artifacts. */
   export: (guest: Guest) => guest.exec(`pi --export ${SESSION} /work/transcript.html || true`),
