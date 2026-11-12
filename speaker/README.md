@@ -4,8 +4,8 @@
 
 <sub>AI-written</sub>
 
-speaker-for-the-creds is the approval and credential service. Agents enroll, request capabilities, and
-the owner approves each request from a phone page. Enforcers such as bottle-school apply its sandbox leases.
+speaker-for-the-creds is the approval and credential service. Agents enroll, ask for items, and
+the owner approves each request from a phone page. Sandbox hosts such as bottle-school apply its sandbox grants.
 {.ai}
 
 <!-- author: ai -->
@@ -26,37 +26,34 @@ Open `http://localhost:3000/admin` and sign in with `ADMIN_USER` / `ADMIN_PASSWO
 {.ai}
 
 <!-- author: ai -->
+<!-- author: ai -->
 
 ## How it works
 
 <sub>AI-written</sub>
 
-- Identities:
-  - An enforcer registers with `POST /_speaker/enforcers`. The owner approves it in `/admin`.
-  - A big agent enrolls a session with `POST /_speaker/sessions`. The owner approves it with a duration.
-  - An enforcer creates one subject per task with `POST /_speaker/subjects` and receives its token.
-  - The two unauthenticated enrollment routes share a budget of 20 calls per 15 minutes and then return `429`.
-- Requests, sessions, and enforcers move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is
-  `pending`, then `approved`, `denied`, or `expired`; an approval later ends as `expired`, `revoked`, or `superseded`.
-- Capabilities have a kind: `credential`, `secret`, `site`, `folder`, `mcp`, or `extension` (a sandbox's
-  catalog Pi extension, such as `pi-web-access`).
-  - A session may request only `credential`.
-  - A subject may request `credential` plus its enforcer's kinds. Other kinds return `400 unsupported_kind`.
-  - An enforcer declares its kinds when it registers, and they do not change afterwards. To add a kind, register
-    the enforcer again, approve the new registration, and revoke the old one in `/admin`.
-- Requests name one capability or one bundle. The owner approves with a duration and speaker creates one lease
-  per member. Only the owner may choose `permanent`.
-- Speaker keeps permanent leases on disk and temporary leases in memory.
-- Speaker enforces `credential` leases in its proxy. Enforcers apply the other kinds from the
-  `/_speaker/enforcers/ws` snapshots, and `/admin` shows each lease as granted or active.
+The design is in [DESIGN.md](DESIGN.md); [USECASES.md](USECASES.md) walks the flows.
+
+- Who asks:
+  - An agent enrolls itself with `POST /_speaker/agents` (its token's hash, a label, its identity and, optionally, a first request). It needs no approval of its own; it can do nothing but read open services until the owner grants something.
+  - A sandbox host registers with `POST /_speaker/hosts`; the owner approves it in `/admin`. It then creates one agent per task with `POST /_speaker/hosts/agents`, which returns the agent's token, bound to the sandbox host's address.
+  - The two unauthenticated routes share a budget of 20 calls per 15 minutes and then answer `rate_limited` (429).
+- What is asked: an item is a string: `<service>.read`, `<service>.full`, `site:<host>`, `secret:<NAME>`, `folder:<share>[:rw]`, `mcp:<id>`, `ext:<id>` or `group:<name>`. A request is `{"want":[…],"reason":"…","duration":"2h"}` (durations `30m`, `1h`, `2h`, `1d`, `30d`).
+  - Direct agents may ask for service items and groups whose items are all service items. A sandboxed agent may also ask for the item kinds its sandbox host declared at registration.
+- What is decided: the owner approves the items on the request when acting (the approve call may list a subset; the rest are denied). Each granted item becomes one grant, replacing an earlier grant of the same item. The answer is per item: `{"granted":[…],"denied":[…],"expiresAt":…}`. Only the owner picks "until revoked".
+- Requests, grants and sandbox hosts move through explicit state tables in [lifecycle.ts](lifecycle.ts). A request is `pending`, then `decided` (or `expired` after 2 hours); a grant is `active`, then `expired` or `revoked`.
+- State: services (with rules, notes and POST read paths), groups and sandbox hosts are stored in `DATA_DIR`, with the existing key files in `DATA_DIR/secrets`. Agents, grants, requests and usage counters live in memory only: after a restart agents enroll and ask again. The log goes to standard output and into an in-memory buffer that the admin Log page shows.
+- Speaker enforces service items in its proxy. Sandbox hosts apply the other kinds from the `/_speaker/hosts/ws` snapshots, and `/admin` shows each such grant as granted or active.
+- Waiting: the `Speaker-Wait: <seconds>` header (at most 120) on a service call, `POST /_speaker/requests` or `POST /_speaker/agents` holds the call until the owner decides. Without it every call answers at once. Any reverse proxy must allow requests that long.
+- Errors are JSON with `error` (`enroll`, `approval_required`, `denied`, `invalid`, `rate_limited`), and where useful `next` and `tell_user`. `GET /_speaker/me` shows an agent where it stands.
 
 <!-- author: ai -->
 
-## Providers
+## Services
 
 <sub>AI-written</sub>
 
-The provider prefix replaces the configured API base:
+The service name replaces the configured API base:
 {.ai}
 
 ```text
@@ -64,54 +61,50 @@ The provider prefix replaces the configured API base:
 /karakeep/bookmarks     → https://bookmarks.example.com/api/v1/bookmarks
 ```
 
-- Edit a provider in `/admin` and enter its key. Saved keys are never shown again. For Basic auth, enter
+- Edit a service in `/admin` and enter its key. Saved keys are never shown again. For Basic auth, enter
   `username:password`.
-- Each provider has a read and a write policy: `approval`, `always`, or `deny`. `deny` overrides leases.
-- `always` lets an approved session use the provider without a request for at most 90 days after the session's approval; after that the rule acts as `approval`. The session approval card lists the providers it can read this way.
-- `GET /_speaker/providers/<name>/guide` serves every provider a short generated guide for the caller (how to call it, current read/write access and expiry in UTC), followed by the provider's own markdown `guide` when it has one.
+- Each service has a read rule and a write rule. Read is `ask` (default), `open` or `never`; write is `ask` or `never`. `open` lets any enrolled agent read without a grant or a card; open services are never listed to agents, and anyone who can reach speaker can enroll, so use it only for harmless state. `never` is answered `denied` at once.
+- `<service>.read` covers GET, HEAD and OPTIONS, plus POST to the read paths listed on the service (for example a search endpoint). `<service>.full` covers everything, and includes read.
+- `GET /_speaker/help/<service>` gives an agent the service's notes and its own current state.
 - Auth type `path` stores a secret URL segment, such as a webhook id, and inserts it after the base URL (`/hook/x` → `<baseUrl>/<secret>/x`). Logs record only the agent-facing path.
-- Tick "MCP server" for a streamable-HTTP MCP provider. Speaker classifies each POST: protocol housekeeping, tool listing and tools annotated `readOnlyHint: true` are reads; any other tool call is a write, and approval cards mark destructive tools. "Refresh tools" lists the tools and shows how they classify.
-- `PUBLIC_PROVIDERS=1` lets `GET /_speaker/providers` answer without a token (names, auth type and policy only). It is off by default.
-- The `demo` provider allows reads and requires a lease for writes. `/demo/check` answers
+- Tick "MCP server" for a streamable-HTTP MCP service. Speaker classifies each POST: protocol housekeeping, tool listing and tools annotated `readOnlyHint: true` are reads; any other tool call needs full, and approval cards mark destructive tools. "Refresh tools" lists the tools and shows how they classify.
+- The `demo` service allows open reads and requires a grant for writes. `/demo/check` answers
   `"credential":"accepted"` without exposing the fake key.
 
-A blocked call returns `403 approval_required` with a `requestId`. Speaker creates the request for the calling
-session or subject. The caller may add a reason with `POST /_speaker/requests` for the same capability.
+A call without access answers `approval_required` with the request's id; with `Speaker-Wait` it waits for the owner's decision and is forwarded once granted. The call files a request for exactly that service's `.read` or `.full`.
 {.ai}
 
 <!-- author: ai -->
 
-## Who receives provider credentials
+## Who receives service credentials
 
 <sub>AI-written</sub>
 
-| Provider auth type | Stored by | Receives the real credential |
+| Service auth type | Stored by | Receives the real credential |
 | --- | --- | --- |
 | Bearer | Speaker in `/data/secrets` | The configured upstream API, in `Authorization: Bearer …` |
 | Basic | Speaker in `/data/secrets` as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
-| Custom header | Speaker in `/data/secrets`; the header name is provider configuration | The configured upstream API, in that header |
+| Custom header | Speaker in `/data/secrets`; the header name is service configuration | The configured upstream API, in that header |
 
-Speaker keeps these values on its host-side data volume and injects them only when forwarding an approved
-provider request. It strips the agent's authorization and cookie headers first. Agents receive a Speaker
-session or subject token, not the upstream credential. The upstream API still receives the real credential
+Speaker keeps these values on its host-side data volume and injects them only when forwarding a granted
+service request. It strips the agent's authorization and cookie headers first. Agents receive a Speaker
+token, not the upstream credential. The upstream API still receives the real credential
 and the request data. `ADMIN_PASSWORD` is only for Speaker's owner UI; `NTFY_TOKEN`, if configured, is sent
 to the configured notification service.
 {.ai}
 
 <!-- author: ai -->
 
-## Bundles
+## Groups
 
 <sub>AI-written</sub>
 
-Define bundles in `DATA_DIR/bundles.json` as `{ "<name>": { "description": "<one line>", "members": [{ "kind", "ref" }] } }`.
-The description is optional, and the older bare form `{ "<name>": [{ "kind", "ref" }] }` still loads. Copy
-[bundles.example.json](bundles.example.json) to start. Restart speaker after editing the file by hand; the `/admin`
-Bundles page edits it live and writes the described form.
-A request names the bundle and the owner approves all members at once. A caller may request a bundle only if it may request every member kind. `GET /_speaker/bundles` lists those bundles for the caller as `{ "<name>": { "description", "members" } }`.
+Define groups in `DATA_DIR/groups.json` as `{ "<name>": { "description": "<one line>", "items": ["<item>", …] } }`. The description is optional. Copy
+[groups.example.json](groups.example.json) to start. Restart speaker after editing the file by hand; the `/admin`
+Groups page edits it live. A group may hold any items except other groups.
+A request names the group and the owner approves it with the group's items. An agent is offered (in `GET /_speaker/me`) and may request a group only if it may request every item in it, so direct agents never see groups with `site:`, `secret:`, `mcp:` or `ext:` items.
 {.ai}
 
-<!-- author: ai -->
 
 ## Phone notifications
 
@@ -124,7 +117,7 @@ NTFY_TOPIC=speaker-approvals
 NTFY_TOKEN=your-publish-token
 ```
 
-- Speaker sends one ntfy push for each new enforcer, session, and request. Pushes carry labels and a link to
+- Speaker sends one ntfy push for each new sandbox host and request. Pushes carry labels and a link to
   `/admin`, with no keys and no approval authority.
 - Set `NTFY_URL` and `NTFY_TOPIC` together. The token is optional.
 - `/admin` refreshes every 5 seconds while visible. Pending requests expire after 15 minutes.
@@ -154,7 +147,7 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 - Configure your own proxy to forward to speaker and serve HTTPS. The sample binds loopback; a containerized proxy needs a shared Docker network or another explicitly configured route. The public example does not configure a proxy or external login service.
 - Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching PUBLIC_URL for form submissions. Cross-origin browser form and JSON writes remain blocked; do not disable CSRF checks or add wildcard origins.
-- Run one replica. Configuration, secrets, identities, and permanent leases persist in `/data`. A restart ends temporary leases and pending requests.
+- Run one replica. Services, groups, sandbox hosts and key files persist in `/data`. Agents, grants and requests live in memory: a restart ends all of them and agents enroll and ask again.
 - Keep the data volume outside the agents' filesystem access. Secret files are owner-only, not encrypted. Back up that volume.
 - The admin page uses speaker's own Basic authentication. Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their API tokens.
 
@@ -193,7 +186,7 @@ printf '%s\n' 'TrustedUserCAKeys /etc/ssh/speaker_user_ca.pub' \
 sudo sshd -t && sudo systemctl reload ssh   # the unit is sshd on some distributions
 ```
 
-Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh/hosts`, `POST /_speaker/ssh` with `{host, user, publicKey, reason, duration}`, poll `GET /_speaker/requests/<id>`, then save `certificate` next to the key.
+Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh/hosts`, `POST /_speaker/ssh` with `{host, user, publicKey, reason, duration}`, with the `Speaker-Wait` header; the reply carries the `certificate` once you approve (it also appears in `GET /_speaker/me`).
 
 <!-- author: ai -->
 
@@ -203,18 +196,17 @@ Agents follow the SSH section of [the skill](skill/SKILL.md): `GET /_speaker/ssh
 
 Give agents the public setup guide at `https://your-speaker-host/skill.md`; it is served without authentication
 so a new agent can bootstrap. It is short: inline sh and PowerShell setup (a token kept in a curl header file,
-nothing to install), the call form, and pointers to `/_speaker/help/<topic>` for the rest. `/`, `/llms.txt` and
-`/.well-known/speaker.json` say the same without a token; providers and policies stay behind auth. Keep `/admin`
-protected.
+nothing to install), the call form, and `/_speaker/help` (one page, served without a token) for the rest. `/` says the same in three lines; services, rules and groups
+stay behind auth. Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
 {.ai}
 
-- A call sent with `Speaker-Wait: 60` (and `Speaker-Reason`) waits for your decision and is forwarded once approved.
-- Every agent 401 and 403 carries a `next` step and a `tell_user` line with the approval link.
-- A session works only from the address it enrolled from: the socket address. Behind a reverse proxy, set
+- A call sent with `Speaker-Wait: 60` (and `Speaker-Reason`) waits for your decision and is forwarded once granted.
+- Every agent error carries a `next` step, and where an approval is needed a `tell_user` line with the approval link.
+- An agent works only from the address it enrolled from: the socket address. Behind a reverse proxy, set
   `TRUSTED_PROXY` to the proxy's IP; speaker then takes the last `X-Forwarded-For` entry from it and ignores that
   header from every other sender.
-- Only you extend access: Extend on a lease or session adds the span you originally granted.
-- A request denied three times (same session, same access) within 15 minutes is answered as denied without asking
+- Only you extend access: Extend on a grant adds the span you originally granted.
+- A request denied three times (same agent, same item) within 15 minutes is answered as denied without asking
   you again until 15 minutes after the third denial.
 {.ai}
 
@@ -235,7 +227,7 @@ mise run test
 
 <sub>AI-written</sub>
 
-Speaker keeps each request on the configured upstream origin and inside its base path. It strips caller credentials, cookies, proxy identity, and hop-by-hop headers before injecting the provider credential. Speaker streams responses and returns upstream redirects without following them. The proxy checks read/write approval on each call; it does not authorize individual paths or request bodies.
+Speaker keeps each request on the configured upstream origin and inside its base path. It strips caller credentials, cookies, proxy identity, and hop-by-hop headers before injecting the service credential. Speaker streams responses and returns upstream redirects without following them. The proxy checks read or full access on each call; it does not authorize individual paths or request bodies.
 {.ai}
 
 An agent with direct upstream credentials or a local vault mount can bypass speaker. The owner must remove those routes when speaker must control all access. Revocation blocks subsequent proxy calls; it cannot undo completed operations or guarantee cancellation of a forwarded request.
