@@ -39,7 +39,7 @@ ports. Then approve the sandbox host in speaker /admin and start the service.`,
                      [--attended | --unattended]
 
 Starts a task. --template defaults to offline, which asks speaker for nothing at launch. With --prompt, the
-task runs once and archives when Pi writes /output/DONE. --hours sets the deadline in hours.
+task runs once and archives when Pi writes /output/DONE. --hours sets a wall-clock deadline, in hours from launch.
 
 An attended task expects you at its terminal, where Pi may ask you questions. An unattended task is told
 nobody is watching, so it records assumptions instead of asking. Without --prompt a task is attended; with

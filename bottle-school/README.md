@@ -41,7 +41,7 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-cli register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Local inference is baseline access, independent of speaker leases.
-- `shareRoots`: the host folders a grant may expose. Begin with no sensitive shares and one task.
+- `shareRoots`: unused. Folders now always arrive over SSH. bottle-school only validates it at config load, and keeps it so older configs still load.
 - `PI_V2_CONFIG` selects the service configuration, and `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
 
 <!-- author: ai -->
@@ -108,7 +108,7 @@ The image holds:
 - Python through uv only. Its managed CPython is `python` and `python3`, and the default environment is in `/opt/uv/venv`. A ready uv cache in `/opt/uv/cache` is writable per VM, so `uv venv`, `uv pip install`, and `uv run --with` work offline and instantly for the default packages.
 - Playwright with Chromium
 
-You can use any OCI image instead, however you build it. It must hold Node, Pi, git, curl, `socat`, `sshfs`, `openssh-client`, and `ca-certificates`. Import it into microsandbox's cache under the `guestImage` name, because bottle-school never pulls. Loading takes one command, so another builder can replace the Dockerfile without touching bottle-school:
+You can use any OCI image instead, however you build it. It must hold Node, Pi, git, curl, `socat`, `sshfs`, `dtach`, `openssh-client`, and `ca-certificates`. Import it into microsandbox's cache under the `guestImage` name, because bottle-school never pulls. Loading takes one command, so another builder can replace the Dockerfile without touching bottle-school:
 {.ai}
 
 ```sh
@@ -145,9 +145,9 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
 - **Model endpoint.** A small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
 - **Speaker.** The speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
 - **Terminal.** `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
-- **Folders** go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Speaker delivers a `folder:` grant this way because bottle-school reports every share as not mountable.
+- **Folders** go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle-school reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
   - Each task gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle-school adds it to the task's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
-  - While a folder grant is in force, bottle-school (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/me`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle-school unmounts the share.
+  - While a folder grant is active, bottle-school (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/me`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle-school unmounts the share.
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
   - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
   - A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
@@ -165,7 +165,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
 **Templates versus groups.** A template is the runtime profile bottle-school owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items you approve together. To change what tasks start with, edit a template's `want` or the group in speaker. To change how big or how long a task is, edit the template's limits.
 {.ai}
 
-The task starts at once; it does not wait for the first request. When an `mcp` or `extension` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
+A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp` or `extension` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline. The optional `maxModelRequests` caps the model request count.
@@ -176,7 +176,7 @@ The task starts at once; it does not wait for the first request. When an `mcp` o
   - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), and an optional system-prompt note. An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
-- Each snapshot from speaker replaces the live grants. A grant counts as in force once bottle-school reports it. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle-school skips unsupported refs. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
+- Each snapshot from speaker replaces the live grants. A grant takes effect once bottle-school reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle-school skips unsupported refs. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
 - On every connection, bottle-school tells speaker which shares it holds (`shareRoots`, plus `archive`) and whether the VM can mount each one. The answer is always "no", because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
 
 <!-- author: ai -->
@@ -193,7 +193,7 @@ bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` vari
 
 ### Hosted model providers
 
-A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle-school asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`, so a hosted model's first turn can fail before you approve. A task launched with `--prompt` starts Pi once you approve that card.
+A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle-school asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, Catalogs, and Leases).
 {.ai}
 
 <!-- author: ai -->

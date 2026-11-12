@@ -1,6 +1,6 @@
 ---
 name: access-and-creds
-version: 5
+version: 6
 description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH hosts, folders, websites, and secrets such as GitHub tokens. Use when a task needs access, a credential, API key, token, SSH or `gh` you lack, or a call returns 401 or 403."
 ---
 

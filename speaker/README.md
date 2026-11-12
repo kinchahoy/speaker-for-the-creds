@@ -173,7 +173,7 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 - Bring your own proxy: it forwards to speaker and serves HTTPS. Raise its timeout above 120 s, because speaker holds requests for up to 120 s. The sample binds loopback, so a containerized proxy needs a shared Docker network or another explicit route. The public example configures no proxy or external login service.
 - Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching `PUBLIC_URL` for form submissions. Speaker blocks cross-origin browser form and JSON writes. Do not disable CSRF checks or add wildcard origins.
 - Run one replica. `/data` persists services, groups, sandbox hosts, and the encrypted store. Agents, grants, and requests live in memory. A restart ends them, and agents enroll and ask again.
-- Keep the data volume outside the agents' filesystem access. Keys are encrypted at rest, so a copied volume or backup reveals none. Keep a backup: without the owner password, nobody can read the keys.
+- Keep the data volume outside the agents' filesystem access. Keys are encrypted at rest, so a copied volume or backup reveals none. Keep the owner password safe: without it, nobody can read the keys, and you re-enter every key.
 - The admin page uses speaker's own sign-in (a session cookie). Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their tokens.
 
 <!-- author: ai -->
