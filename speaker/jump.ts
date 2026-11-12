@@ -349,6 +349,12 @@ export async function createJump(env: Env) {
       share && unavailable(grant.agentId, grant.item) === undefined && deliveryOf(grant.agentId, share) === 'ssh',
     )
   }
+  // A folder the agent's sandbox mounts needs no SSH key from the agent.
+  const mounted = (agentId: string, item: string) => {
+    const folder = shareOf(item)
+    const share = folder && settings.shares[folder.name]
+    return Boolean(share && deliveryOf(agentId, share) === 'vm')
+  }
   const sshGrants = () => env.grants().filter(overSsh)
   // The card's view of an item: what it reaches, and a warning when it is broader than it looks.
   function describe(agentId: string, item: string) {
@@ -699,6 +705,7 @@ export async function createJump(env: Env) {
     sync,
     unavailable,
     overSsh,
+    mounted,
     describe,
     setup,
     commands,

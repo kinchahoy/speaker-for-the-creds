@@ -320,3 +320,32 @@ test('without SSH_PORT, SSH and folders are off and answered denied', async (t) 
   assert.deepEqual(request.denied, ['ssh:box'])
   await app.stop()
 })
+
+test('a folder the sandbox mounts needs no sshKey from the agent', async (t) => {
+  const f = await fixture(t)
+  await f.ownerForm('/ssh/shares/save', [
+    ['name', 'mounted'],
+    ['target', 'box'],
+    ['path', join(f.world, 'pics')],
+    ['delivery', 'vm'],
+  ])
+  const post = (path: string, token: string, body: object) =>
+    f.agent(path, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  const created = await post('/_speaker/hosts', '', {
+    name: 'sandbox',
+    kinds: ['folder'],
+    tokenHash: sha('host-token'),
+  })
+  const { id } = (await created.json()) as { id: string }
+  assert.equal((await f.ownerForm(`/hosts/${id}/approve`, [])).status, 303)
+  const made = await post('/_speaker/hosts/agents', 'host-token', { label: 'pi', agent: 'Pi' })
+  const { token } = (await made.json()) as { token: string }
+  const ask = (want: string[]) => post('/_speaker/requests', token, { want, reason: 'test', duration: '1h' })
+  assert.equal((await ask(['folder:mounted'])).status, 202) // a card is waiting
+  // The same agent still needs a key for anything delivered over SSH.
+  assert.equal((await ask(['folder:pics'])).status, 400)
+})

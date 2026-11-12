@@ -998,7 +998,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       syncJump()
     }
     const items = resolveItems(input.want, agent)
-    if (!agent.sshKey && items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '')))
+    // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
+    if (
+      !agent.sshKey &&
+      items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
+    )
       throw invalid('ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)')
     const request = createRequest(agent, items, input.want, input.reason, input.duration)
     // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
