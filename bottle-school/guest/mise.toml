@@ -1,4 +1,4 @@
-# Layer 4 of guest/microsandbox.Dockerfile: latest releases of every other single-binary tool (Node is layer 2).
+# Layer 4 of guest/Dockerfile: latest releases of every other tool (Node is layer 2).
 [tools]
 pnpm = "latest"
 uv = "latest"

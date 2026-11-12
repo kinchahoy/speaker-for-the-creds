@@ -10,7 +10,7 @@
     "krunfwVersion": "v5.2.1"
   },
   "oci": {
-    "image": "pi-guest-base:v5",
+    "image": "pi-guest-shared",
     "pullPolicy": "never"
   },
   "rootfs": {
@@ -20,7 +20,8 @@
     "rootfsInit": "rootfs-init.sh"
   },
   "env": {
-    "PATH": "/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH": "/opt/uv/venv/bin:/usr/local/bin:/opt/mise/shims:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "MISE_DATA_DIR": "/opt/mise",
     "PI_OFFLINE": "1",
     "PI_TELEMETRY": "0",
     "PI_SKIP_VERSION_CHECK": "1",
@@ -28,7 +29,6 @@
     "UV_PYTHON_PREFERENCE": "only-managed",
     "UV_PYTHON_DOWNLOADS": "never",
     "VIRTUAL_ENV": "/opt/uv/venv",
-    "GOTOOLCHAIN": "local",
     "PLAYWRIGHT_BROWSERS_PATH": "/opt/pw-browsers"
   }
 }
