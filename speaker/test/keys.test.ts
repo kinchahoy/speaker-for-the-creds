@@ -62,7 +62,7 @@ test('the first visit sets the owner password, a restart asks for it again, and 
   const secure = await first.form('/admin/signin', { password: ownerPassword }, { 'x-forwarded-proto': 'https' })
   assert.match(secure.headers.getSetCookie()[0], /Secure/i)
   const cookie = sessionCookie(created)
-  assert.match(await (await first.call('/admin', { headers: { cookie } })).text(), /Approvals/)
+  assert.match(await (await first.call('/admin', { headers: { cookie } })).text(), /Inbox/)
   // The password is set once; HTTP Basic is gone.
   assert.equal((await first.form('/admin/setup', { password: ownerPassword, confirm: ownerPassword })).status, 409)
   const basic = { authorization: `Basic ${Buffer.from(`admin:${ownerPassword}`).toString('base64')}` }
@@ -74,13 +74,10 @@ test('the first visit sets the owner password, a restart asks for it again, and 
   const restarted = await start(dir)
   const page = await (await restarted.call('/admin', { headers: { cookie } })).text()
   assert.match(page, /Sign in/)
-  assert.doesNotMatch(page, /Approvals/)
+  assert.doesNotMatch(page, /Inbox/)
   const signedIn = await restarted.signIn()
   assert.equal(signedIn.status, 303)
-  assert.match(
-    await (await restarted.call('/admin', { headers: { cookie: sessionCookie(signedIn) } })).text(),
-    /Approvals/,
-  )
+  assert.match(await (await restarted.call('/admin', { headers: { cookie: sessionCookie(signedIn) } })).text(), /Inbox/)
 })
 
 test('a wrong password is refused and sign-in is rate limited', async (t) => {
@@ -249,7 +246,16 @@ test('plaintext key files are imported into the store when the owner sets the pa
   const cookie = { cookie: sessionCookie(await restarted.signIn()) }
   const enrolled = await restarted.enroll('tok', { want: ['notes.read'], reason: 'read notes' })
   const { request } = (await enrolled.json()) as { request: { id: string } }
-  assert.equal((await restarted.form(`/admin/requests/${request.id}/approve`, { duration: '30m' }, cookie)).status, 303)
+  assert.equal(
+    (
+      await restarted.form(
+        `/admin/requests/${request.id}/approve`,
+        { duration: '30m', items: 'notes.read', shown: 'notes.read' },
+        cookie,
+      )
+    ).status,
+    303,
+  )
   assert.equal((await restarted.call('/notes/x', { headers: { authorization: 'Bearer tok' } })).status, 200)
   assert.deepEqual(seen, ['Bearer legacy-plaintext-key'])
 })

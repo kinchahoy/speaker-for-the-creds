@@ -190,10 +190,11 @@ const ownerSecretSchema = z.object({
   // The environment variable the agent sees (holding a placeholder, never the value).
   env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _'),
 })
+// What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 const decisionSchema = z.object({
   duration: adminDurationSchema,
-  permanent: z.literal('on').optional(),
-  items: listSchema.optional(),
+  items: listSchema.default([]),
+  shown: listSchema,
 })
 
 export type Service = z.infer<typeof serviceSchema>
@@ -666,16 +667,19 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       expiresAt: new Date(Date.now() + durations[duration]).toISOString(),
     })
   }
-  // The owner's decision: grants exactly the listed items that are on the request now (default all) and denies the rest.
-  function decide(id: string, approved: string[] | undefined, duration: Duration) {
+  // The owner's decision on what the card showed: grants the ticked items and denies the other shown ones. An item
+  // added to the request after the card was rendered stays pending, and so does the request.
+  function decide(id: string, approved: string[], shown: string[], duration: Duration) {
     return serial(async () => {
       const request = requests.get(id)
       if (!request) throw new HTTPException(404, { message: 'Request not found' })
       transition('request', requestTable, request.status, 'decide')
       if (!agents.has(request.agentId)) throw new HTTPException(409, { message: 'Agent was removed' })
-      const take = new Set(approved ?? request.items)
-      const yes = request.items.filter((item) => take.has(item))
-      const no = request.items.filter((item) => !take.has(item))
+      const take = new Set(approved)
+      const seen = new Set(shown)
+      const yes = request.items.filter((item) => seen.has(item) && take.has(item))
+      const no = request.items.filter((item) => seen.has(item) && !take.has(item))
+      if (!yes.length && !no.length) throw new HTTPException(409, { message: 'None of the shown items are pending' })
       if (request.ssh && yes.length) await issueCertificate(request, request.ssh, duration)
       const expiresAt = expiry(duration)
       if (!request.ssh) for (const item of yes) addGrant(request, item, expiresAt, duration)
@@ -687,14 +691,15 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           ])
       request.granted.push(...yes)
       request.denied.push(...no)
-      request.items = []
-      request.decidedAt = Date.now()
+      request.items = request.items.filter((item) => !seen.has(item))
       if (yes.length) request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
-      moveRequest(request, 'decide')
+      if (!request.items.length) {
+        request.decidedAt = Date.now()
+        moveRequest(request, 'decide')
+      }
       push()
     })
   }
-  const denyRequest = (id: string) => decide(id, [], '2h')
   async function notify(
     title: string,
     anchor: string,
@@ -1169,7 +1174,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         groups,
         undefined,
         {},
-        { entries, filter: grant ? `grant ${grant}` : agent ? `agent ${agent}` : service ? `service ${service}` : '' },
+        { entries, query: { grant, agent, service } },
       ),
     )
   })
@@ -1205,7 +1210,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       ),
     ),
   )
-  admin.get('/live', (c) => c.json(livePanels(view())))
+  admin.get('/live', (c) => c.json(livePanels(view(), groups)))
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
   const redirect = (c: Context) => c.redirect('/admin', 303)
   admin.post('/services/save', async (c) => {
@@ -1385,28 +1390,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     audit('grant_extended', { grant: id, agent: grant.agentId, expiresAt: grant.expiresAt })
     return redirect(c)
   })
-  // Browser forms and JSON clients share exactly the same approval/revocation implementation.
-  for (const api of [false, true]) {
-    const prefix = api ? '/api' : ''
-    const body = (c: Context) => (api ? c.req.json() : fields(c))
-    admin.post(`${prefix}/requests/:id/approve`, async (c) => {
-      const { duration, permanent, items } = decisionSchema.parse(await body(c))
-      await decide(c.req.param('id'), items, permanent ? 'permanent' : duration)
-      return api ? c.json({ ok: true }) : redirect(c)
-    })
-    admin.post(`${prefix}/requests/:id/deny`, async (c) => {
-      await denyRequest(c.req.param('id'))
-      return api ? c.json({ ok: true }) : redirect(c)
-    })
-    admin.post(api ? '/api/grants/:id/revoke' : '/grants/revoke', async (c) => {
-      const id = api ? c.req.param('id') : z.object({ id: idSchema }).parse(await fields(c)).id
-      if (!grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
-      revokeGrants((grant) => grant.id === id)
-      return api ? c.json({ ok: true }) : redirect(c)
-    })
-  }
-  admin.get('/api/requests', (c) => c.json(view().requests))
-  admin.get('/api/grants', (c) => c.json(view().grants))
+  admin.post('/requests/:id/approve', async (c) => {
+    const { duration, items, shown } = decisionSchema.parse(await fields(c))
+    await decide(c.req.param('id'), items, shown, duration)
+    return redirect(c)
+  })
+  admin.post('/requests/:id/deny', async (c) => {
+    const { shown } = decisionSchema.pick({ shown: true }).parse(await fields(c))
+    await decide(c.req.param('id'), [], shown, '2h')
+    return redirect(c)
+  })
+  admin.post('/grants/revoke', async (c) => {
+    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    if (!grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
+    revokeGrants((grant) => grant.id === id)
+    return redirect(c)
+  })
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   app.route('/admin', admin)
 
@@ -1495,7 +1494,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       },
       services: Object.fromEntries(
         Object.entries(services)
-          .filter(([id, service]) => secrets.get(id) !== undefined && service.read !== 'open')
+          .filter(
+            ([id, service]) =>
+              secrets.get(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
+          )
           .map(([id, service]) => [
             id,
             { read: state(id, false), full: state(id, true), ...(service.mcp ? { mcp: true } : {}) },

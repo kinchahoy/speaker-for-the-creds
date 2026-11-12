@@ -97,11 +97,20 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
       requests: { id: string; status: string; granted: string[] }[]
       grants: unknown[]
     }
+  // The card posts the ticked items and every item it showed.
   const decide = (requestId: string, decision: 'approve' | 'deny') =>
-    f.json(`/admin/api/requests/${requestId}/${decision}`, { duration: '1h' }, owner)
+    f.call(`/admin/requests/${requestId}/${decision}`, {
+      method: 'POST',
+      headers: owner,
+      body: new URLSearchParams([
+        ['duration', '1h'],
+        ['items', 'demo.full'],
+        ['shown', 'demo.full'],
+      ]),
+    })
 
   const first = await ask()
-  assert.equal((await decide(first, 'approve')).status, 200)
+  assert.equal((await decide(first, 'approve')).status, 303)
   assert.deepEqual(
     (await me()).requests.map((r) => [r.status, r.granted]),
     [['decided', ['demo.full']]],
@@ -113,8 +122,10 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
   await decide(second, 'approve')
   assert.equal((await me()).grants.length, 1)
 
-  const grants = (await (await f.call('/admin/api/grants', { headers: owner })).json()) as { id: string }[]
-  await f.json(`/admin/api/grants/${grants[0].id}/revoke`, {}, owner)
+  const live = (await (await f.call('/admin/live', { headers: owner })).json()) as { grants: string }
+  const grantId = /<li id="grant-(\w+)"/.exec(live.grants)?.[1] ?? ''
+  assert.ok(grantId)
+  await f.call('/admin/grants/revoke', { method: 'POST', headers: owner, body: new URLSearchParams({ id: grantId }) })
   assert.equal((await me()).grants.length, 0)
 
   const revoke = { method: 'POST', headers: owner }
