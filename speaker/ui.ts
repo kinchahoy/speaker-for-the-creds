@@ -1,6 +1,6 @@
 import { html, raw } from 'hono/html'
+import type { Group, LogEntry, Service, View } from './core.ts'
 import type { SshSetup } from './jump.ts'
-import type { Group, LogEntry, Service, View } from './server.ts'
 import type { OwnerSecret } from './store.ts'
 
 const kindNames = ['service', 'secret', 'site', 'ssh', 'folder', 'mcp', 'ext'] as const
