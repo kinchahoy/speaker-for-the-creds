@@ -35,7 +35,10 @@ mise install
 mise run init
 ```
 
-`init` installs both packages, then asks the questions needed to set up speaker and then bottle-school. It offers to start each and to run a smoke-test task. The owner password is asked once: after speaker starts, `init` signs in with it, and bottle-school's step reuses it if speaker is locked. Every question has a flag, and `--yes` takes the defaults, so it also runs unattended. Each package README lists the flags.
+`init` installs both packages, then asks the questions needed to set up speaker and then bottle-school. It offers to start each and to run a smoke-test task. The owner password is asked once: after speaker starts, `init` signs in with it, and bottle-school's step reuses it to unlock speaker and approve the new sandbox host. Each question says what it is for and what Enter keeps.
+{.ai}
+
+`init` needs a real terminal. For scripts, pass `--yes` and flags instead. `mise run init -- --help` lists them (the `--` stops mise from taking `--help` itself), and so do `mise run init speaker -- --help` and `mise run init bottle-school -- --help`. Each package README shows an example.
 {.ai}
 
 To use two machines, run `mise run init speaker` on the server and `mise run init bottle-school` on the sandbox machine. To set up only one, name it the same way.
@@ -51,8 +54,8 @@ Then:
    - an SSH target: first put the line Setup shows into that account's `authorized_keys`
    - a share on that target (`VM mount`, `over SSH`, or both)
 3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
-4. To launch a sandboxed task, run `mise run bottle-cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle`.
-5. To stop, run `mise run bottle-cli stop <id>` for each task. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
+4. To launch a sandboxed task, run `mise run bottle-cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template asks for nothing, so no card appears for it. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle`.
+5. To stop, run `mise run bottle-cli stop <id>` for each task. `run` prints the archive folder, and `ls` lists the last finished tasks with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}
 
 If speaker's address changes later, run `mise run init bottle-school --force`.

@@ -7,7 +7,7 @@ import { createServer } from 'node:net'
 import { homedir, networkInterfaces } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import type { parseArgs } from 'node:util'
+import { type parseArgs, styleText } from 'node:util'
 import * as p from '@clack/prompts'
 import { createCore, readConfig } from './core.ts'
 
@@ -29,6 +29,8 @@ export const speakerFlags = {
 export type SpeakerFlags = ReturnType<typeof parseArgs<{ options: typeof speakerFlags }>>['values']
 
 const here = import.meta.dirname
+// Successes get their own check mark, so they cannot be mistaken for a question's diamond.
+const ok = (message: string) => p.log.message(message, { symbol: styleText('green', '✓') })
 export const fail = (what: string, fix: string): never => {
   throw new Error(`${what}. Fix: ${fix}`)
 }
@@ -69,13 +71,18 @@ async function pickPort(
   given: string | undefined,
   yes: boolean,
   label: string,
+  purpose: string,
   flag: string,
   fallback: number,
   taken: number[],
 ) {
   for (let value = given; ; value = undefined) {
     const raw = await ask(value, yes, String(fallback), () =>
-      p.text({ message: `${label} port`, placeholder: String(fallback), defaultValue: String(fallback) }),
+      p.text({
+        message: `${label} port: ${purpose} (Enter keeps ${fallback})`,
+        placeholder: String(fallback),
+        defaultValue: String(fallback),
+      }),
     )
     const port = Number(raw)
     const problem =
@@ -165,7 +172,7 @@ export async function initSpeaker(flags: SpeakerFlags) {
     (
       await ask(flags['data-dir'], yes, defaultDir, () =>
         p.text({
-          message: 'Where should speaker keep its data (keys, settings)?',
+          message: `Where should speaker keep its data (keys, settings)? (Enter keeps ${defaultDir})`,
           placeholder: defaultDir,
           defaultValue: defaultDir,
         }),
@@ -178,14 +185,30 @@ export async function initSpeaker(flags: SpeakerFlags) {
       'choose another data directory, or delete store.json there to start over (this loses every stored key)',
     )
 
-  const port = await pickPort(flags.port, yes, 'Web', 'port', 3000, [])
-  const proxyPort = await pickPort(flags['proxy-port'], yes, 'Secrets proxy', 'proxy-port', 3128, [port])
-  const sshPort = await pickPort(flags['ssh-port'], yes, 'SSH jump server', 'ssh-port', 2222, [port, proxyPort])
+  const port = await pickPort(flags.port, yes, 'Web', 'the admin page and agents use it', 'port', 3000, [])
+  const proxyPort = await pickPort(
+    flags['proxy-port'],
+    yes,
+    'Secrets proxy',
+    'agents send HTTPS here to use secrets',
+    'proxy-port',
+    3128,
+    [port],
+  )
+  const sshPort = await pickPort(
+    flags['ssh-port'],
+    yes,
+    'SSH jump server',
+    'SSH and folders go through it',
+    'ssh-port',
+    2222,
+    [port, proxyPort],
+  )
 
   const detected = lanAddress()
   const address = await ask(flags.address, yes, detected, () =>
     p.text({
-      message: 'Address agents and VMs use to reach this machine',
+      message: `Address agents and VMs use to reach this machine${detected ? ` (Enter keeps ${detected})` : ''}`,
       placeholder: detected,
       defaultValue: detected,
       validate: (v) => (v || detected ? undefined : 'Enter an address.'),
@@ -248,7 +271,7 @@ export async function initSpeaker(flags: SpeakerFlags) {
     { mode: 0o600 },
   )
   await chmod(envFile, 0o600)
-  p.log.success(`Wrote ${envFile} and the encrypted store in ${dataDir}.`)
+  ok(`Wrote ${envFile} and the encrypted store in ${dataDir}.`)
 
   const command =
     envFile === join(here, '.env') ? 'mise run speaker' : `cd ${here} && node --env-file=${envFile} server.ts`
@@ -259,9 +282,9 @@ export async function initSpeaker(flags: SpeakerFlags) {
       : yes || answered(await p.confirm({ message: 'Start speaker now (in the background)?', initialValue: true }))
   if (start) {
     const pid = await startSpeaker(envFile, dataDir, port)
-    p.log.success(`Speaker is running (pid ${pid}). Log: ${join(dataDir, 'speaker.log')}. Stop it with: kill ${pid}`)
+    ok(`Speaker is running (pid ${pid}). Log: ${join(dataDir, 'speaker.log')}. Stop it with: kill ${pid}`)
     await unlock(port, publicUrl, password)
-    p.log.success(`Speaker is unlocked. After every restart, sign in at ${publicUrl}/admin with the owner password.`)
+    ok(`Speaker is unlocked. After every restart, sign in at ${publicUrl}/admin with the owner password.`)
   } else {
     p.log.info(`Start speaker with: ${command}`)
     p.log.info(`Then sign in at ${publicUrl}/admin with the owner password. Speaker stays locked until you do.`)

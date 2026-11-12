@@ -23,7 +23,7 @@ From the repository root, run `mise trust && mise install` once, then:
 mise run init bottle-school
 ```
 
-The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. It asks for the guest image tag (default `bottle-school-guest`). If speaker is locked when it registers, it asks for the owner password to unlock it; press Enter to sign in at speaker's `/admin` yourself. Every question has a flag, so it also runs unattended:
+The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. It asks for the guest image tag (default `bottle-school-guest`). If speaker is locked when it registers, it asks for the owner password to unlock it. With the password (typed, piped in, or passed on from `init speaker`), `init` also approves this sandbox host itself. If you press Enter instead, it prints the `/admin` link and waits for you to approve the host there. The model server question has no default: give the host:port of your OpenAI-compatible server. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init bottle-school -- --help` lists them.
 {.ai}
 
 ```sh
@@ -64,7 +64,7 @@ From another terminal, launch and inspect a task:
 ```sh
 mise run bottle-cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
 mise run bottle-cli run --template research --attended   # you stay at the terminal; Pi may ask you questions
-mise run bottle-cli ls
+mise run bottle-cli ls               # live tasks, then the last few finished ones with their archive folders
 mise run bottle-cli attach <id>      # id, unique id prefix, or name
 mise run bottle-cli stop <id>
 mise run bottle-cli help run         # per-command usage (mise intercepts --help after the task name)

@@ -21,7 +21,7 @@ mise trust && mise install
 mise run init speaker
 ```
 
-Run this on the machine that hosts speaker. It asks its questions, creates the encrypted store, writes `speaker/.env`, and offers to start speaker. If it starts speaker, it signs in once with the password you typed, so speaker is unlocked (the password stays in memory only). Speaker keeps its data in `~/.local/share/speaker` by default. The web, secrets-proxy, and SSH ports default to 3000, 3128, and 2222, and each must be free. Agents and VMs need an address for this machine. They cannot use `127.0.0.1`, because inside a VM that is the VM itself, so `init` offers the machine's LAN address. Every question has a flag, so it also runs unattended:
+Run this on the machine that hosts speaker. It asks its questions, creates the encrypted store, writes `speaker/.env`, and offers to start speaker. If it starts speaker, it signs in once with the password you typed, so speaker is unlocked (the password stays in memory only). Speaker keeps its data in `~/.local/share/speaker` by default. The web, secrets-proxy, and SSH ports default to 3000, 3128, and 2222, and each must be free. Agents and VMs need an address for this machine. They cannot use `127.0.0.1`, because inside a VM that is the VM itself, so `init` offers the machine's LAN address. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init speaker -- --help` lists them:
 {.ai}
 
 ```sh
@@ -84,7 +84,8 @@ Speaker keeps these values encrypted on its data volume, decrypts them in memory
 All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/store.json`. A random data key seals each secret (AES-256-GCM). A key derived from the owner password (scrypt) wraps the data key. Unwrapping the data key is the password check, so speaker stores no password hash. Clear values exist only in memory after sign-in.
 {.ai}
 
-- `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
+- `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
+- In scripts, form posts to `/admin` (sign-in, approvals) need an `Origin` header matching the URL, such as `Origin: http://192.168.1.10:3000`. A successful sign-in answers `303` with the session cookie to send on later posts. Do not retry a failed sign-in blindly: after 5 failures speaker refuses for 15 minutes.
 - When a store exists, speaker starts locked. Agent and sandbox-host calls answer `503` `locked` with a `tell_user` line. `/admin` shows only sign-in. If ntfy is set, one push asks you to sign in. Signing in unlocks.
 - Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.

@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { homedir, hostname, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { parseArgs } from "node:util";
+import { type parseArgs, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
 import { configPathFromEnv, loadConfig, validateConfig } from "./src/config.ts";
@@ -31,6 +31,8 @@ export const bottleFlags = {
 export type BottleFlags = ReturnType<typeof parseArgs<{ options: typeof bottleFlags }>>["values"];
 
 const here = import.meta.dirname;
+// Successes get their own check mark, so they cannot be mistaken for a question's diamond.
+const ok = (message: string) => p.log.message(message, { symbol: styleText("green", "✓") });
 const MIN_FREE_GIB = 20;
 const WAIT_MS = 10 * 60_000;
 // microsandbox puts a unix socket about 50 bytes below its home (<stateRoot>/microsandbox); the platform caps socket paths.
@@ -76,9 +78,9 @@ const checkHost = (needDocker: boolean) => {
 /** The first existing directory at or above the path: where a new home would be created. */
 const existingAncestor = (path: string): string => (existsSync(path) ? path : existingAncestor(dirname(path)));
 
-async function pickPort(given: string | undefined, yes: boolean, label: string, flag: string, fallback: number, taken: number[]) {
+async function pickPort(given: string | undefined, yes: boolean, label: string, purpose: string, flag: string, fallback: number, taken: number[]) {
   for (let value = given; ; value = undefined) {
-    const raw = await ask(value, yes, String(fallback), () => p.text({ message: `${label} port`, placeholder: String(fallback), defaultValue: String(fallback) }));
+    const raw = await ask(value, yes, String(fallback), () => p.text({ message: `${label} port: ${purpose} (Enter keeps ${fallback})`, placeholder: String(fallback), defaultValue: String(fallback) }));
     const port = Number(raw);
     const problem = !Number.isInteger(port) || port < 1 || port > 65535 ? "is not a port number" : taken.includes(port) || !(await isFree(port, "127.0.0.1")) ? "is already in use" : undefined;
     if (!problem) return port;
@@ -142,28 +144,39 @@ const readStdin = async () => {
   return text.replace(/\r?\n$/, "");
 };
 
-/** Signs in to speaker's /admin; true when it accepted the password, false when it was wrong. */
+/** Signs in to speaker's /admin; returns the session cookie, or undefined when the password was wrong. One try, no retries: sign-in allows 5 failures per 15 minutes. */
 async function signIn(speakerUrl: string, password: string) {
   const response = await fetch(`${speakerUrl}/admin/signin`, { method: "POST", headers: { origin: new URL(speakerUrl).origin }, body: new URLSearchParams({ password }), redirect: "manual", signal: AbortSignal.timeout(10_000) });
-  if (response.status === 303) return true;
-  if (response.status === 401) return false;
-  return fail(`speaker answered the sign-in with HTTP ${response.status}`, `sign in at ${speakerUrl}/admin yourself`);
+  if (response.status === 303) return response.headers.getSetCookie().map((cookie) => cookie.split(";")[0]).join("; ");
+  if (response.status === 401) return undefined;
+  return fail(`speaker answered the sign-in with HTTP ${response.status}${response.status === 429 ? " (too many failed attempts)" : ""}`, `wait a few minutes, or sign in at ${speakerUrl}/admin yourself`);
 }
 
-/** Unlocks a locked speaker with the owner password (given, piped in, or typed); Enter at the prompt leaves it to the owner. */
-async function unlockSpeaker(speakerUrl: string, flags: BottleFlags, known: string | undefined) {
-  const given = known ?? (flags["password-stdin"] ? await readStdin() : undefined);
-  if (given !== undefined) {
-    if (!(await signIn(speakerUrl, given))) fail("speaker rejected the owner password", `pass the right one, or sign in at ${speakerUrl}/admin yourself`);
-  } else if (flags.yes) return;
+/** Approves the pending sandbox host through the form route the admin page uses, signed in as the owner. */
+async function approveHost(speakerUrl: string, password: string, id: string) {
+  const cookie = (await signIn(speakerUrl, password)) ?? fail("speaker rejected the owner password", `approve the sandbox host at ${speakerUrl}/admin#host-${id}`);
+  const response = await fetch(`${speakerUrl}/admin/hosts/${id}/approve`, { method: "POST", headers: { origin: new URL(speakerUrl).origin, cookie }, redirect: "manual", signal: AbortSignal.timeout(10_000) });
+  if (response.status !== 303) fail(`speaker answered the approval with HTTP ${response.status}`, `approve the sandbox host at ${speakerUrl}/admin#host-${id}`);
+}
+
+/** Unlocks a locked speaker with the owner password (given or typed); returns the password, or undefined when the owner chose to sign in themselves. */
+async function unlockSpeaker(speakerUrl: string, given: string | undefined, yes: boolean) {
+  let password = given;
+  if (password !== undefined) {
+    if (password === "" || (await signIn(speakerUrl, password)) === undefined) fail("speaker rejected the owner password", `pass the right one, or sign in at ${speakerUrl}/admin yourself`);
+  } else if (yes) return undefined;
   else
     for (;;) {
       const typed = answered(await p.password({ message: `Speaker is locked. Enter the owner password to unlock it (or press Enter to sign in at ${speakerUrl}/admin yourself)` }));
-      if (typed === "") return;
-      if (await signIn(speakerUrl, typed)) break;
+      if (typed === "") return undefined;
+      if ((await signIn(speakerUrl, typed)) !== undefined) {
+        password = typed;
+        break;
+      }
       p.log.warn("Wrong password. Try again.");
     }
-  p.log.success("Speaker is unlocked.");
+  ok("Speaker is unlocked.");
+  return password;
 }
 
 export async function initBottleSchool(flags: BottleFlags, ownerPassword?: string) {
@@ -172,10 +185,10 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   const configPath = resolve(flags.config ?? configPathFromEnv());
   if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "delete it, or pass --force to replace it");
   checkHost(!flags["skip-build"]);
-  p.log.success("KVM access, setsid, and Docker are available.");
+  ok("KVM access, setsid, and Docker are available.");
 
   const defaultHome = join(homedir(), ".local", "share", "bottle-school");
-  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: "Where should bottle-school keep its config, state, and output?", placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
+  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: `Where should bottle-school keep its config, state, and output? (Enter keeps ${defaultHome})`, placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
   const disk = statfsSync(existingAncestor(home));
   const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
   if (freeGiB < MIN_FREE_GIB) fail(`${home} has ${freeGiB.toFixed(1)} GiB free and bottle-school needs ${MIN_FREE_GIB}`, "choose a home on a larger filesystem with --home");
@@ -192,20 +205,20 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     if (directory === dirname(directory)) break;
   }
 
-  const controlPort = await pickPort(flags["control-port"], yes, "Control", "control-port", 7001, []);
-  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "guest-port", 7002, [controlPort]);
+  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", 7001, []);
+  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", 7002, [controlPort]);
 
   const speakerUrl = (await ask(flags["speaker-url"], yes, undefined, () => p.text({ message: "Speaker's URL as the VMs see it", placeholder: "http://192.168.1.10:3000", validate: (v) => speakerUrlProblem(v ?? "") })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
   const urlProblem = speakerUrlProblem(speakerUrl);
   if (urlProblem) fail(`speaker URL ${speakerUrl} is not usable`, urlProblem);
   const healthy = await fetch(`${speakerUrl}/_speaker/health`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.ok, () => false);
   if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker), or correct the URL");
-  p.log.success(`Speaker answers at ${speakerUrl}.`);
+  ok(`Speaker answers at ${speakerUrl}.`);
 
-  const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server (host:port, OpenAI-compatible)", placeholder: "192.168.1.20:8080" }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
+  const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server: host:port of an OpenAI-compatible server (for example 192.168.1.20:8080)", validate: (v) => (v?.trim() ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
   const model = await pickModel(endpoint, flags.model, yes);
 
-  const image = await ask(flags.image, yes, "bottle-school-guest", () => p.text({ message: "Guest image tag", placeholder: "bottle-school-guest", defaultValue: "bottle-school-guest" }));
+  const image = await ask(flags.image, yes, "bottle-school-guest", () => p.text({ message: "Guest image tag (Enter keeps bottle-school-guest)", placeholder: "bottle-school-guest", defaultValue: "bottle-school-guest" }));
   const config = {
     ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
     bindHost: "127.0.0.1",
@@ -227,7 +240,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   }
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
-  p.log.success(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
+  ok(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
 
   const env = { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath };
   if (!flags["skip-build"]) {
@@ -235,7 +248,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     if (build) {
       const status = await new Promise<number | null>((done) => spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done));
       if (status !== 0) fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run guest-build ${image}`);
-      p.log.success(`Guest image ${image} is built and loaded.`);
+      ok(`Guest image ${image} is built and loaded.`);
     } else p.log.info(`Build it later with: mise run guest-build ${image}`);
   }
 
@@ -243,13 +256,19 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   if (!flags["skip-register"]) {
     // After a restart speaker is locked until the owner signs in; registering needs it open.
     const isLocked = () => fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
-    if (await isLocked()) await unlockSpeaker(speakerUrl, flags, ownerPassword);
+    let password = ownerPassword ?? (flags["password-stdin"] ? await readStdin() : undefined);
+    if (await isLocked()) password = await unlockSpeaker(speakerUrl, password, yes);
     await waitFor(`Speaker is locked: sign in at ${speakerUrl}/admin to unlock it`, "Speaker is unlocked.", "speaker stayed locked", async () =>
       fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status !== 503),
     );
     const id = await registerHost(loaded, configPath, hostname());
-    p.log.info(`Approve this sandbox host in speaker: ${speakerUrl}/admin#host-${id}`);
-    await waitFor("Waiting for you to approve the sandbox host", "Sandbox host approved.", "the sandbox host was not approved within ten minutes", () => hostApproved(loaded));
+    if (password !== undefined) {
+      await approveHost(speakerUrl, password, id);
+      ok("Approved this sandbox host.");
+    } else {
+      p.log.info(`Sign in at ${speakerUrl}/admin, then approve the sandbox host there (link: ${speakerUrl}/admin#host-${id})`);
+      await waitFor("Waiting for you to approve the sandbox host", "Sandbox host approved.", "the sandbox host was not approved within ten minutes", () => hostApproved(loaded));
+    }
   } else p.log.info("Register later with: mise run bottle-cli register");
 
   const smoke = !flags["skip-smoke"] && !flags["skip-register"] && (yes || answered(await p.confirm({ message: "Start bottle-school and run a smoke-test task?", initialValue: true })));
@@ -271,7 +290,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     const archive = readdirSync(outputRoot).find((name) => name.endsWith(`--${id}`)) ?? fail(`task ${id} left no archive`, `look in ${outputRoot}`);
     const result = join(outputRoot, archive, "artifacts", "hello.txt");
     if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
-    p.log.success(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
+    ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
   } else p.log.info("Start it with: mise run bottle");
   p.outro("bottle-school is set up. Launch work with: mise run bottle-cli run --template offline --prompt \"...\"");
 }
