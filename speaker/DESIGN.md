@@ -291,6 +291,6 @@ Against:
 
 Where it fits best: sandboxes, where the sandbox host already holds a WebSocket to speaker and can carry its agents' traffic. A likely path is WebSocket through the sandbox host first, HTTP for direct agents, and revisiting direct agents once the sandbox path proves out.
 
-## Next step after the core: speaker inserts secrets itself
+## Planned after the core build: speaker inserts secrets itself
 
 To trust the sandbox host less, the sandbox host would pass each intercepted request to a secret-bearing host (such as `api.github.com`) to speaker with the placeholder still in it; speaker swaps in the real token, forwards the request, and returns the response. `gh` and `git` in the sandbox work unchanged, and the sandbox host never holds the token. Cost: traffic to those hosts, including large `git clone`s, flows through speaker, and the sandbox host's interception needs this hand-off.
