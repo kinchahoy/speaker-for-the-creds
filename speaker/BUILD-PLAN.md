@@ -30,7 +30,9 @@ Phases 4 and 5a run in parallel; 5b follows 5a; 6 comes last.
 
 ## Status
 
-All six phases are merged into main and pass their tests. Verified on a live speaker: enrollment from the help page's sh steps, a held call approved through a card, sign-in and the locked state, the secrets proxy with real `curl` (bearer and Basic), and SSH commands, `scp` and `sftp` run exactly as `/me` prints them against a real `sshd`. Not yet verified: `sshfs`, the PowerShell setup steps, and anything inside a real bottle-school VM (`gh`/`git` through the proxy hook, Pi with its new instructions, Krun routing).
+All six phases are merged into main and pass their tests. An end-to-end run on one Linux machine (speaker and bottle-school together, a real VM, no real model) passed: sign-in and the locked state; a direct agent following `/_speaker/help` verbatim (held call approved through a card, SSH command, `scp`, `sftp` inside a read-only share with escapes refused, a secret through the proxy with real `curl`); and from inside a VM: speaker reachable, a site blocked until its card was approved, a dummy secret arriving at the upstream while appearing nowhere in the VM, bottle-school's config, environment or logs, revoke stopping both within seconds, a read-only folder mounted at `/input/<share>` and removed on revoke, and a task's agent ending with the task. Bugs found then were fixed on main (guest build pin, zombie Pi restarts, prompted hosted-model tasks, VM-mounted folders needing an SSH key, the jump server outliving speaker, qboot missing from the Gondolin 0.14 patch).
+
+Not yet verified: `sshfs`, the PowerShell setup steps, a hosted model with a real key (the stored OpenRouter key on this machine is a 9-character stub), real model work by Pi, `gh`/`git` against GitHub, and the Krun backend.
 
 ## Redeploying speaker and bottle-school together
 
