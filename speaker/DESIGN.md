@@ -15,8 +15,8 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | `ssh:<target>` | run commands on one of your hosts, as the account you chose for it | `ssh:nas`: `df -h` on the NAS |
 | `folder:<share>` | read files in one of your folders (`:rw` to also change them) | `folder:photos` |
 | `site:<host>` | let a sandbox reach a website | `site:pypi.org` |
-| `secret:<NAME>` | let a sandbox use one of your tokens on the sites you allowed for it, without seeing the token | `secret:GITHUB_TOKEN` |
-| `mcp:<id>` | switch on an MCP server from the sandbox host's list | `mcp:context7`: library docs |
+| `secret:<NAME>` | let an agent use one of your tokens on the sites you allowed for it, without seeing the token | `secret:GITHUB_TOKEN`: `gh` and `git` work |
+| `mcp:<id>` | start an MCP server inside the sandbox, from the sandbox host's list (remote MCP servers are services) | `mcp:filesystem` |
 | `ext:<id>` | switch on a Pi plugin from the sandbox host's list | `ext:pi-web-access`: web search |
 | `group:<name>` | a set of the above you defined, approved as one | `group:developer` |
 
@@ -39,7 +39,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | **Direct agent** | An agent that enrolled itself. |
 | **Sandboxed agent** | An agent created by a sandbox host for one task. It may also ask for items only a sandbox host can enforce. |
 | **Sandbox host** | A trusted service (bottle-school) the owner registers once. It starts sandboxes, creates one agent per task, and enforces that task's sandbox grants inside the VM. |
-| **Service** | An HTTP API speaker holds a key for (Obsidian, Karakeep, Home Assistant). |
+| **Service** | An HTTP API or remote MCP server that agents reach through speaker, usually with a key speaker holds (Obsidian, Karakeep, Home Assistant). |
 | **Target** | A host speaker can open SSH sessions to, as one limited account on that host. |
 | **Share** | A named folder on a target (or on a sandbox host) that agents can be given, read-only or read-write. |
 | **Item** | One thing that can be granted, written as a string. |
@@ -56,14 +56,14 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | `ssh:<target>` | running commands on that target as its agent account | any agent |
 | `folder:<share>` / `folder:<share>:rw` | the share, read-only unless the agent asks for `:rw`; delivered as a VM mount or over SSH (see below) | any agent |
 | `site:<host>` or `site:*.<domain>` | network access from the sandbox | sandboxed |
-| `secret:<NAME>` | a secret the sandbox host injects into requests to the hosts the owner bound to it in Setup | sandboxed |
-| `mcp:<id>` | an MCP server from the sandbox host's catalog | sandboxed |
+| `secret:<NAME>` | speaker inserts the secret into the agent's requests to the hosts the owner bound to it in Setup (see Secrets) | any agent |
+| `mcp:<id>` | an MCP server that runs inside the VM, from the sandbox host's catalog | sandboxed |
 | `ext:<id>` | a Pi extension from the sandbox host's catalog | sandboxed |
 | `group:<name>` | every item in that group | any agent, for groups it may use in full |
 
-`secret:` is the one place a real secret reaches a sandbox. The owner decides once, in Setup, which hosts each secret may be sent to (for example `GITHUB_TOKEN` to `api.github.com` and `github.com`); agents cannot choose the destination. Visiting other sites is a separate `site:` item and is unaffected.
+The owner decides once, in Setup, which hosts each secret may be sent to (for example `GITHUB_TOKEN` to `api.github.com` and `github.com`); agents cannot choose the destination, and no agent or sandbox host ever holds the value. Visiting other sites is a separate `site:` item and is unaffected.
 
-Direct agents have their own network access, so `site:`, `secret:`, `mcp:` and `ext:` exist only for sandboxed agents.
+Remote MCP servers, with a key or without, are services: every agent reaches them through speaker in the same way. Direct agents have their own network access, so `site:`, `mcp:` (servers inside the VM) and `ext:` exist only for sandboxed agents.
 
 ### Service rules
 
@@ -124,7 +124,7 @@ The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"
 Speaker runs an SSH jump server (stock OpenSSH, in speaker's container). It listens only while at least one SSH or folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
 
 - **Commands** (`ssh:<target>`): `ssh … s@<speaker> <target> '<command>'`; for anything multi-line, `ssh … s@<speaker> <target> 'sh -s' <<'EOF'`. The grant also allows `scp` and `sftp` as that account. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
-- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> s@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> s@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `scp` and `sftp` first; `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
+- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> s@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> s@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `sshfs` first, so the agent works on the share in place rather than copying files around; `scp` and `sftp` are for a one-off copy. `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
 
 ### Knowing where it stands
 
@@ -189,7 +189,7 @@ For every SSH session: grant, agent, key fingerprint, source address, target, th
 
 ## Keys and unlocking
 
-All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in speaker and are encrypted with one random data key (AES-256-GCM). When the owner grants a `secret:` item, speaker hands its value and allowed hosts to the sandbox host, which swaps it in for the placeholder the sandbox sees. The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
+All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in speaker and are encrypted with one random data key (AES-256-GCM). Secret values never leave speaker except inside requests to their allowed hosts (see Secrets). The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
 
 - Speaker starts **locked**. It sends a push "speaker restarted: sign in to unlock"; signing in to `/admin` unwraps the data key, and secrets exist in clear only in memory. While locked, agents get `locked` with a `tell_user` line.
 - Changing the password re-wraps the data key. A forgotten password means re-entering the service keys and re-adding speaker's key on targets; nothing else is lost.
@@ -274,7 +274,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - Every hold needs the `Speaker-Wait` header; without it, calls answer at once. `/help` suggests 60 seconds (the maximum is 120), because many agent shells stop commands after 120 seconds.
 - A request the owner does not decide within 2 hours is `expired`; the agent's next call answers `approval_required` again.
 - `retry_after` is an ISO 8601 time.
-- A group is offered to an agent only if every member is an item kind that agent can use; direct agents never see groups containing `site:`, `secret:`, `mcp:` or `ext:`.
+- A group is offered to an agent only if every member is an item kind that agent can use; direct agents never see groups containing `site:`, `mcp:` or `ext:`.
 - `/help` explains items and groups in general and never names a group, service, target or share.
 - `site:*.example.org` covers subdomains only, not `example.org` itself.
 
@@ -334,9 +334,9 @@ Against:
 
 Where it fits best: sandboxes, where the sandbox host already holds a WebSocket to speaker and can carry its agents' traffic. A likely path is WebSocket through the sandbox host first, HTTP for direct agents, and revisiting direct agents once the sandbox path proves out.
 
-## Planned after the core build: speaker inserts secrets itself
+## Secrets: speaker inserts them
 
-Goal: a real secret is never handed to the sandbox host. Speaker keeps it and puts it into each request itself. The sandbox and the sandbox host only ever see a placeholder.
+A real secret is never handed to an agent or a sandbox host. Speaker keeps it and puts it into each request itself; agents and sandbox hosts only ever see a placeholder. Speaker runs an HTTPS proxy for this, using a maintained proxy library, with its own certificate authority: it decrypts only requests to hosts covered by an active `secret:` grant, inserts the secret, and forwards them. Sandbox hosts send their secret-host traffic to this proxy; direct agents use it the same way.
 
 ### Worked example: `gh` and `git` in a sandbox
 
@@ -374,4 +374,6 @@ Goal: a real secret is never handed to the sandbox host. Speaker keeps it and pu
 
 **Costs.** All traffic to the secret's hosts, including large `git clone`s, goes through speaker, so speaker needs the bandwidth and adds one hop of latency. The sandbox host's interception gains one hand-off rule: requests to hosts covered by an active secret grant go to speaker instead of the internet.
 
-Direct agents are not involved: they hold their own `gh` login on their own machine.
+### The same for a direct agent
+
+Claude Code holding `secret:GITHUB_TOKEN` runs `gh` with three environment variables from `/me`: `GH_TOKEN=<placeholder>`, `HTTPS_PROXY` pointing at speaker's proxy (with its agent token as the proxy credential), and `SSL_CERT_FILE` naming speaker's certificate authority (fetched once from `/me`). `gh`, and `git` with `gh auth setup-git`, then work exactly as in the sandbox, and the token never reaches the agent's machine. Use it when it is reasonable; an owner may equally give a direct agent its own token.
