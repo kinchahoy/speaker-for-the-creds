@@ -811,7 +811,12 @@ test('a trusted proxy names the caller with the last X-Forwarded-For entry', asy
 
 test('public discovery answers without a token, uses the caller address, and names no service or group', async (t) => {
   const f = await setup(t, { secretgroup: { items: ['notes.read'] } })
-  assert.match(await (await f.call('/')).text(), /read \/skill\.md/)
+  const root = await (await f.call('/')).text()
+  assert.ok(
+    root.includes('name: access-and-creds') &&
+      root.includes(`${f.url}/_speaker/help`) &&
+      !root.includes('$SPEAKER_URL'),
+  )
   assert.ok((await f.call('/skill.md')).headers.get('etag'))
   const help = await (await f.call('/_speaker/help')).text()
   assert.ok(help.includes(`${f.url}/_speaker/agents`))
