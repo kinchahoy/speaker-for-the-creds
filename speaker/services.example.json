@@ -27,6 +27,26 @@
     "read": "ask",
     "write": "ask"
   },
+  "context7": {
+    "baseUrl": "https://mcp.context7.com/mcp",
+    "notes": "# Context7\n\nRemote MCP server for library docs (tools `resolve-library-id`, `query-docs`), reached through speaker at `/context7` (Streamable HTTP, JSON-RPC over POST). Listing and read-only tools need `context7.read`.\n",
+    "auth": {
+      "type": "none"
+    },
+    "read": "ask",
+    "write": "ask",
+    "mcp": true
+  },
+  "parallel-search": {
+    "baseUrl": "https://search.parallel.ai/mcp",
+    "notes": "# Parallel Web Search\n\nRemote MCP server (tools `web_search`, `web_fetch`) reached through speaker at `/parallel-search`. `web_fetch` can read any page, so ask for it only when the task needs it.\n",
+    "auth": {
+      "type": "none"
+    },
+    "read": "ask",
+    "write": "ask",
+    "mcp": true
+  },
   "obsidian": {
     "baseUrl": "https://notes.example.com/api",
     "auth": {

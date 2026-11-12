@@ -9,7 +9,7 @@ An item is one thing you can be granted, written as a string.
 | `site:<host>`, `site:*.<domain>` | network access from a sandbox; `*.` covers subdomains only, not the bare domain |
 | `secret:<NAME>` | a token speaker inserts into your HTTPS requests to the hosts the owner allowed, without you seeing it; `/me` then shows what to set (see Secrets) |
 | `folder:<share>`, `folder:<share>:rw` | a folder from the sandbox host |
-| `mcp:<id>`, `ext:<id>` | an MCP server or Pi extension from the sandbox host's list |
+| `mcp:<id>`, `ext:<id>` | an MCP server that runs inside the sandbox, or a Pi extension, from the sandbox host's list (remote MCP servers are services) |
 | `group:<name>` | every item in a group the owner defined |
 
 `site:`, `folder:`, `mcp:` and `ext:` work only in a sandbox. Some services are open to read: use one only when the owner told you its name; it needs no request.

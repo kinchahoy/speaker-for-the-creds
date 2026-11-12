@@ -638,7 +638,7 @@ export function livePanels(
       row(
         'host',
         `Sandbox host ${h.name}`,
-        h.kinds.join(', ') || 'no item kinds',
+        `${h.kinds.join(', ') || 'no item kinds'}${h.shares.length ? ` · shares: ${h.shares.map((share) => `${share.name} (${share.mount ? 'VM mount' : 'no VM mount'})`).join(', ')}` : ''}`,
         [...h.kinds],
         h.name,
         form(

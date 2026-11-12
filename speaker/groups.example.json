@@ -4,16 +4,11 @@
     "items": ["site:pypi.org", "site:files.pythonhosted.org", "site:registry.npmjs.org"]
   },
   "github-read": {
-    "description": "Clone and read GitHub repositories, with a read-only GitHub API token.",
-    "items": [
-      "site:github.com",
-      "site:codeload.github.com",
-      "site:raw.githubusercontent.com",
-      "secret:GITHUB_READ@api.github.com"
-    ]
+    "description": "Clone and read GitHub repositories, with a read-only GitHub token (speaker inserts it; set up the secret GITHUB_READ for api.github.com and github.com).",
+    "items": ["site:github.com", "site:codeload.github.com", "site:raw.githubusercontent.com", "secret:GITHUB_READ"]
   },
   "developer": {
-    "description": "Everyday coding: package registries, GitHub downloads and releases, and Context7 library docs.",
+    "description": "Everyday coding: package registries, GitHub downloads and releases, and Context7 library docs (a speaker service).",
     "items": [
       "site:pypi.org",
       "site:files.pythonhosted.org",
@@ -23,7 +18,7 @@
       "site:raw.githubusercontent.com",
       "site:release-assets.githubusercontent.com",
       "site:objects.githubusercontent.com",
-      "mcp:context7"
+      "context7.read"
     ]
   },
   "research": {

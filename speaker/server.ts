@@ -259,7 +259,12 @@ export type Request = {
 }
 export type GrantView = Grant & { label: string; agent: string; state: 'active' | 'granted' | 'waiting' }
 export type AgentView = Agent & { sandboxHost?: string; grants: number }
-export type View = { hosts: Host[]; agents: AgentView[]; requests: Request[]; grants: GrantView[] }
+export type View = {
+  hosts: (Host & { shares: { name: string; mount: boolean }[] })[]
+  agents: AgentView[]
+  requests: Request[]
+  grants: GrantView[]
+}
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
 type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
@@ -401,6 +406,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const revoked = new Set<string>()
   const sockets = new Map<string, WSContext>()
   const applied = new Map<string, Set<string>>()
+  // The shares each connected sandbox host holds and whether it can mount them (recorded for folder delivery).
+  const hostShares = new Map<string, { name: string; mount: boolean }[]>()
   const strikes = new Map<string, number[]>()
   // The log: every event goes to standard output and into this buffer, which the admin Log page reads.
   const logged: LogEntry[] = []
@@ -570,12 +577,23 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
 
   // What a sandbox host enforces: every active grant of its agents, and their requests.
   const hostOf = (agent: { host?: string }) => (agent.host ? hosts.get(agent.host) : undefined)
+  const secretHosts = (name: string) =>
+    store && Object.hasOwn(store.vault.secrets, name) ? store.vault.secrets[name].hosts : []
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
     version,
     grants: [...grants.values()]
       .filter((grant) => live(grant) && agents.get(grant.agentId)?.host === hostId)
-      .map(({ id, agentId, item, expiresAt }) => ({ id, agentId, item, expiresAt })),
+      .map(({ id, agentId, item, expiresAt }) => ({
+        id,
+        agentId,
+        item,
+        expiresAt,
+        // A secret grant carries the hosts the owner bound it to, never the value.
+        ...(item.startsWith('secret:') ? { hosts: secretHosts(item.slice('secret:'.length)) } : {}),
+      })),
+    // What a sandboxed agent may ask for, so the sandbox host can name them in its instructions.
+    secrets: Object.entries(store?.vault.secrets ?? {}).map(([name, { hosts, env }]) => ({ name, hosts, env })),
     requests: [...requests.values()]
       .filter((request) => agents.get(request.agentId)?.host === hostId)
       .map((request) => ({
@@ -971,14 +989,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           ssh: { hostname: request.ssh.hostname, port: request.ssh.port, user: request.ssh.user },
         }
       : {}
+  // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
+  const applying = (request: Request) =>
+    request.grantIds.flatMap((id) => {
+      const grant = grants.get(id)
+      return grant && live(grant) && grantState(grant) !== 'active' ? [grant.item] : []
+    })
   // A request as the agent sees it: per-item outcome, and what to do next.
   const outcome = (c: Context, request: Request) => {
     const retry = retryAfter(request.agentId, request.denied)
+    const waiting = applying(request)
     return {
       id: request.id,
       status: request.status,
-      granted: request.granted,
+      granted: request.granted.filter((item) => !waiting.includes(item)),
       denied: request.denied,
+      ...(waiting.length ? { applying: waiting } : {}),
       ...(request.granted.length
         ? { expiresAt: request.expiresAt ? new Date(request.expiresAt).toISOString() : null }
         : {}),
@@ -992,14 +1018,21 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           ? { next: 'The owner did not decide in time. POST /_speaker/requests again if the task still needs it' }
           : request.denied.length
             ? { next: 'Stop asking for the denied items and tell the user' }
-            : {}),
+            : waiting.length
+              ? { next: 'Granted; the sandbox is applying it. Retry what was blocked in a few seconds' }
+              : {}),
     }
   }
   // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
     const request = createRequest(agent, resolveItems(input.want, agent), input.want, input.reason, input.duration)
     if (input.sshKey) agent.sshKey = input.sshKey
-    await hold(c, () => request.status !== 'pending')
+    // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
+    await hold(
+      c,
+      () =>
+        request.status !== 'pending' && !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? '')),
+    )
     return outcome(c, request)
   }
 
@@ -1198,7 +1231,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return applied.get(hostId)?.has(grant.id) ? 'active' : 'granted'
   }
   const view = (): View => ({
-    hosts: [...hosts.values()],
+    hosts: [...hosts.values()].map((host) => ({ ...host, shares: hostShares.get(host.id) ?? [] })),
     agents: [...agents.values()].map((agent) => ({
       ...agent,
       sandboxHost: hostOf(agent)?.name,
@@ -1482,19 +1515,30 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           sockets.get(id)?.close(1000, 'replaced')
           sockets.set(id, ws)
           applied.delete(id)
+          hostShares.delete(id)
           ws.send(JSON.stringify(snapshot(id)))
         },
         onMessage: (event, ws) => {
           if (sockets.get(id) !== ws) return
           const message = z
-            .object({ type: z.literal('applied'), grantIds: z.array(z.string()) })
+            .discriminatedUnion('type', [
+              z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
+              z.object({
+                type: z.literal('shares'),
+                shares: z.array(z.object({ name: idSchema, mount: z.boolean() })),
+              }),
+            ])
             .parse(JSON.parse(String(event.data)))
-          applied.set(id, new Set(message.grantIds))
+          if (message.type === 'shares') {
+            hostShares.set(id, message.shares)
+            audit('host_shares', { host: id, shares: message.shares })
+          } else applied.set(id, new Set(message.grantIds))
         },
         onClose: (_event, ws) => {
           if (sockets.get(id) !== ws) return
           sockets.delete(id)
           applied.delete(id)
+          hostShares.delete(id)
         },
       }
     }),
@@ -1532,19 +1576,29 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     return Object.fromEntries(
       secretGrants(agent.id).map(({ name, env, placeholder, hosts, until }) => [
         name,
-        {
-          until,
-          hosts,
-          environment: {
-            [env]: placeholder,
-            HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
-            SSL_CERT_FILE: ca,
-          },
-          token: '<token> is the part after "Bearer " in your header file; do not print it',
-          certificate: `Once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh; for git set GIT_SSL_CAINFO to the same file or run git config --global http.sslCAInfo "${ca}".`,
-          git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
-          note: 'Set these only on the command that needs them (for example HTTPS_PROXY=... gh pr list): the proxy refuses every host except these.',
-        },
+        agent.host
+          ? {
+              until,
+              hosts,
+              placeholder,
+              environment: { [env]: placeholder },
+              git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
+              note: "Set the variable on the command that needs it (for example GH_TOKEN=... gh pr list). No proxy settings or certificate are needed: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
+            }
+          : {
+              until,
+              hosts,
+              placeholder,
+              environment: {
+                [env]: placeholder,
+                HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
+                SSL_CERT_FILE: ca,
+              },
+              token: '<token> is the part after "Bearer " in your header file; do not print it',
+              certificate: `Once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh; for git set GIT_SSL_CAINFO to the same file or run git config --global http.sslCAInfo "${ca}".`,
+              git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
+              note: 'Set these only on the command that needs them (for example HTTPS_PROXY=... gh pr list): the proxy refuses every host except these.',
+            },
       ]),
     )
   }
@@ -1585,7 +1639,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
             { read: state(id, false), full: state(id, true), ...(service.mcp ? { mcp: true } : {}) },
           ]),
       ),
-      grants: mine.map(({ item, expiresAt }) => ({ item, expiresAt })),
+      grants: mine.map((grant) => ({
+        item: grant.item,
+        expiresAt: grant.expiresAt,
+        ...(grantState(grant) === 'active' ? {} : { applying: true }),
+      })),
       ...(config.PROXY_PORT ? { secrets: secretsView(c, agent) } : {}),
       groups: Object.fromEntries(offered(agent)),
       requests: [...requests.values()]
