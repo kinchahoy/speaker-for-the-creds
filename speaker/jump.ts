@@ -128,8 +128,9 @@ export async function createJump(env: Env) {
   const path = (name: string) => join(dir, name)
   const cleanup = () => {
     jumpProcess?.kill()
-    agentProcess?.kill()
+    // Remove the directory before killing the agent: its socket cleanup racing the removal leaves speaker.pub behind.
     if (dir) rmSync(dir, { recursive: true, force: true })
+    agentProcess?.kill()
   }
 
   // --- Speaker's key: a stock ssh-agent holds it; nothing else sees it. ---
@@ -730,8 +731,8 @@ export async function createJump(env: Env) {
       for (const session of sessions.values()) end(session, 'speaker stopped')
       await stopJump()
       relayServer?.close()
-      agentProcess?.kill()
       if (dir) rmSync(dir, { recursive: true, force: true })
+      agentProcess?.kill()
       dir = ''
     },
   }

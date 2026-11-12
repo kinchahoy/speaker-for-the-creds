@@ -3,7 +3,7 @@ import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import type { Server } from 'node:http'
 import { type AddressInfo, connect, createServer } from 'node:net'
 import { tmpdir, userInfo } from 'node:os'
@@ -13,7 +13,9 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { serve } from '@hono/node-server'
 import WebSocket, { WebSocketServer } from 'ws'
+import { createJump } from '../jump.ts'
 import { createApp, readConfig } from '../server.ts'
+import { generateSshKey } from '../store.ts'
 import { setOwnerPassword } from './owner.ts'
 
 const run = promisify(execFile)
@@ -410,3 +412,32 @@ for (const [mount, overSsh] of [
     assert.deepEqual(await host.overSsh(), overSsh ? ['folder:mixed'] : [])
   })
 }
+
+// Stopping speaker removes its runtime directory. It used to keep speaker.pub when the ssh-agent, killed first,
+// removed its socket while the directory was being deleted, so this repeats start and stop to catch that race.
+test('stop removes the temporary directory of the jump server', async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'speaker-jumpdata-'))
+  t.after(() => rm(dataDir, { recursive: true, force: true }))
+  const key = await generateSshKey()
+  const left: string[] = []
+  for (let i = 0; i < 25; i++) {
+    const jump = await createJump({
+      port: await freePort(),
+      dataDir,
+      agent: () => undefined,
+      grants: () => [],
+      mountable: () => false,
+      audit: () => undefined,
+      expire: () => undefined,
+    })
+    await jump.start(key)
+    await jump.stop()
+    for (const name of await readdir(tmpdir()))
+      if (
+        /^speaker-[A-Za-z0-9]{6}$/.test(name) &&
+        (await readFile(join(tmpdir(), name, 'speaker.pub'), 'utf8').catch(() => '')).startsWith(key.public)
+      )
+        left.push(name)
+  }
+  assert.deepEqual(left, [])
+})
