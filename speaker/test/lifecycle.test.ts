@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import {
+  grantStates,
+  grantTable,
+  hostStates,
+  hostTable,
   IllegalTransition,
-  identityStates,
-  identityTable,
   type RequestEvent,
   requestStates,
   requestTable,
@@ -18,33 +20,32 @@ import { createApp, readConfig } from '../server.ts'
 test('every table target is a known state and terminal states accept no event', () => {
   for (const [states, table] of [
     [requestStates, requestTable],
-    [identityStates, identityTable],
+    [grantStates, grantTable],
+    [hostStates, hostTable],
   ] as const) {
     assert.deepEqual(Object.keys(table).sort(), [...states].sort())
     for (const moves of Object.values(table))
       for (const to of Object.values(moves)) assert.ok((states as readonly string[]).includes(to as string))
   }
-  for (const state of ['denied', 'expired', 'revoked', 'superseded'] as const) assert.deepEqual(requestTable[state], {})
+  for (const state of ['decided', 'expired'] as const) assert.deepEqual(requestTable[state], {})
+  for (const state of ['expired', 'revoked'] as const) assert.deepEqual(grantTable[state], {})
 })
 
-test('request transitions: legal moves land on the table state, illegal moves throw', () => {
-  assert.equal(transition('request', requestTable, 'pending', 'approve'), 'approved')
+test('transitions: legal moves land on the table state, illegal moves throw', () => {
+  assert.equal(transition('request', requestTable, 'pending', 'decide'), 'decided')
   assert.equal(transition('request', requestTable, 'pending', 'expire'), 'expired')
-  assert.equal(transition('request', requestTable, 'approved', 'revoke'), 'revoked')
-  assert.equal(transition('request', requestTable, 'approved', 'supersede'), 'superseded')
+  assert.equal(transition('grant', grantTable, 'active', 'revoke'), 'revoked')
+  assert.equal(transition('grant', grantTable, 'active', 'expire'), 'expired')
+  assert.equal(transition('host', hostTable, 'pending', 'approve'), 'approved')
   const illegal: [(typeof requestStates)[number], RequestEvent][] = [
-    ['approved', 'approve'],
-    ['approved', 'deny'],
-    ['denied', 'approve'],
-    ['expired', 'approve'],
-    ['pending', 'revoke'],
-    ['revoked', 'expire'],
+    ['decided', 'decide'],
+    ['decided', 'expire'],
+    ['expired', 'decide'],
   ]
   for (const [from, event] of illegal)
     assert.throws(() => transition('request', requestTable, from, event), IllegalTransition, `${from} + ${event}`)
-  assert.equal(transition('session', identityTable, 'approved', 'expire'), 'expired')
-  assert.throws(() => transition('session', identityTable, 'denied', 'approve'), IllegalTransition)
-  assert.throws(() => transition('enforcer', identityTable, 'pending', 'expire'), IllegalTransition)
+  assert.throws(() => transition('grant', grantTable, 'revoked', 'expire'), IllegalTransition)
+  assert.throws(() => transition('host', hostTable, 'approved', 'approve'), IllegalTransition)
 })
 
 test('PUBLIC_URL is required', () => {
@@ -68,58 +69,55 @@ async function setup(t: TestContext) {
     })
   const enroll = async (token: string) => {
     const response = await json(
-      '/_speaker/sessions',
-      { label: 's', llmName: 'Test LLM', tokenHash: sha(token), duration: '1h' },
+      '/_speaker/agents',
+      { label: 's', agent: 'Test LLM · Test app', tokenHash: sha(token) },
       {},
     )
     return { response, id: response.status === 201 ? ((await response.json()) as { id: string }).id : '' }
   }
-  const approveSession = (id: string) =>
-    call(`/admin/sessions/${id}/approve`, {
-      method: 'POST',
-      headers: owner,
-      body: new URLSearchParams({ duration: '1h' }),
-    })
-  return { call, json, enroll, approveSession }
+  return { call, json, enroll }
 }
 
-test('requests and sessions store revoked, superseded and repeated decisions explicitly', async (t) => {
+test('requests, grants and agents move through explicit lifecycles, and repeated decisions are refused', async (t) => {
   const f = await setup(t)
   const { id } = await f.enroll('tok')
-  assert.equal((await f.approveSession(id)).status, 303)
-  assert.equal((await f.approveSession(id)).status, 409)
   const agent = { authorization: 'Bearer tok' }
-  const request = async () =>
+  const ask = async () =>
     (
       (await (
-        await f.json(
-          '/_speaker/requests',
-          { capability: { kind: 'credential', ref: 'demo.write' }, reason: 'r', duration: '15m' },
-          agent,
-        )
-      ).json()) as { id: string }
+        await f.json('/_speaker/requests', { want: ['demo.full'], reason: 'r', duration: '30m' }, agent)
+      ).json()) as {
+        id: string
+      }
     ).id
-  const status = async (requestId: string) =>
-    ((await (await f.call(`/_speaker/requests/${requestId}`, { headers: agent })).json()) as { status: string }).status
+  const me = async () =>
+    (await (await f.call('/_speaker/me', { headers: agent })).json()) as {
+      requests: { id: string; status: string; granted: string[] }[]
+      grants: unknown[]
+    }
   const decide = (requestId: string, decision: 'approve' | 'deny') =>
     f.json(`/admin/api/requests/${requestId}/${decision}`, { duration: '1h' }, owner)
 
-  const first = await request()
+  const first = await ask()
   assert.equal((await decide(first, 'approve')).status, 200)
-  assert.equal(await status(first), 'approved')
+  assert.deepEqual(
+    (await me()).requests.map((r) => [r.status, r.granted]),
+    [['decided', ['demo.full']]],
+  )
   assert.equal((await decide(first, 'deny')).status, 409)
 
-  const second = await request()
+  // A later approval of the same item replaces the earlier grant.
+  const second = await ask()
   await decide(second, 'approve')
-  assert.equal(await status(first), 'superseded')
+  assert.equal((await me()).grants.length, 1)
 
-  const leases = (await (await f.call('/admin/api/leases', { headers: owner })).json()) as { id: string }[]
-  await f.json(`/admin/api/leases/${leases[0].id}/revoke`, {}, owner)
-  assert.equal(await status(second), 'revoked')
+  const grants = (await (await f.call('/admin/api/grants', { headers: owner })).json()) as { id: string }[]
+  await f.json(`/admin/api/grants/${grants[0].id}/revoke`, {}, owner)
+  assert.equal((await me()).grants.length, 0)
 
-  const denied = { method: 'POST', headers: owner }
-  assert.equal((await f.call(`/admin/sessions/${id}/deny`, denied)).status, 303)
-  assert.equal((await f.call(`/admin/sessions/${id}/deny`, denied)).status, 409)
+  const revoke = { method: 'POST', headers: owner }
+  assert.equal((await f.call(`/admin/agents/${id}/revoke`, revoke)).status, 303)
+  assert.equal((await f.call(`/admin/agents/${id}/revoke`, revoke)).status, 404)
 })
 
 test('unauthenticated enrollment is rate limited', async (t) => {

@@ -27,7 +27,7 @@ export const Template = z
     attended: z.boolean().optional(),
     bundle: z.string().optional(),
     /** How long the launch bundle is requested for; defaults to 1d. */
-    bundleDuration: z.enum(["15m", "30m", "1h", "1d", "7d", "30d"]).optional(),
+    bundleDuration: z.enum(["30m", "1h", "2h", "1d", "30d"]).optional(),
   })
   .strict();
 export type Template = z.infer<typeof Template>;
@@ -74,12 +74,12 @@ export const secretRef = z.string().regex(/^[A-Z][A-Z0-9_]*@[^@]+$/).transform((
 }).pipe(z.object({ name: z.string(), hosts: z.array(siteRef).min(1) }));
 export const folderRef = z.string().regex(/^[a-zA-Z0-9_-]+(:rw)?$/);
 
-/** Guests may use only the subject-facing speaker API and credential proxy. */
+/** Guests may use only the agent-facing speaker API and service proxy. */
 export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) => {
   if (url.origin !== speaker.origin) return false;
   const path = url.pathname;
   if (path.startsWith("/_speaker/"))
-    return (method === "GET" && /^\/_speaker\/(health|providers(?:\/[a-zA-Z0-9_-]+\/guide)?|requests\/[a-zA-Z0-9_-]+)$/.test(path)) ||
+    return (method === "GET" && /^\/_speaker\/(health|me|help(?:\/[a-zA-Z0-9_-]+)?)$/.test(path)) ||
       (method === "POST" && path === "/_speaker/requests");
   return /^\/[a-zA-Z0-9_-]+(?:\/|$)/.test(path) && !/^\/admin(?:\/|$)/.test(path) && !path.startsWith("/_");
 };

@@ -48,7 +48,7 @@ To configure by hand instead, copy `config.example.json` to `config.json`. Choos
 ```sh
 mise run guest-build pi-v5-guest
 mise run bottle-cli register
-# Approve the enforcer in speaker /admin before starting the service.
+# Approve the sandbox host in speaker /admin before starting the service.
 mise run bottle
 ```
 
@@ -118,7 +118,7 @@ A task is attended (the owner is at its terminal) or unattended (nobody is). Wit
 
 <sub>AI-written</sub>
 
-`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, an optional `attended` that fixes the launch mode, and an optional speaker `bundle` with an optional `bundleDuration` (`15m` to `30d`, default `1d`) for the launch request. The file holds the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, an optional `attended` that fixes the launch mode, and an optional speaker group (`bundle`) with an optional `bundleDuration` (`30m`, `1h`, `2h`, `1d` or `30d`; default `1d`) for the launch request. The file holds the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
 {.ai}
 
 **Templates vs bundles.** A template is the runtime profile bottle-school owns: VM size, deadline, model-request cap, attended mode, and which bundle to ask for at launch. A bundle is defined in speaker and is everything the agent may use: sites, secrets, folders, MCP servers, and Pi extensions, approved together by one owner decision. To give agents a new ability, add it to a bundle (or let the agent request it); to change how big or how long a task is, edit the template.
@@ -159,7 +159,7 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 <sub>AI-written</sub>
 
 - Templates no longer have `plugins`, and the catalog's `plugins` became `extensions`. Rerun `mise run setup`, or copy `templates.json` and `catalog.json` into `configRoot` again; the old files fail validation at startup.
-- The enforcer must declare the `extension` kind. Speaker fixes an enforcer's kinds at registration, so run `mise run bottle-cli register`, approve the new enforcer in speaker `/admin`, restart bottle-school, and revoke the old enforcer.
+- The sandbox host must declare the `ext` kind. Speaker fixes a sandbox host's kinds at registration, so run `mise run bottle-cli register`, approve the new sandbox host in speaker `/admin`, restart bottle-school, and remove the old sandbox host.
 - Rebuild the guest image so `/opt/pi-plugins` exists, and update speaker's `bundles.json` from `speaker/bundles.example.json`.
 
 <!-- author: ai -->
@@ -172,7 +172,7 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 | --- | --- | --- |
 | Hosted model provider | A per-task placeholder in Pi's model config | The configured model API, after Gondolin substitutes it for requests to the approved provider host |
 | Remote HTTP MCP with `credential` | A per-task placeholder in the MCP request header | The configured MCP server, after Gondolin substitutes it for requests to the approved MCP host |
-| Speaker enforcer token | A per-task placeholder used for Speaker API calls | Speaker, and only on the configured subject-facing routes |
+| Speaker agent token | A per-task placeholder used for Speaker API calls | Speaker, and only on the configured agent-facing routes |
 | Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
 | stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
 
@@ -213,7 +213,7 @@ Run `mise run check` and `mise run test` from the repository root. The tests cov
 
 - A missing `qemu-img` or `setsid` stops startup with a clear error.
 - With `PI_V2_VMM=krun`, a missing kernel or incompatible Krun runner prevents guest creation.
-- `speaker.token is missing` means the owner must register the enforcer first.
+- `speaker.token is missing` means the owner must register the sandbox host first.
 - A blocked guest request returns 403; the agent requests the required capability. An expired or revoked grant also blocks subsequent use.
 - The service archives open tasks on SIGINT or SIGTERM. The owner must inspect the archive outcome before discarding recovery files.
 
@@ -229,6 +229,6 @@ The owner trusts the host, broker, sandbox runtime, pinned image, and peers that
 - The host enforces lease expiry, revocation, network access, and shared-folder permissions independently of Pi. The owner must validate those boundaries in a real guest before deployment.
 - Every approved destination can receive anything the guest can read. Placeholder substitution protects secret values; it does not prevent misuse of granted authority.
 - The speaker exception permits the configured origin and subject-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
-- Speaker keeps temporary leases in memory; a restart ends them. The enforcer clears leases when its channel closes or snapshots stop.
+- Speaker keeps temporary leases in memory; a restart ends them. Bottle-school clears leases when its channel closes or snapshots stop.
 - The owner must provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or individual generation duration.
 - The owner must review artifacts before executing or promoting them onto the host. Archives may contain private task content.

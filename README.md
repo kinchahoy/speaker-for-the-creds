@@ -7,8 +7,8 @@
 The owner approves what agents may use from a phone, for a chosen duration.
 {.ai}
 
-- [speaker](speaker/README.md) stores homelab keys, approves agent sessions, proxies APIs, and issues leases.
-- [bottle-school](bottle-school/README.md) runs Pi in Gondolin micro-VMs and enforces site, secret, folder, and MCP leases.
+- [speaker](speaker/README.md) stores homelab keys, lets the owner approve what agents may use, proxies APIs, and issues grants.
+- [bottle-school](bottle-school/README.md) runs Pi in Gondolin micro-VMs and enforces site, secret, folder, and MCP grants as a speaker sandbox host.
 
 <!-- author: ai -->
 
@@ -36,7 +36,7 @@ chmod 600 speaker/.env
 mise run speaker
 ```
 
-Open `PUBLIC_URL/admin`, configure a provider, and test approval and revocation with the demo before adding real credentials. Agents use [the access-and-creds skill](speaker/skill/SKILL.md) to enroll sessions and request access. The owner approves each session and capability in the browser.
+Open `PUBLIC_URL/admin`, configure a service, and test approval and revocation with the demo before adding real credentials. Agents use [the access-and-creds skill](speaker/skill/SKILL.md) to enroll and ask for items. The owner approves each request, item by item, in the browser.
 {.ai}
 
 The owner can deploy speaker through [Docker](speaker/README.md#docker--home-server-deployment). The owner must verify the real upstream URL, TLS, private routing, and approval flow. Speaker is a supervised-pilot candidate. bottle-school still needs an end-to-end guest run and host storage quotas before unattended use.
@@ -56,7 +56,7 @@ The owner can deploy speaker through [Docker](speaker/README.md#docker--home-ser
 | `mise run format` | Format speaker |
 | `mise run speaker` | Run speaker with live reload |
 | `mise run bottle` | Run the bottle-school service |
-| `mise run bottle-cli register` | Register the enforcer; approve it in speaker |
+| `mise run bottle-cli register` | Register the sandbox host; approve it in speaker |
 | `mise run bottle-cli run --template offline` | Launch a sandbox task |
 | `mise run bottle-cli ls` | List tasks |
 | `mise run bottle-cli attach <id>` | Join Pi in a running guest |

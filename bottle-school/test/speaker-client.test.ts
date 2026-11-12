@@ -13,7 +13,7 @@ import { createApp, readConfig, wss } from "../../speaker/server.ts";
 import type { Config } from "../src/config.ts";
 import { type Snapshot, speakerClient, watchLeases } from "../src/speaker.ts";
 
-test("watchLeases receives approved leases and reports applied ids to speaker", async (t) => {
+test("watchLeases receives granted items as leases and reports applied ids to speaker", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-speaker-"));
   const app = await createApp(readConfig({ ADMIN_PASSWORD: "pw", DATA_DIR: dataDir, PUBLIC_URL: "http://localhost" }));
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1", websocket: { server: wss } }) as Server;
@@ -43,22 +43,22 @@ test("watchLeases receives approved leases and reports applied ids to speaker", 
     while (!(await ok())) await sleep(50);
   };
 
-  const token = "enforcer-token";
-  const created = await fetch(`${url}/_speaker/enforcers`, {
+  const token = "host-token";
+  const created = await fetch(`${url}/_speaker/hosts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "bottle", kinds: ["site"], tokenHash: createHash("sha256").update(token).digest("hex") }),
   });
   const { id } = (await created.json()) as { id: string };
   const speaker = speakerClient(config, token);
-  await assert.rejects(speaker.createSubject("pi"), /401/);
-  await ownerPost(`/enforcers/${id}/approve`);
+  await assert.rejects(speaker.createAgent("pi", "Test LLM · Pi on test"), /401/);
+  await ownerPost(`/hosts/${id}/approve`);
 
   // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
   const fatal: string[] = [];
   watchLeases(config, "unknown-token", () => {}, (message) => fatal.push(message));
   await until(() => fatal.length === 1);
-  assert.match(fatal[0], /rejects this host's enforcer token \(HTTP 401\).*bottle-cli register/);
+  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-cli register/);
 
   const snapshots: Snapshot[] = [];
   const reportApplied = watchLeases(
@@ -67,12 +67,12 @@ test("watchLeases receives approved leases and reports applied ids to speaker", 
     (snapshot) => snapshots.push(snapshot),
     (message) => assert.fail(`unexpected fatal speaker error: ${message}`),
   );
-  const subject = await speaker.createSubject("pi");
+  const subject = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({
-    subjectId: subject.id,
-    capability: { kind: "site", ref: "example.com" },
+    agentId: subject.id,
+    want: ["site:example.com"],
     reason: "docs",
-    duration: "15m",
+    duration: "30m",
   });
   await ownerPost(`/api/requests/${request.id}/approve`, { duration: "1h" });
   await until(() => snapshots.some((s) => s.leases.length === 1));
@@ -82,6 +82,6 @@ test("watchLeases receives approved leases and reports applied ids to speaker", 
 
   reportApplied([lease.id]);
   const state = async () =>
-    ((await (await fetch(`${url}/admin/api/leases`, { headers: owner })).json()) as { state: string }[])[0]?.state;
+    ((await (await fetch(`${url}/admin/api/grants`, { headers: owner })).json()) as { state: string }[])[0]?.state;
   await until(async () => (await state()) === "active");
 });

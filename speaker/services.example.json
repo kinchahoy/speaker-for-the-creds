@@ -1,0 +1,40 @@
+{
+  "demo": {
+    "baseUrl": "http://127.0.0.1:3000/_demo-upstream",
+    "auth": {
+      "type": "bearer",
+      "secret": "demo"
+    },
+    "read": "open",
+    "write": "ask"
+  },
+  "karakeep": {
+    "baseUrl": "https://bookmarks.example.com/api/v1",
+    "notes": "# Karakeep\n\nBookmarks API under `/karakeep/`.\n\n- `GET /karakeep/bookmarks` lists bookmarks.\n- `GET /karakeep/bookmarks/search?q=<text>` searches them.\n- `POST /karakeep/bookmarks` with `{\"type\":\"link\",\"url\":\"...\"}` adds one.\n\nReads need `karakeep.read`. Other methods need `karakeep.full`.\n",
+    "auth": {
+      "type": "bearer",
+      "secret": "karakeep"
+    },
+    "read": "ask",
+    "write": "ask"
+  },
+  "homeassistant": {
+    "baseUrl": "https://homeassistant.example.com/api",
+    "auth": {
+      "type": "bearer",
+      "secret": "homeassistant"
+    },
+    "read": "ask",
+    "write": "ask"
+  },
+  "obsidian": {
+    "baseUrl": "https://notes.example.com/api",
+    "auth": {
+      "type": "bearer",
+      "secret": "obsidian"
+    },
+    "read": "ask",
+    "write": "ask",
+    "readPaths": ["/search/simple"]
+  }
+}

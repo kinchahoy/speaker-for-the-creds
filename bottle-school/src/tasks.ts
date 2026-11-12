@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
+import { hostname } from "node:os";
 import type { Config } from "./config.ts";
 import { mintCredentials, type Credential } from "./credentials.ts";
 import { bootGuest, note, shareProvider, type CapturedBody, type Guest, type Live } from "./gondolin.ts";
@@ -133,16 +134,16 @@ export class Tasks {
     templates: Map<string, Template>,
     catalog: Catalog,
     secrets: Map<string, string>,
-    enforcerToken: string,
+    hostToken: string,
   ) {
     this.config = config;
     this.templates = templates;
     this.catalog = catalog;
     this.secrets = secrets;
-    this.speaker = speakerClient(config, enforcerToken);
+    this.speaker = speakerClient(config, hostToken);
     this.#report = watchLeases(
       config,
-      enforcerToken,
+      hostToken,
       (snapshot) => this.#onSnapshot(snapshot),
       // Without speaker no lease can apply: stop through the normal shutdown (archives tasks) and exit nonzero.
       (message) => {
@@ -226,7 +227,7 @@ export class Tasks {
     const credentials = mintCredentials(this.secrets);
     const token = randomBytes(24).toString("hex");
 
-    const subject = await this.speaker.createSubject(name);
+    const subject = await this.speaker.createAgent(name, `${model} · Pi on ${hostname()}`);
     let registered = false;
     try {
       writeGuestConfig(
@@ -290,8 +291,8 @@ export class Tasks {
       try {
         if (template.bundle)
           await this.speaker.request({
-            subjectId: task.subjectId,
-            bundle: template.bundle,
+            agentId: task.subjectId,
+            want: [`group:${template.bundle}`],
             reason: `launch template ${template.id}`,
             duration: template.bundleDuration ?? "1d",
           });
@@ -316,7 +317,7 @@ export class Tasks {
       if (!registered) {
         rmSync(`${this.config.stateRoot}/tasks/${id}`, { recursive: true, force: true });
         rmSync(outputDir, { recursive: true, force: true });
-        await this.speaker.deleteSubject(subject.id).catch(() => undefined);
+        await this.speaker.deleteAgent(subject.id).catch(() => undefined);
       }
       throw error;
     }
@@ -517,7 +518,7 @@ export class Tasks {
       }
       this.#writeArchive(task, "archived");
       await task.guest.close();
-      await this.speaker.deleteSubject(task.subjectId);
+      await this.speaker.deleteAgent(task.subjectId);
       rmSync(`${this.config.stateRoot}/tasks/${task.id}`, { recursive: true, force: true });
       this.byId.delete(task.id);
       this.byToken.delete(task.token);
@@ -533,7 +534,7 @@ export class Tasks {
       }
       await task.guest.close().catch(() => undefined);
       // The VM is gone; its speaker identity must not outlive it. The work tree stays for the owner.
-      await this.speaker.deleteSubject(task.subjectId).catch(() => undefined);
+      await this.speaker.deleteAgent(task.subjectId).catch(() => undefined);
       throw error;
     }
   }

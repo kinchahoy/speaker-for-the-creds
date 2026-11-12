@@ -2,36 +2,37 @@ import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import type { Config } from "./config.ts";
 
-export const Lease = z.object({
-  id: z.string(),
-  subjectId: z.string(),
-  kind: z.string(),
-  ref: z.string(),
-  expiresAt: z.string().nullable(),
-});
-export type Lease = z.infer<typeof Lease>;
+/** Speaker's items are strings (`site:x`, `folder:s:rw`, `ext:id`, `obsidian.read`); the rest of bottle-school speaks kind and ref. */
+const itemKinds: Record<string, string> = { site: "site", secret: "secret", folder: "folder", mcp: "mcp", ext: "extension" };
+const Grant = z
+  .object({ id: z.string(), agentId: z.string(), item: z.string(), expiresAt: z.string().nullable() })
+  .transform(({ agentId, item, ...grant }) => {
+    const [prefix, ...rest] = item.split(":");
+    return {
+      ...grant,
+      subjectId: agentId,
+      ...(rest.length ? { kind: itemKinds[prefix!] ?? prefix!, ref: rest.join(":") } : { kind: "credential", ref: item }),
+    };
+  });
+export type Lease = z.infer<typeof Grant>;
 
-const RequestStatus = z.object({
-  id: z.string(),
-  status: z.enum(["pending", "approved", "denied", "expired", "revoked", "superseded"]),
-});
+const RequestStatus = z.object({ id: z.string(), status: z.enum(["pending", "decided", "expired"]) });
 const Snapshot = z.object({
   type: z.literal("snapshot"),
-  leases: z.array(Lease),
-  requests: z.array(RequestStatus.extend({ subjectId: z.string(), what: z.string(), reason: z.string() })),
+  grants: z.array(Grant),
+  requests: z.array(
+    RequestStatus.extend({ agentId: z.string(), what: z.string(), reason: z.string() }).transform(({ agentId, ...request }) => ({
+      ...request,
+      subjectId: agentId,
+    })),
+  ),
 });
-export type Snapshot = Pick<z.infer<typeof Snapshot>, "leases" | "requests">;
-const Subject = z.object({ id: z.string(), token: z.string() });
-export type RequestBody = {
-  subjectId: string;
-  capability?: { kind: string; ref: string };
-  bundle?: string;
-  reason: string;
-  duration: string;
-};
+export type Snapshot = { leases: Lease[]; requests: z.infer<typeof Snapshot>["requests"] };
+const Agent = z.object({ id: z.string(), token: z.string() });
+export type RequestBody = { agentId: string; want: string[]; reason: string; duration: string };
 
-/** `bottle register` writes the enforcer token that speaker's owner approved. */
-export const readEnforcerToken = (config: Config) => {
+/** `bottle register` writes the sandbox host token that speaker's owner approved. */
+export const readHostToken = (config: Config) => {
   const path = `${config.stateRoot}/speaker.token`;
   if (!existsSync(path)) throw new Error(`${path} is missing; run "bottle register"`);
   return readFileSync(path, "utf8").trim();
@@ -50,8 +51,8 @@ export const speakerClient = (config: Config, token: string) => {
     return response.json();
   };
   return {
-    createSubject: async (label: string) => Subject.parse(await call("POST", "subjects", { label })),
-    deleteSubject: (id: string) => call("DELETE", `subjects/${id}`),
+    createAgent: async (label: string, agent: string) => Agent.parse(await call("POST", "hosts/agents", { label, agent })),
+    deleteAgent: (id: string) => call("DELETE", `hosts/agents/${id}`),
     request: async (body: RequestBody) => RequestStatus.parse(await call("POST", "requests", body)),
   };
 };
@@ -66,17 +67,18 @@ export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, ma
  */
 const probeSpeaker = async (config: Config, token: string) => {
   try {
-    const response = await fetch(`${config.speaker.url}/_speaker/bundles`, {
+    // A sandbox host has no agent view: speaker answers an approved host token with 403 and an unknown one with 401.
+    const response = await fetch(`${config.speaker.url}/_speaker/me`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5_000),
     });
     await response.body?.cancel();
-    if (response.status === 401 || response.status === 403)
+    if (response.status === 401)
       return {
         fatal: true,
         message:
-          `speaker at ${config.speaker.url} rejects this host's enforcer token (HTTP ${response.status}): it is not ` +
-          `approved yet, was denied, or speaker's data was reset. Approve the enforcer in speaker /admin, or run ` +
+          `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it is not ` +
+          `approved yet, was removed, or speaker's data was reset. Approve the sandbox host in speaker /admin, or run ` +
           `"mise run bottle-cli register" again.`,
       };
     return { fatal: false, message: `speaker answered HTTP ${response.status}` };
@@ -87,7 +89,7 @@ const probeSpeaker = async (config: Config, token: string) => {
 };
 
 /**
- * Holds the enforcer WebSocket. Each snapshot replaces the lease set and request statuses; a closed socket or 30 s without
+ * Holds the sandbox host WebSocket. Each snapshot replaces the lease set and request statuses; a closed socket or 30 s without
  * a snapshot clears it. Reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker
  * rejects the token, after SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs
  * of continuous outage. Returns the function that reports the in-effect lease ids.
@@ -98,7 +100,7 @@ export const watchLeases = (
   onSnapshot: (snapshot: Snapshot) => void,
   onFatal: (message: string) => void,
 ) => {
-  const url = new URL("/_speaker/enforcers/ws", config.speaker.url);
+  const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   let socket: WebSocket | undefined;
   let lastSnapshot = Date.now();
@@ -128,7 +130,7 @@ export const watchLeases = (
   };
   const send = () => {
     if (socket?.readyState === WebSocket.OPEN)
-      socket.send(`{"type":"applied","leaseIds":${applied}}`);
+      socket.send(`{"type":"applied","grantIds":${applied}}`);
   };
   const open = () => {
     if (stopped) return;
@@ -144,7 +146,8 @@ export const watchLeases = (
     };
     socket.onmessage = (event) => {
       lastSnapshot = Date.now();
-      onSnapshot(Snapshot.parse(JSON.parse(String(event.data))));
+      const { grants, requests } = Snapshot.parse(JSON.parse(String(event.data)));
+      onSnapshot({ leases: grants, requests });
     };
     socket.onclose = () => {
       if (opened) downSince = Date.now();

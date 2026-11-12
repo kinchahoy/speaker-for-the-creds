@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFile, mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { serve, upgradeWebSocket } from '@hono/node-server'
@@ -15,11 +15,12 @@ import writeFile from 'write-file-atomic'
 import { WebSocketServer } from 'ws'
 import { z } from 'zod'
 import {
-  type IdentityEvent,
-  type IdentityState,
+  type GrantEvent,
+  type GrantState,
+  grantTable,
+  hostStates,
+  hostTable,
   IllegalTransition,
-  identityStates,
-  identityTable,
   type RequestEvent,
   type RequestState,
   requestTable,
@@ -44,24 +45,15 @@ const urlSchema = z.url().refine((value) => {
   const url = new URL(value)
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
 }, 'Use an HTTP(S) URL without credentials, query, or fragment')
-const ruleSchema = z.enum(['always', 'approval', 'deny'])
-const durationSchema = z.enum(['15m', '30m', '1h', '1d', '7d', '30d', '90d']).default('15m')
-const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('15m')
-const durations = {
-  '15m': 900_000,
-  '30m': 1800_000,
-  '1h': 3600_000,
-  '1d': 86_400_000,
-  '7d': 604_800_000,
-  '30d': 2_592_000_000,
-  '90d': 7_776_000_000,
-}
-// Three denials of the same request within this window lock it: it is answered as denied, without asking the owner,
-// until the window after the third denial has passed.
+const durations = { '30m': 1800_000, '1h': 3600_000, '2h': 7200_000, '1d': 86_400_000, '30d': 2_592_000_000 }
+const durationSchema = z.enum(['30m', '1h', '2h', '1d', '30d']).default('2h')
+const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
+// Three denials of the same item for the same agent within this window lock it: it is answered as denied, without
+// asking the owner, until the window after the third denial has passed.
 const denialLimit = 3
-const denialWindow = durations['15m']
-// An `always` policy grants a session access without a request, for at most this long after its approval.
-const alwaysLimit = durations['90d']
+const denialWindow = 15 * 60_000
+const requestLifetime = 2 * 3600_000
+const agentIdleLimit = 7 * 86_400_000
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
 const mcpReadMethods = new Set([
   'initialize',
@@ -94,152 +86,164 @@ const authSchema = z.discriminatedUnion('type', [
   // The secret is a URL path segment (for example a webhook id) spliced in after the base URL.
   z.object({ type: z.literal('path'), secret: idSchema }),
 ])
-const providerSchema = z.object({
+const serviceSchema = z.object({
   baseUrl: urlSchema,
-  guide: z.string().max(20_000).optional(),
+  notes: z.string().max(20_000).optional(),
   auth: authSchema,
-  policy: z.object({ read: ruleSchema, write: ruleSchema }),
+  // open: any agent reads without a grant; ask: a grant is needed; never: never granted.
+  read: z.enum(['open', 'ask', 'never']).default('ask'),
+  write: z.enum(['ask', 'never']).default('ask'),
+  // POST paths that only read (for example a search endpoint).
+  readPaths: z.array(z.string().startsWith('/')).optional(),
   // Streamable-HTTP MCP server: POST bodies are classified by JSON-RPC method and tool annotations.
   mcp: z.boolean().optional(),
 })
-const kinds = ['credential', 'secret', 'site', 'folder', 'mcp', 'extension'] as const
+// Items are strings; the pattern table doubles as the list of accepted forms in error messages.
+const itemPatterns = {
+  service: /^[a-zA-Z0-9_-]+\.(read|full)$/,
+  site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
+  secret: /^secret:[A-Za-z0-9_]+(@[^@\s]+)?$/,
+  folder: /^folder:[a-zA-Z0-9_-]+(:rw)?$/,
+  mcp: /^mcp:[a-zA-Z0-9_-]+$/,
+  ext: /^ext:[a-zA-Z0-9_-]+$/,
+  group: /^group:[a-zA-Z0-9_-]+$/,
+}
+const itemForms = [
+  '<service>.read',
+  '<service>.full',
+  'site:<host>',
+  'secret:<NAME>',
+  'folder:<share>[:rw]',
+  'mcp:<id>',
+  'ext:<id>',
+  'group:<name>',
+]
+const kindOf = (item: string) => Object.entries(itemPatterns).find(([, pattern]) => pattern.test(item))?.[0]
+const itemSchema = z
+  .string()
+  .trim()
+  .refine((item) => kindOf(item) !== undefined, `An item is one of: ${itemForms.join(', ')}`)
+// Item kinds a sandbox host may declare it enforces.
+const hostKinds = ['secret', 'site', 'folder', 'mcp', 'ext'] as const
 // SHA-256 of the empty string: what a setup that never wrote its token file sends.
 const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 const hashSchema = z
   .string()
   .regex(/^[a-f0-9]{64}$/, 'tokenHash must be 64 lowercase hex characters (SHA-256 of the token)')
   .refine((value) => value !== emptyHash, 'tokenHash is the hash of an empty token; write the token first')
-const statusSchema = z.enum(identityStates)
-const capabilitySchema = z.object({ kind: z.string(), ref: z.string().trim().min(1).max(500) })
-const bundleMembersSchema = z.array(capabilitySchema.extend({ kind: z.enum(kinds) }))
-const bundleDescriptionSchema = z
+const groupDescriptionSchema = z
   .string()
   .trim()
   .max(200)
   .regex(/^[^\r\n]*$/)
   .optional()
-// bundles.json maps a name to `{ description, members }`; the older bare members array is still accepted.
-const bundlesSchema = z.record(
-  idSchema,
-  z
-    .union([bundleMembersSchema, z.object({ description: bundleDescriptionSchema, members: bundleMembersSchema })])
-    .transform((value) => (Array.isArray(value) ? { members: value } : value)),
-)
-const enforcerSchema = z.object({
+const groupItemsSchema = z.array(itemSchema.refine((item) => kindOf(item) !== 'group', 'Groups cannot contain groups'))
+const groupsSchema = z.record(idSchema, z.object({ description: groupDescriptionSchema, items: groupItemsSchema }))
+const hostSchema = z.object({
   id: idSchema,
   name: z.string().trim().min(1).max(100),
-  kinds: z.array(z.enum(kinds)).max(kinds.length),
+  kinds: z.array(z.enum(hostKinds)).max(hostKinds.length),
   tokenHash: hashSchema,
-  status: statusSchema,
+  status: z.enum(hostStates),
 })
-const sessionSchema = z.object({
-  id: idSchema,
+const reasonSchema = z.string().trim().min(1).max(500)
+const identitySchema = z.object({
   label: z.string().trim().min(1).max(200),
-  llmName: z.string().trim().min(1).max(120).optional(),
-  harness: z.string().trim().min(1).max(120).optional(),
-  tokenHash: hashSchema,
+  agent: z.string().trim().min(1).max(120).default('unknown'),
+})
+const requestSchema = z.object({
+  want: z.array(itemSchema).min(1).max(50),
+  reason: reasonSchema,
   duration: durationSchema,
-  status: statusSchema,
-  expiresAt: z.string().nullable(),
-  approvedAt: z.string().optional(),
-  // Address the session enrolled from; its token is refused from anywhere else.
-  source: z.string().max(100).optional(),
-  enrolledAt: z.string().optional(),
-  // Span the owner approved; the owner's Extend adds it again.
-  grantedMs: z.number().int().positive().optional(),
+  sshKey: sshRequestSchema.shape.publicKey.optional(),
 })
-const requestInputSchema = z
-  .object({
-    capability: capabilitySchema.optional(),
-    bundle: idSchema.optional(),
-    reason: z.string().trim().min(1).max(500),
+// Enrollment carries the identity and, optionally, the first request (want may be empty).
+const enrollSchema = identitySchema
+  .extend({
+    tokenHash: hashSchema,
+    want: z.array(itemSchema).max(50).default([]),
+    reason: reasonSchema.optional(),
     duration: durationSchema,
+    sshKey: sshRequestSchema.shape.publicKey.optional(),
   })
-  .refine((value) => Boolean(value.capability) !== Boolean(value.bundle), 'Send either capability or bundle')
-const sessionEnrollmentSchema = sessionSchema
-  .pick({ label: true, tokenHash: true, duration: true, harness: true })
-  .extend({ llmName: z.string().trim().min(1).max(120), request: requestInputSchema.optional() })
-const subjectSchema = z.object({ id: idSchema, label: z.string(), enforcer: idSchema, tokenHash: hashSchema })
-const leaseSchema = z.object({
-  id: idSchema,
-  subjectId: idSchema,
-  kind: z.string(),
-  ref: z.string(),
-  expiresAt: z.string().nullable(),
-  grantedMs: z.number().int().positive().optional(),
+  .refine((value) => value.want.length === 0 || value.reason, {
+    message: 'reason is required with want',
+    path: ['reason'],
+  })
+const listSchema = z.union([z.string(), z.array(z.string())]).transform((value) => [value].flat())
+const decisionSchema = z.object({
+  duration: adminDurationSchema,
+  permanent: z.literal('on').optional(),
+  items: listSchema.optional(),
 })
-const usageSchema = z.object({
-  uses: z.number().int().nonnegative(),
-  lastUsedAt: z.number().int().nonnegative().nullable(),
-})
-const usageStoreSchema = z.object({
-  leases: z.record(idSchema, usageSchema).default({}),
-  identities: z.record(idSchema, usageSchema).default({}),
-})
-export type Provider = z.infer<typeof providerSchema>
-export type Capability = z.infer<typeof capabilitySchema>
-export type Bundle = z.infer<typeof bundlesSchema>[string]
-export type Enforcer = z.infer<typeof enforcerSchema>
-export type Session = z.infer<typeof sessionSchema>
-export type Lease = z.infer<typeof leaseSchema>
-type Usage = { uses: number; lastUsedAt: number | null }
-export type LeaseView = Lease & Usage & { label: string; llmName?: string; state: 'active' | 'granted' | 'waiting' }
-type EnforcerView = Enforcer & Usage
-type SessionView = Session & Usage
-const decisionSchema = z.object({ duration: adminDurationSchema, permanent: z.literal('on').optional() })
+
+export type Service = z.infer<typeof serviceSchema>
+export type Group = z.infer<typeof groupsSchema>[string]
+export type Host = z.infer<typeof hostSchema>
 type Duration = z.infer<typeof adminDurationSchema>
-type SshDuration = z.infer<typeof durationSchema>
-export type Pending = {
+type Usage = { uses: number; lastUsedAt: number | null }
+export type Agent = Usage & {
   id: string
-  subjectId: string
+  tokenHash: string
   label: string
-  llmName?: string
-  harness?: string
-  enforcer?: string
-  members: Capability[]
-  // Filed with the session's enrollment; approving the session approves it too.
-  atEnrollment?: boolean
-  bundle?: string
-  method?: string
-  path?: string
+  agent: string
+  // Address the agent enrolled from (a sandboxed agent: its sandbox host's); its token is refused elsewhere.
+  source: string
+  // The sandbox host that created it, for a sandboxed agent.
+  host?: string
+  sshKey?: string
+  createdAt: number
+  lastSeen: number
+}
+export type Grant = Usage & {
+  id: string
+  agentId: string
+  item: string
+  // null: until revoked (owner only).
+  expiresAt: string | null
+  // The span the owner approved; Extend adds it again.
+  grantedMs?: number
+  status: GrantState
+  requestId: string
+}
+export type Request = {
+  id: string
+  agentId: string
+  // Items still awaiting the owner; granted and denied are the decided ones.
+  items: string[]
+  want: string[]
+  granted: string[]
+  denied: string[]
   reason: string
   duration: z.infer<typeof durationSchema>
   status: RequestState
-  /** Set on approval: the leases it created and when they end (null: until revoked). */
-  leaseIds: string[]
-  expiresAt: number | null
-  ssh?: SshRequest & { hostname: string; port: number; fingerprint: string; maxDuration: SshDuration }
+  // The service call that filed it, if any.
+  trigger?: string
+  // When the granted items end (null: until revoked).
+  expiresAt?: number | null
+  grantIds: string[]
+  ssh?: SshRequest & {
+    hostname: string
+    port: number
+    fingerprint: string
+    maxDuration: z.infer<typeof durationSchema>
+  }
   certificate?: string
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
   decidedAt?: number
 }
-export type View = {
-  enforcers: EnforcerView[]
-  sessions: SessionView[]
-  requests: Pending[]
-  leases: LeaseView[]
-  // Providers any approved session may read without a request (shown when approving a session).
-  always: string[]
-}
-export type LogEntry = {
-  time: string
-  event: string
-  subject?: string
-  enforcerId?: string
-  label?: string
-  llmName?: string
-  harness?: string
-  [field: string]: unknown
-}
-const logLimit = 5 * 1024 * 1024
-type Caller = { role: 'enforcer'; enforcer: Enforcer } | { role: 'subject'; id: string; kinds: string[] }
+export type GrantView = Grant & { label: string; agent: string; state: 'active' | 'granted' | 'waiting' }
+export type AgentView = Agent & { sandboxHost?: string; grants: number }
+export type View = { hosts: Host[]; agents: AgentView[]; requests: Request[]; grants: GrantView[] }
+export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
+
+type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
 type Env = { Variables: { caller: Caller } }
 const demoSecret = 'speaker-demo-credential-not-for-real-services'
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
-const audit = (event: string, fields: Record<string, unknown> = {}) =>
-  console.log(JSON.stringify({ time: new Date().toISOString(), event, ...fields }))
+const union = (...lists: string[][]) => [...new Set(lists.flat())]
 
 export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
   return z
@@ -251,7 +255,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
         .refine((value) => value !== 'change-this-password', 'Set a real admin password'),
       DATA_DIR: z.string().default('./data'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-      // Required: approval links and the admin CSRF origin use it.
+      // Required: push links and the admin CSRF origin use it.
       PUBLIC_URL: urlSchema,
       NTFY_URL: urlSchema.optional(),
       NTFY_TOPIC: z
@@ -262,13 +266,8 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       // Enables SSH certificates; DATA_DIR/ssh-hosts.json must then list the target hosts.
       SSH_CA_KEY: z.string().min(1).optional(),
       SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
-      // When on, GET /_speaker/providers answers without a token (names, auth type and policy only).
       // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
-      PUBLIC_PROVIDERS: z
-        .enum(['0', '1', 'false', 'true'])
-        .default('0')
-        .transform((value) => value === '1' || value === 'true'),
     })
     .refine((value) => Boolean(value.NTFY_URL) === Boolean(value.NTFY_TOPIC), 'Set both NTFY_URL and NTFY_TOPIC')
     .parse(environment)
@@ -284,52 +283,52 @@ async function optionalFile(path: string): Promise<string | undefined> {
 }
 export const wss = new WebSocketServer({ noServer: true })
 const save = (path: string, value: unknown) => writeFile(path, JSON.stringify(value, null, 2), { mode: 0o600 })
+const invalid = (message: string, accepted?: string[], status: 400 | 404 = 400) =>
+  new HTTPException(status, {
+    res: Response.json({ error: 'invalid', message, ...(accepted ? { accepted } : {}) }, { status }),
+  })
 
 export async function createApp(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
-  const helpDir = new URL('./skill/help/', import.meta.url)
-  const help = new Map(
+  const help = (
     await Promise.all(
-      (await readdir(helpDir))
-        .filter((name) => name.endsWith('.md'))
-        .map(async (name) => [name.slice(0, -3), await readFile(new URL(name, helpDir), 'utf8')] as const),
-    ),
-  )
+      ['setup', 'requests', 'ssh', 'sandbox'].map((name) =>
+        readFile(new URL(`./skill/help/${name}.md`, import.meta.url), 'utf8'),
+      ),
+    )
+  ).join('\n')
   const secretPath = (id: string) => join(dataDir, 'secrets', id)
   await mkdir(join(dataDir, 'secrets'), { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
-  const providersFile = file('providers.json')
+  const servicesFile = file('services.json')
   const starter = z
-    .record(idSchema, providerSchema)
-    .parse(JSON.parse(await readFile(new URL('./providers.example.json', import.meta.url), 'utf8')))
+    .record(idSchema, serviceSchema)
+    .parse(JSON.parse(await readFile(new URL('./services.example.json', import.meta.url), 'utf8')))
   starter.demo.baseUrl = `http://127.0.0.1:${config.PORT}/_demo-upstream`
-  const stored = await optionalFile(providersFile),
-    imported = file('.starter-providers-imported')
-  const providers = stored === undefined ? starter : z.record(idSchema, providerSchema).parse(JSON.parse(stored))
-  // Preserve the existing one-time starter import; never resurrect providers deleted in the UI.
+  const stored = await optionalFile(servicesFile),
+    imported = file('.starter-services-imported')
+  const services = stored === undefined ? starter : z.record(idSchema, serviceSchema).parse(JSON.parse(stored))
+  // One-time starter import; never resurrect services deleted in the UI.
   if (stored === undefined || (await optionalFile(imported)) === undefined) {
-    for (const [id, provider] of Object.entries(starter)) {
-      if (!Object.hasOwn(providers, id)) providers[id] = provider
+    for (const [id, service] of Object.entries(starter)) {
+      if (!Object.hasOwn(services, id)) services[id] = service
     }
-    await save(providersFile, providers)
-    if (providers.demo && (await optionalFile(secretPath('demo'))) === undefined)
+    await save(servicesFile, services)
+    if (services.demo && (await optionalFile(secretPath('demo'))) === undefined)
       await writeFile(secretPath('demo'), demoSecret, { mode: 0o600 })
     await writeFile(imported, 'done', { mode: 0o600 })
   }
-  const loadList = async <T extends z.ZodType<{ id: string }>>(name: string, schema: T) =>
-    new Map(
-      z
-        .array(schema)
-        .parse(JSON.parse((await optionalFile(file(name))) ?? '[]'))
-        .map((item) => [item.id, item as z.infer<T>]),
-    )
-  const saveList = (name: string, items: Map<string, unknown>) => save(file(name), [...items.values()])
-  const bundles = bundlesSchema.parse(JSON.parse((await optionalFile(file('bundles.json'))) ?? '{}'))
-  const enforcers = await loadList('enforcers.json', enforcerSchema)
-  const sessions = await loadList('sessions.json', sessionSchema)
-  const subjects = await loadList('subjects.json', subjectSchema)
-  let leases = await loadList('permanent-leases.json', leaseSchema)
+  const groupsFile = file('groups.json')
+  const groups = groupsSchema.parse(JSON.parse((await optionalFile(groupsFile)) ?? '{}'))
+  const hostsFile = file('hosts.json')
+  const hosts = new Map(
+    z
+      .array(hostSchema)
+      .parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
+      .map((host) => [host.id, host]),
+  )
+  const saveHosts = () => save(hostsFile, [...hosts.values()])
   const ssh = config.SSH_CA_KEY
     ? {
         caKey: config.SSH_CA_KEY,
@@ -337,124 +336,114 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         hosts: sshHostsSchema.parse(JSON.parse(await readFile(file('ssh-hosts.json'), 'utf8'))),
       }
     : undefined
-  const storedUsage = usageStoreSchema.parse(JSON.parse((await optionalFile(file('usage.json'))) ?? '{}'))
   const secrets = new Map(
     await Promise.all(
-      Object.entries(providers).map(
-        async ([id, provider]) => [id, await optionalFile(secretPath(provider.auth.secret))] as const,
+      Object.entries(services).map(
+        async ([id, service]) => [id, await optionalFile(secretPath(service.auth.secret))] as const,
       ),
     ),
   )
-  const pending = new Map<string, Pending>()
+  // Agents, grants, requests and usage live in memory only: a restart starts them empty.
+  const agents = new Map<string, Agent>()
+  const grants = new Map<string, Grant>()
+  const requests = new Map<string, Request>()
+  // Token hashes of revoked agents: they answer `denied` rather than `enroll` until restart.
+  const revoked = new Set<string>()
   const sockets = new Map<string, WSContext>()
   const applied = new Map<string, Set<string>>()
-  const leaseUsage = new Map(Object.entries(storedUsage.leases))
-  const identityUsage = new Map(Object.entries(storedUsage.identities))
-  const emptyUsage = (): Usage => ({ uses: 0, lastUsedAt: null })
-  const useStats = (map: Map<string, Usage>, id: string) => map.get(id) ?? emptyUsage()
-  // Write queues: the caller awaits and surfaces a failed write; the queue logs it and keeps serving later writes.
-  const writeFailed = (queue: string) => (error: unknown) => audit('write_failed', { queue, error: String(error) })
-  let usageWrites: Promise<unknown> = Promise.resolve()
-  const persistUsage = () => {
-    const result = usageWrites.then(() =>
-      save(file('usage.json'), {
-        leases: Object.fromEntries(leaseUsage),
-        identities: Object.fromEntries(identityUsage),
-      }),
-    )
-    usageWrites = result.catch(writeFailed('usage'))
-    return result
+  const strikes = new Map<string, number[]>()
+  // The log: every event goes to standard output and into this buffer, which the admin Log page reads.
+  const logged: LogEntry[] = []
+  const audit = (event: string, fields: Record<string, unknown> = {}) => {
+    const who = typeof fields.agent === 'string' ? agents.get(fields.agent) : undefined
+    const entry: LogEntry = {
+      time: new Date().toISOString(),
+      event,
+      ...fields,
+      ...(who ? { label: who.label, agentName: who.agent } : {}),
+    }
+    console.log(JSON.stringify(entry))
+    if (logged.unshift(entry) > 500) logged.pop()
   }
   let version = 0
   const rid = () => randomBytes(16).toString('hex')
-  const unexpired = (item: { expiresAt: string | null }) =>
-    item.expiresAt === null || Date.parse(item.expiresAt) > Date.now()
+  const live = (grant: { expiresAt: string | null }) =>
+    grant.expiresAt === null || Date.parse(grant.expiresAt) > Date.now()
   const expiry = (duration: Duration) =>
     duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
-  // sweep() applies clock-driven transitions before every HTTP request and snapshot, so stored status is current.
-  const liveSession = (session: Session) => session.status === 'approved'
-  function move(request: Pending, event: RequestEvent, fields: Record<string, unknown> = {}) {
+  function moveRequest(request: Request, event: RequestEvent) {
     const from = request.status
     request.status = transition('request', requestTable, from, event)
-    audit(`request_${request.status}`, { requestId: request.id, subject: request.subjectId, from, ...fields })
+    audit(`request_${request.status}`, {
+      request: request.id,
+      agent: request.agentId,
+      from,
+      granted: request.granted,
+      denied: request.denied,
+    })
   }
-  function moveIdentity(
-    kind: 'enforcer' | 'session',
-    item: { id: string; status: IdentityState },
-    event: IdentityEvent,
-  ) {
-    item.status = transition(kind, identityTable, item.status, event)
-    audit(`${kind}_${item.status}`, { [kind]: item.id })
+  function moveGrant(grant: Grant, event: GrantEvent) {
+    grant.status = transition('grant', grantTable, grant.status, event)
+    audit(`grant_${grant.status}`, { grant: grant.id, agent: grant.agentId, item: grant.item })
   }
+  // Applies clock-driven transitions before every HTTP request: expired grants and requests, idle agents.
   function sweep() {
     const now = Date.now()
-    for (const request of pending.values()) {
-      if (request.status === 'pending' && now - request.createdAt >= durations['15m']) move(request, 'expire')
-      if (request.status === 'approved' && request.expiresAt !== null && request.expiresAt <= now)
-        move(request, 'expire')
+    let ended = false
+    for (const grant of grants.values())
+      if (!live(grant)) {
+        moveGrant(grant, 'expire')
+        grants.delete(grant.id)
+        ended = true
+      }
+    for (const [id, request] of requests) {
+      if (request.status === 'pending' && now - request.createdAt >= requestLifetime) moveRequest(request, 'expire')
+      if (request.status !== 'pending' && now - (request.decidedAt ?? request.createdAt) >= 86_400_000)
+        requests.delete(id)
     }
-    const ended = [...sessions.values()].filter(
-      (session) => session.status === 'approved' && session.expiresAt !== null && Date.parse(session.expiresAt) <= now,
-    )
-    for (const session of ended) moveIdentity('session', session, 'expire')
-    // Memory is authoritative until restart; a failed save is logged and the next sweep after restart expires again.
-    if (ended.length) saveList('sessions.json', sessions).catch(writeFailed('sessions'))
+    const hasGrant = (id: string) => [...grants.values()].some((grant) => grant.agentId === id)
+    for (const agent of agents.values())
+      if (now - agent.lastSeen > agentIdleLimit && !hasGrant(agent.id)) agents.delete(agent.id)
+    if (ended) push()
   }
-  // Sessions approved before approvedAt existed start their `always` window now rather than never ending it.
-  for (const session of sessions.values())
-    if (session.status === 'approved' && !session.approvedAt) session.approvedAt = new Date().toISOString()
-  // When an approved session's `always` access ends: 90 days after approval, or sooner if the session ends first.
-  // Enforcer subjects (sandboxes) are bounded by their task and have no such window.
-  const alwaysEnds = (callerId: string) => {
-    const session = sessions.get(callerId)
-    if (!session?.approvedAt) return null
-    const cap = Date.parse(session.approvedAt) + alwaysLimit
-    return new Date(session.expiresAt === null ? cap : Math.min(cap, Date.parse(session.expiresAt))).toISOString()
-  }
-  // `always` turns into `approval` once the caller's window has passed.
-  const ruleFor = (provider: Provider, group: 'read' | 'write', callerId: string) => {
-    const rule = provider.policy[group]
-    const end = alwaysEnds(callerId)
-    return rule === 'always' && end !== null && Date.parse(end) <= Date.now() ? 'approval' : rule
-  }
-  // The upstream URL for an agent-facing path, or undefined when it would leave the provider's base path.
-  const upstreamUrl = (provider: Provider, secret: string, parts: string[], search: string) => {
-    const base = new URL(provider.baseUrl),
+  // The upstream URL for an agent-facing path, or undefined when it would leave the service's base path.
+  const upstreamUrl = (service: Service, secret: string, parts: string[], search: string) => {
+    const base = new URL(service.baseUrl),
       target = new URL(base.origin)
     const prefix = `${base.pathname.replace(/\/$/, '')}/`
     const rest = parts.join('/')
     target.pathname =
-      provider.auth.type === 'path'
+      service.auth.type === 'path'
         ? `${prefix}${encodeURIComponent(secret)}${parts.length ? `/${rest}` : ''}`
         : prefix + rest
     target.search = search
     return target.origin === base.origin && target.pathname.startsWith(prefix) ? target : undefined
   }
-  const applyCredential = (provider: Provider, secret: string, headers: Headers) => {
-    if (provider.auth.type === 'path') return
-    if (provider.auth.type === 'header') headers.set(provider.auth.headerName, secret)
+  const applyCredential = (service: Service, secret: string, headers: Headers) => {
+    if (service.auth.type === 'path') return
+    if (service.auth.type === 'header') headers.set(service.auth.headerName, secret)
     else
       headers.set(
         'authorization',
-        provider.auth.type === 'basic' ? `Basic ${Buffer.from(secret).toString('base64')}` : `Bearer ${secret}`,
+        service.auth.type === 'basic' ? `Basic ${Buffer.from(secret).toString('base64')}` : `Bearer ${secret}`,
       )
   }
   type McpTool = { readOnly: boolean; destructive: boolean; annotated: boolean }
   const mcpTools = new Map<string, { at: number; tools: Map<string, McpTool> }>()
-  // Lists an MCP provider's tools with speaker's own credentialed session (initialize, tools/list, close).
+  // Lists an MCP service's tools with speaker's own credentialed session (initialize, tools/list, close).
   async function listMcpTools(id: string) {
-    const provider = providers[id],
+    const service = services[id],
       secret = secrets.get(id)
-    if (!provider || secret === undefined) throw new Error('MCP provider or credential missing')
-    const url = upstreamUrl(provider, secret, [], '')
-    if (!url) throw new Error('Invalid MCP provider URL')
+    if (!service || secret === undefined) throw new Error('MCP service or credential missing')
+    const url = upstreamUrl(service, secret, [], '')
+    if (!url) throw new Error('Invalid MCP service URL')
     let sessionId: string | undefined
     let version: string | undefined
     const rpc = async (body: { id?: number; method: string; params?: object }, method = 'POST') => {
       const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' })
       if (sessionId) headers.set('mcp-session-id', sessionId)
       if (version) headers.set('mcp-protocol-version', version)
-      applyCredential(provider, secret, headers)
+      applyCredential(service, secret, headers)
       const response = await fetch(url, {
         method,
         headers,
@@ -495,7 +484,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     } while (cursor)
     if (sessionId) await rpc({ method: 'session/close' }, 'DELETE').catch(() => undefined)
     mcpTools.set(id, { at: Date.now(), tools })
-    audit('mcp_tools_listed', { provider: id, tools: tools.size })
+    audit('mcp_tools_listed', { service: id, tools: tools.size })
     return tools
   }
   // Cached tool annotations, refreshed every 10 minutes or when an unknown tool is called (at most every 30s).
@@ -503,7 +492,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const cached = mcpTools.get(id)
     const age = cached ? Date.now() - cached.at : Number.POSITIVE_INFINITY
     if (age > 600_000 || (!cached?.tools.has(name) && age > 30_000))
-      await listMcpTools(id).catch(() => audit('mcp_tools_failed', { provider: id }))
+      await listMcpTools(id).catch(() => audit('mcp_tools_failed', { service: id }))
     return mcpTools.get(id)?.tools.get(name)
   }
   // Classifies one MCP POST body: protocol housekeeping and read-only tools are reads; anything else is a write.
@@ -512,7 +501,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     try {
       parsed = JSON.parse(body)
     } catch {
-      return { group: 'write' as const, detail: 'unparseable MCP body' }
+      return { write: true, detail: 'unparseable MCP body' }
     }
     const notes: string[] = []
     for (const message of Array.isArray(parsed) ? parsed : [parsed]) {
@@ -525,24 +514,29 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         notes.push(`${name}${tool ? (tool.destructive ? ' (destructive)' : '') : ' (unknown tool)'}`)
       } else notes.push(method)
     }
-    return { group: notes.length ? ('write' as const) : ('read' as const), detail: notes.join(', ') }
+    return { write: notes.length > 0, detail: notes.join(', ') }
   }
 
-  const snapshot = (enforcerId: string) => ({
+  // What a sandbox host enforces: every active grant of its agents, and their requests.
+  const hostOf = (agent: { host?: string }) => (agent.host ? hosts.get(agent.host) : undefined)
+  const snapshot = (hostId: string) => ({
     type: 'snapshot',
     version,
-    leases: [...leases.values()].filter((l) => unexpired(l) && subjects.get(l.subjectId)?.enforcer === enforcerId),
-    requests: [...pending.values()]
-      .filter((r) => subjects.get(r.subjectId)?.enforcer === enforcerId)
-      .map((r) => ({
-        id: r.id,
-        subjectId: r.subjectId,
-        status: r.status,
-        what: r.bundle ? `bundle ${r.bundle}` : r.members.map((m) => `${m.kind} ${m.ref}`).join(', '),
-        reason: r.reason,
+    grants: [...grants.values()]
+      .filter((grant) => live(grant) && agents.get(grant.agentId)?.host === hostId)
+      .map(({ id, agentId, item, expiresAt }) => ({ id, agentId, item, expiresAt })),
+    requests: [...requests.values()]
+      .filter((request) => agents.get(request.agentId)?.host === hostId)
+      .map((request) => ({
+        id: request.id,
+        agentId: request.agentId,
+        status: request.status,
+        what: request.items.join(', '),
+        reason: request.reason,
       })),
   })
-  const push = () => {
+  function push() {
+    version++
     for (const [id, ws] of sockets) ws.send(JSON.stringify(snapshot(id)))
   }
   setInterval(() => {
@@ -550,243 +544,116 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     push()
   }, 10_000).unref()
 
-  // Serialize read/modify/write operations, including approval decisions. A failed
-  // write reaches its caller without poisoning subsequent operations in the queue.
-  let leaseWrites: Promise<unknown> = Promise.resolve()
+  // Serialize decisions; a failed one reaches its caller without poisoning the queue.
+  let queue: Promise<unknown> = Promise.resolve()
   function serial<T>(operation: () => T | Promise<T>): Promise<T> {
-    const result = leaseWrites.then(operation)
-    leaseWrites = result.catch(writeFailed('leases'))
+    const result = queue.then(operation)
+    queue = result.catch(() => undefined)
     return result
   }
-  async function commitLeases(next: Map<string, Lease>) {
-    await save(
-      file('permanent-leases.json'),
-      [...next.values()].filter((lease) => lease.expiresAt === null),
-    )
-    leases = next
-    version++
+  const serviceItem = (item: string) => {
+    const [, id, level] = /^([a-zA-Z0-9_-]+)\.(read|full)$/.exec(item) ?? []
+    return id ? { id, write: level === 'full' } : undefined
+  }
+  const grantFor = (agentId: string, item: string) =>
+    [...grants.values()].find((grant) => live(grant) && grant.agentId === agentId && grant.item === item)
+  // `.full` includes read, so either item covers a read.
+  const coverFor = (agentId: string, service: string, write: boolean) =>
+    grantFor(agentId, `${service}.full`) ?? (write ? undefined : grantFor(agentId, `${service}.read`))
+  const useOf = (target: Usage) => {
+    target.uses++
+    target.lastUsedAt = Date.now()
+  }
+  function addGrant(request: Request, item: string, expiresAt: string | null, duration: Duration) {
+    for (const old of [...grants.values()])
+      if (old.agentId === request.agentId && old.item === item) grants.delete(old.id)
+    const grant: Grant = {
+      id: rid(),
+      agentId: request.agentId,
+      item,
+      expiresAt,
+      status: 'active',
+      requestId: request.id,
+      uses: 0,
+      lastUsedAt: null,
+    }
+    if (duration !== 'permanent') grant.grantedMs = durations[duration]
+    grants.set(grant.id, grant)
+    request.grantIds.push(grant.id)
+    audit('grant_created', { grant: grant.id, agent: grant.agentId, item, expiresAt })
+  }
+  const revokeGrants = (matches: (grant: Grant) => boolean) => {
+    for (const grant of [...grants.values()])
+      if (matches(grant)) {
+        moveGrant(grant, 'revoke')
+        grants.delete(grant.id)
+      }
     push()
   }
-  const matchingLease = (subjectId: string, kind: string, ref: string) =>
-    [...leases.values()].find((l) => unexpired(l) && l.subjectId === subjectId && l.kind === kind && l.ref === ref)
-  const hasLease = (subjectId: string, kind: string, ref: string) => Boolean(matchingLease(subjectId, kind, ref))
-  // Counts a proxied call for the caller (and its enforcer), and for the lease when one authorized it.
-  // `always` calls have no lease but still count as the identity's use.
-  const recordUse = async (leaseId: string | undefined, subjectId: string) => {
-    const now = Date.now()
-    for (const [map, id] of [
-      [leaseUsage, leaseId],
-      [identityUsage, subjectId],
-    ] as const) {
-      if (id === undefined) continue
-      const previous = useStats(map, id)
-      map.set(id, { uses: previous.uses + 1, lastUsedAt: now })
-    }
-    const enforcerId = subjects.get(subjectId)?.enforcer
-    if (enforcerId) {
-      const previous = useStats(identityUsage, enforcerId)
-      identityUsage.set(enforcerId, { uses: previous.uses + 1, lastUsedAt: now })
-    }
-    await persistUsage()
+  const strikeKey = (agentId: string, item: string) => `${agentId}\n${item}`
+  const recentStrikes = (key: string) => (strikes.get(key) ?? []).filter((at) => Date.now() - at < denialWindow)
+  // When asking the owner works again for an item denied three times (a time in ms), else undefined.
+  const lockedUntil = (agentId: string, item: string) => {
+    const struck = recentStrikes(strikeKey(agentId, item))
+    return struck.length >= denialLimit ? struck[struck.length - 1] + denialWindow : undefined
   }
-  // Approved requests whose leases are removed move to `event` (revoke, or supersede when a new approval replaces them).
-  const endApprovals = (removed: Set<string>, event: 'revoke' | 'supersede') => {
-    for (const request of pending.values())
-      if (request.status === 'approved' && request.leaseIds.some((id) => removed.has(id))) move(request, event)
+  const retryAfter = (agentId: string, items: string[]) => {
+    const until = Math.max(0, ...items.map((item) => lockedUntil(agentId, item) ?? 0))
+    return until ? new Date(until).toISOString() : undefined
   }
-  // Append-only JSONL access log next to the audit stdout lines; one queue keeps lines from interleaving.
-  const logPath = file('access-log.jsonl'),
-    logOld = file('access-log.1.jsonl')
-  let logQueue: Promise<unknown> = Promise.resolve()
-  const logEvent = (event: string, subjectId: string | undefined, fields: Record<string, unknown>) => {
-    const known = subjectId !== undefined && (subjects.has(subjectId) || sessions.has(subjectId))
-    const who = known ? owner(subjectId) : undefined
-    const line = `${JSON.stringify({
-      time: new Date().toISOString(),
-      event,
-      subject: subjectId,
-      enforcerId: subjects.get(subjectId ?? '')?.enforcer,
-      label: who?.label,
-      llmName: who?.llmName,
-      harness: who?.harness,
-      ...fields,
-    })}\n`
-    logQueue = logQueue
-      .then(async () => {
-        const size = await stat(logPath).then(
-          (s) => s.size,
-          () => 0,
-        )
-        if (size > logLimit) await rename(logPath, logOld)
-        await appendFile(logPath, line, { mode: 0o600 })
-      })
-      .catch((error) => console.error(`access log write failed: ${error.message}`))
-    return logQueue
-  }
-  const readLog = async (match: (entry: LogEntry) => boolean, limit = 200) => {
-    await logQueue
-    const found: LogEntry[] = []
-    for (const path of [logPath, logOld]) {
-      const text = await optionalFile(path)
-      if (text === undefined) continue
-      const lines = text.split('\n').filter(Boolean)
-      for (let i = lines.length - 1; i >= 0 && found.length < limit; i--) {
-        const entry = JSON.parse(lines[i]) as LogEntry
-        if (match(entry)) found.push(entry)
-      }
-      if (found.length >= limit) break
-    }
-    return found
-  }
-  const removeLeases = (matches: (lease: Lease) => boolean) =>
-    serial(async () => {
-      const removed = new Set([...leases.values()].filter(matches).map((lease) => lease.id))
-      await commitLeases(new Map([...leases].filter(([id]) => !removed.has(id))))
-      endApprovals(removed, 'revoke')
-    })
-  const owner = (subjectId: string) => {
-    const subject = subjects.get(subjectId)
-    if (subject)
-      return {
-        label: subject.label,
-        llmName: undefined,
-        harness: undefined,
-        enforcer: enforcers.get(subject.enforcer)?.name,
-      }
-    const session = sessions.get(subjectId)
-    if (session)
-      return { label: session.label, llmName: session.llmName, harness: session.harness, enforcer: undefined }
-    throw new HTTPException(404, { message: 'Unknown subject' })
-  }
-  function leaseState(lease: Lease): LeaseView['state'] {
-    const enforcerId = subjects.get(lease.subjectId)?.enforcer
-    if (lease.kind === 'credential' || !enforcerId) return 'active'
-    if (!sockets.has(enforcerId)) return 'waiting'
-    return applied.get(enforcerId)?.has(lease.id) ? 'active' : 'granted'
-  }
-  const view = (): View => ({
-    enforcers: [...enforcers.values()].map((enforcer) => ({ ...enforcer, ...useStats(identityUsage, enforcer.id) })),
-    sessions: [...sessions.values()].map((session) => ({ ...session, ...useStats(identityUsage, session.id) })),
-    requests: [...pending.values()],
-    leases: [...leases.values()].filter(unexpired).map((lease) => {
-      const { label, llmName } = owner(lease.subjectId)
-      return { ...lease, ...useStats(leaseUsage, lease.id), label, llmName, state: leaseState(lease) }
-    }),
-    always: Object.entries(providers)
-      .filter(([, provider]) => provider.policy.read === 'always')
-      .map(([id]) => id),
-  })
-  // Checks the decision is legal before any side effect; move() then records it.
-  function decidable(id: string, event: 'approve' | 'deny') {
-    const request = pending.get(id)
-    if (!request) throw new HTTPException(404, { message: 'Request not found' })
-    transition('request', requestTable, request.status, event)
-    const session = sessions.get(request.subjectId)
-    if (
-      !(subjects.has(request.subjectId) || (session && liveSession(session))) ||
-      request.members.some((m) => m.kind === 'credential' && !Object.hasOwn(providers, m.ref.split('.')[0]))
-    )
-      throw new HTTPException(409, { message: 'Subject or provider was removed' })
-    return request
-  }
-  function approve(id: string, duration: Duration) {
-    return serial(async () => {
-      const request = decidable(id, 'approve')
-      if (request.ssh) return issueCertificate(request, request.ssh, duration)
-      const expiresAt = expiry(duration)
-      const next = new Map(leases)
-      const replaced = new Set<string>()
-      request.leaseIds = []
-      for (const { kind, ref } of request.members) {
-        for (const [key, lease] of next)
-          if (lease.subjectId === request.subjectId && lease.kind === kind && lease.ref === ref) {
-            next.delete(key)
-            replaced.add(key)
-          }
-        const lease: Lease = { id: rid(), subjectId: request.subjectId, kind, ref, expiresAt }
-        if (duration !== 'permanent') lease.grantedMs = durations[duration]
-        next.set(lease.id, lease)
-        request.leaseIds.push(lease.id)
-      }
-      await commitLeases(next)
-      endApprovals(replaced, 'supersede')
-      request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
-      move(request, 'approve', { expiresAt })
-      void logEvent('request_approved', request.subjectId, {
-        requestId: id,
-        capability: request.bundle ?? request.members,
-        reason: request.reason,
-        expiresAt,
-      })
-    })
-  }
-  // An SSH approval signs a certificate instead of creating leases; it cannot be revoked before it expires.
-  async function issueCertificate(request: Pending, order: NonNullable<Pending['ssh']>, duration: Duration) {
+  // An SSH approval signs a certificate instead of creating grants; it cannot be revoked before it expires.
+  async function issueCertificate(request: Request, order: NonNullable<Request['ssh']>, duration: Duration) {
     if (!ssh) throw new HTTPException(409, { message: 'SSH certificates are disabled' })
     if (duration === 'permanent' || durations[duration] > durations[order.maxDuration])
       throw new HTTPException(400, { message: `SSH access is limited to ${order.maxDuration}` })
-    const principal = request.members[0].ref
+    const principal = request.items[0].slice('ssh-cert:'.length)
     request.certificate = await signCertificate(ssh.caKey, {
       ...order,
       principal,
-      keyId: `speaker:${request.id}:${request.subjectId}`,
+      keyId: `speaker:${request.id}:${request.agentId}`,
       seconds: durations[duration] / 1000,
     })
-    request.expiresAt = Date.now() + durations[duration]
-    const expiresAt = new Date(request.expiresAt).toISOString()
-    move(request, 'approve', { expiresAt })
     audit('ssh_certificate_issued', {
-      requestId: request.id,
-      subject: request.subjectId,
+      request: request.id,
+      agent: request.agentId,
       principal,
       hostname: order.hostname,
       fingerprint: order.fingerprint,
       sourceAddress: order.sourceAddress,
       agentForwarding: order.agentForwarding,
       portForwarding: order.portForwarding,
-      expiresAt,
+      expiresAt: new Date(Date.now() + durations[duration]).toISOString(),
     })
   }
-  // Denial times per subject and identical member set, in memory only.
-  const denials = new Map<string, number[]>()
-  const strikeKey = (subjectId: string, members: Capability[], bundle: string | undefined) =>
-    JSON.stringify([subjectId, bundle, members])
-  const recentDenials = (key: string) => (denials.get(key) ?? []).filter((at) => Date.now() - at < denialWindow)
-  // When asking the owner works again for a request denied three times (a time in ms), else undefined.
-  const lockedUntil = (subjectId: string, members: Capability[], bundle: string | undefined) => {
-    const struck = recentDenials(strikeKey(subjectId, members, bundle))
-    return struck.length >= denialLimit ? struck[struck.length - 1] + denialWindow : undefined
-  }
-  const lockedReply = (until: number, fields: Record<string, unknown>) => ({
-    error: 'denied',
-    ...fields,
-    next: 'Stop: the owner denied this request.',
-    retry_after: new Date(until).toISOString(),
-  })
-  function deny(id: string) {
-    return serial(() => {
-      const request = decidable(id, 'deny')
-      move(request, 'deny')
+  // The owner's decision: grants exactly the listed items that are on the request now (default all) and denies the rest.
+  function decide(id: string, approved: string[] | undefined, duration: Duration) {
+    return serial(async () => {
+      const request = requests.get(id)
+      if (!request) throw new HTTPException(404, { message: 'Request not found' })
+      transition('request', requestTable, request.status, 'decide')
+      if (!agents.has(request.agentId)) throw new HTTPException(409, { message: 'Agent was removed' })
+      const take = new Set(approved ?? request.items)
+      const yes = request.items.filter((item) => take.has(item))
+      const no = request.items.filter((item) => !take.has(item))
+      if (request.ssh && yes.length) await issueCertificate(request, request.ssh, duration)
+      const expiresAt = expiry(duration)
+      if (!request.ssh) for (const item of yes) addGrant(request, item, expiresAt, duration)
+      for (const item of no)
+        if (!request.ssh)
+          strikes.set(strikeKey(request.agentId, item), [
+            ...recentStrikes(strikeKey(request.agentId, item)),
+            Date.now(),
+          ])
+      request.granted.push(...yes)
+      request.denied.push(...no)
+      request.items = []
       request.decidedAt = Date.now()
-      if (!request.ssh) {
-        const key = strikeKey(request.subjectId, request.members, request.bundle)
-        denials.set(key, [...recentDenials(key), request.decidedAt])
-      }
-      void logEvent('request_denied', request.subjectId, {
-        requestId: id,
-        capability: request.bundle ?? request.members,
-        reason: request.reason,
-      })
+      if (yes.length) request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
+      moveRequest(request, 'decide')
       push()
     })
   }
-  async function deleteSubject(id: string) {
-    subjects.delete(id)
-    await saveList('subjects.json', subjects)
-    await removeLeases((lease) => lease.subjectId === id)
-    for (const [key, request] of pending) if (request.subjectId === id) pending.delete(key)
-    audit('subject_deleted', { subject: id })
-  }
+  const denyRequest = (id: string) => decide(id, [], '2h')
   async function notify(title: string, anchor: string): Promise<'disabled' | 'sent' | 'failed'> {
     if (!config.NTFY_URL) return 'disabled'
     try {
@@ -809,68 +676,70 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       await response.body?.cancel()
       return 'sent'
     } catch (error) {
-      // Audited boundary: a push is best-effort and must never block enrollment or a request.
+      // Audited boundary: a push is best-effort and must never block a request.
       // The admin page shows the failed state on the request.
       audit('notification_failed', { anchor, cause: String(error) })
       return 'failed'
     }
   }
-  // Create a request, or return the identical pending one (adding the agent's reason when it supplies one).
+  // Items the owner never grants are denied at once, open reads need no grant, and locked items are denied without a
+  // card; the rest join the agent's pending request (or start one).
   function createRequest(
-    subjectId: string,
-    members: Capability[],
-    bundle: string | undefined,
+    agent: Agent,
+    items: string[],
+    want: string[],
     reason: string,
-    duration: Pending['duration'],
-    method?: string,
-    path?: string,
-    sshOrder?: Pending['ssh'],
+    duration: Request['duration'],
+    trigger?: string,
+    sshOrder?: Request['ssh'],
   ) {
-    for (const [id, request] of pending)
-      if (['expired', 'revoked', 'superseded'].includes(request.status)) pending.delete(id)
-    // SSH requests carry a fresh public key each time, so they never merge.
-    const matches = (r: Pending) =>
-      !sshOrder &&
-      !r.ssh &&
-      r.subjectId === subjectId &&
-      r.bundle === bundle &&
-      JSON.stringify(r.members) === JSON.stringify(members)
-    const existing = [...pending.values()].find((r) => matches(r) && r.status === 'pending')
-    if (existing) {
-      if (reason) Object.assign(existing, { reason, duration })
-      return existing
+    const outcome = { granted: [] as string[], denied: [] as string[], ask: [] as string[] }
+    for (const item of items) {
+      const target = serviceItem(item)
+      const service = target && services[target.id]
+      const rule = service && (target.write ? service.write : service.read)
+      if (rule === 'never' || lockedUntil(agent.id, item) !== undefined) outcome.denied.push(item)
+      else if (rule === 'open') outcome.granted.push(item)
+      else outcome.ask.push(item)
     }
-    const request: Pending = {
+    // SSH requests carry a fresh public key each time, so they never merge.
+    const existing = sshOrder
+      ? undefined
+      : [...requests.values()].find((r) => r.agentId === agent.id && r.status === 'pending' && !r.ssh)
+    const request: Request = existing ?? {
       id: rid(),
-      subjectId,
-      ...owner(subjectId),
-      members,
-      bundle,
-      method,
-      path,
-      reason,
+      agentId: agent.id,
+      items: [],
+      want: [],
+      granted: [],
+      denied: [],
+      reason: '',
       duration,
       status: 'pending',
-      leaseIds: [],
-      expiresAt: null,
+      trigger,
+      grantIds: [],
       ssh: sshOrder,
       notification: config.NTFY_URL ? 'sending' : 'disabled',
       createdAt: Date.now(),
     }
-    pending.set(request.id, request)
+    request.items = union(request.items, outcome.ask)
+    request.want = union(request.want, want)
+    request.granted = union(request.granted, outcome.granted)
+    request.denied = union(request.denied, outcome.denied)
+    if (reason) Object.assign(request, { reason, duration })
+    if (existing) return request
+    requests.set(request.id, request)
     push()
-    audit('request_created', { requestId: request.id, subject: subjectId, members })
-    void logEvent('request_created', subjectId, {
-      requestId: request.id,
-      capability: bundle ?? members,
-      reason,
-    })
-    void notify(
-      `${request.label} requests ${bundle ?? members.map((m) => m.ref).join(', ')}`,
-      `request-${request.id}`,
-    ).then((state) => {
-      request.notification = state
-    })
+    audit('request_created', { request: request.id, agent: agent.id, items, reason, trigger })
+    if (request.items.length) {
+      void notify(`${agent.label} requests ${request.items.join(', ')}`, `request-${request.id}`).then((state) => {
+        request.notification = state
+      })
+    } else {
+      request.decidedAt = Date.now()
+      if (request.granted.length) request.expiresAt = null
+      moveRequest(request, 'decide')
+    }
     return request
   }
 
@@ -879,29 +748,34 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     if (error instanceof HTTPException) {
       // Agent routes answer in JSON; admin pages keep their plain-text messages.
       if (error.res || c.req.path.startsWith('/admin')) return error.getResponse()
-      return c.json({ error: error.message || 'request_failed' }, error.status)
+      return c.json({ error: 'invalid', message: error.message }, error.status)
     }
     if (error instanceof IllegalTransition) return c.json({ error: 'conflict', message: error.message }, 409)
     if (error instanceof z.ZodError)
       return c.json(
         {
-          error: 'invalid_request',
-          fields: error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+          error: 'invalid',
+          fields: error.issues.map((issue) => ({
+            path: issue.path.join('.'),
+            message: issue.message,
+            ...('values' in issue ? { accepted: issue.values } : {}),
+          })),
         },
         400,
       )
-    if (error instanceof SyntaxError) return c.json({ error: 'invalid_json' }, 400)
+    if (error instanceof SyntaxError) return c.json({ error: 'invalid', message: 'Body is not valid JSON' }, 400)
     audit('request_failed', { type: error.name, message: error.message })
     return c.json({ error: 'internal_error' }, 500)
   })
 
-  const base = config.PUBLIC_URL.replace(/\/$/, '')
-  const tellUser = (anchor: string) => `Ask the owner to approve at ${base}/admin#${anchor}`
   // The caller's address is the socket's; only the trusted proxy may name another one, with the last
   // X-Forwarded-For entry it appended. In-process app.fetch callers have no socket and share 'unknown'.
+  const peerOf = (c: Context) =>
+    (
+      c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined
+    )?.incoming?.socket?.remoteAddress?.replace(/^::ffff:/, '')
   const sourceOf = (c: Context) => {
-    const socket = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket
-    const peer = socket?.remoteAddress?.replace(/^::ffff:/, '')
+    const peer = peerOf(c)
     if (peer === undefined) return 'unknown'
     if (peer !== config.TRUSTED_PROXY) return peer
     return (
@@ -913,85 +787,142 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         .replace(/^::ffff:/, '') || peer
     )
   }
-  // Every agent-facing 401 names its cause and the next step, and points at the skill.
+  // Links and commands given to agents use the address the caller used to reach speaker.
+  const baseOf = (c: Context) => {
+    const url = new URL(c.req.url)
+    const proto = peerOf(c) === config.TRUSTED_PROXY ? c.req.header('x-forwarded-proto') : undefined
+    return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`
+  }
+  const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${baseOf(c)}/admin#${anchor}`
+  const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', baseOf(c))
+  // Every agent-facing 401 names the next step and points at the skill.
   const unauthorized = (c: Context, error: string, fields: Record<string, string>) => {
     c.header('www-authenticate', 'Bearer realm="speaker"')
     c.header('link', '</skill.md>; rel="help"')
     return c.json({ error, ...fields, help: '/skill.md' }, 401)
   }
-  const enroll = 'Enroll a new session with a new token: GET /_speaker/help/setup'
-  // Resolves a bearer token to an enforcer, a live session, or a subject of an approved enforcer.
+  const enrollNext = 'Enroll again with a new token: GET /_speaker/help'
+  // Resolves a bearer token to an approved sandbox host or an agent.
   const auth: MiddlewareHandler<Env> = async (c, next) => {
     const token = /^Bearer +(\S+) *$/i.exec(c.req.header('authorization') ?? '')?.[1]
-    if (!token) return unauthorized(c, 'unauthorized', { next: 'Send Authorization: Bearer <token>. ' + enroll })
+    if (!token) return unauthorized(c, 'enroll', { next: `Send Authorization: Bearer <token>. ${enrollNext}` })
     const digest = hash(token)
+    if (revoked.has(digest))
+      return c.json({ error: 'denied', next: 'Stop: the owner revoked this agent. Tell the user.' }, 403)
     const byToken = <T extends { tokenHash: string }>(items: Map<string, T>) =>
       [...items.values()].find((item) => same(item.tokenHash, digest))
-    const enforcer = byToken(enforcers),
-      session = byToken(sessions),
-      subject = byToken(subjects)
-    const parent = subject && enforcers.get(subject.enforcer)
-    if (enforcer?.status === 'approved') c.set('caller', { role: 'enforcer', enforcer })
-    else if (session) {
-      if (session.source && session.source !== sourceOf(c))
-        return unauthorized(c, 'source_mismatch', { next: `This token works only from ${session.source}. ${enroll}` })
-      if (session.status === 'pending')
-        return unauthorized(c, 'session_pending', {
-          next: `GET /_speaker/sessions/${session.id}?wait=60`,
-          tell_user: tellUser(`session-${session.id}`),
-        })
-      if (session.status === 'denied')
-        return unauthorized(c, 'session_denied', { next: 'Stop: the owner denied this session.' })
-      if (!liveSession(session)) return unauthorized(c, 'session_expired', { next: enroll })
-      c.set('caller', { role: 'subject', id: session.id, kinds: ['credential'] })
-    } else if (subject && parent?.status === 'approved')
-      c.set('caller', { role: 'subject', id: subject.id, kinds: ['credential', ...parent.kinds] })
-    else if (enforcer?.status === 'pending')
-      return unauthorized(c, 'enforcer_pending', { tell_user: tellUser(`enforcer-${enforcer.id}`) })
-    else return unauthorized(c, 'unknown_token', { next: enroll })
+    const host = byToken(hosts),
+      agent = byToken(agents)
+    if (host?.status === 'approved') c.set('caller', { role: 'host', host })
+    else if (host) return unauthorized(c, 'approval_required', { tell_user: tellUser(c, `host-${host.id}`) })
+    else if (agent && agent.source === sourceOf(c)) {
+      agent.lastSeen = Date.now()
+      c.set('caller', { role: 'agent', agent })
+    } else return unauthorized(c, 'enroll', { next: enrollNext })
     await next()
   }
-  const enforcerOf = (c: Context<Env>) => {
+  const hostCaller = (c: Context<Env>) => {
     const caller = c.get('caller')
-    if (caller.role !== 'enforcer') throw new HTTPException(403, { message: 'Enforcer token required' })
-    return caller.enforcer
+    if (caller.role !== 'host') throw invalid('A sandbox host token is required here')
+    return caller.host
   }
-  const subjectOf = (c: Context<Env>) => {
+  const agentCaller = (c: Context<Env>) => {
     const caller = c.get('caller')
-    if (caller.role !== 'subject') throw new HTTPException(403, { message: 'Session or subject token required' })
-    return caller
+    if (caller.role !== 'agent') throw invalid('An agent token is required here')
+    return caller.agent
+  }
+  // Holds a call for up to `Speaker-Wait` seconds (max 120) until `settled`; without the header it answers at once.
+  const hold = async (c: Context<Env>, settled: () => boolean) => {
+    const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
+    while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
+  }
+  // Item kinds an agent may ask for: services and groups, plus what its sandbox host enforces.
+  const allowedKinds = (agent: Agent): string[] => ['service', 'group', ...(hostOf(agent)?.kinds ?? [])]
+  // A group is offered only if every member is a kind the agent can use.
+  const offered = (agent: Agent) =>
+    Object.entries(groups).filter(([, group]) =>
+      group.items.every((item) => allowedKinds(agent).includes(kindOf(item) ?? '')),
+    )
+  // Expands groups and checks every item may be asked for by this agent.
+  function resolveItems(want: string[], agent: Agent) {
+    const items = want.flatMap((item) => {
+      if (kindOf(item) !== 'group') return [item]
+      const group = offered(agent).find(([name]) => `group:${name}` === item)
+      if (!group) throw invalid(`Unknown group ${item}`, [...offered(agent).map(([name]) => `group:${name}`)])
+      return group[1].items
+    })
+    for (const item of items) {
+      const kind = kindOf(item) ?? ''
+      if (!allowedKinds(agent).includes(kind)) throw invalid(`${item} is not available to this agent`, itemForms)
+      const target = serviceItem(item)
+      if (target && (!Object.hasOwn(services, target.id) || secrets.get(target.id) === undefined))
+        throw invalid(`Unknown service ${target.id}`)
+    }
+    return union(items)
+  }
+  const certificateOf = (request: Request) =>
+    request.certificate && request.ssh
+      ? {
+          certificate: request.certificate,
+          ssh: { hostname: request.ssh.hostname, port: request.ssh.port, user: request.ssh.user },
+        }
+      : {}
+  // A request as the agent sees it: per-item outcome, and what to do next.
+  const outcome = (c: Context, request: Request) => {
+    const retry = retryAfter(request.agentId, request.denied)
+    return {
+      id: request.id,
+      status: request.status,
+      granted: request.granted,
+      denied: request.denied,
+      ...(request.granted.length
+        ? { expiresAt: request.expiresAt ? new Date(request.expiresAt).toISOString() : null }
+        : {}),
+      ...(retry ? { retry_after: retry } : {}),
+      ...(request.status === 'pending'
+        ? {
+            next: 'Repeat this call with Speaker-Wait: 60 to keep waiting for the owner',
+            tell_user: tellUser(c, `request-${request.id}`),
+          }
+        : request.status === 'expired'
+          ? { next: 'The owner did not decide in time. POST /_speaker/requests again if the task still needs it' }
+          : request.denied.length
+            ? { next: 'Stop asking for the denied items and tell the user' }
+            : {}),
+    }
+  }
+  // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
+  async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
+    const request = createRequest(agent, resolveItems(input.want, agent), input.want, input.reason, input.duration)
+    if (input.sshKey) agent.sshKey = input.sshKey
+    await hold(c, () => request.status !== 'pending')
+    return outcome(c, request)
   }
 
   app.use('*', async (_c, next) => {
     sweep()
     await next()
   })
-  // Enrollment is unauthenticated: one shared budget caps how many pending identities anyone can create.
+  // Enrollment and registration are unauthenticated: one shared budget caps how many identities anyone can create.
   // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
   const enrollmentLimit = rateLimiter<Env>({
     windowMs: 15 * 60_000,
     limit: 20,
     standardHeaders: 'draft-7',
     keyGenerator: () => 'enrollment',
-    message: { error: 'rate_limited' },
+    message: { error: 'rate_limited', next: 'Wait a few minutes before enrolling again' },
   })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
   if (ssh) app.get('/_speaker/ssh/ca.pub', (c) => c.text(`${ssh.caPublicKey}\n`))
-  // Public discovery: what speaker is and where the instructions are. Providers and policies stay behind auth.
+  // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
   app.use('/skill.md', etag())
-  app.use('/SKILL.md', etag())
-  app.use('/_speaker/help/*', etag())
-  for (const route of ['/skill.md', '/SKILL.md']) app.get(route, (c) => c.text(skill, 200, markdown))
-  app.get('/_speaker/help/:topic', (c) => {
-    const text = help.get(c.req.param('topic'))
-    if (text === undefined)
-      return c.json({ error: 'unknown_help_topic', topics: [...help.keys()].map((t) => `/_speaker/help/${t}`) }, 404)
-    return c.text(text, 200, markdown)
-  })
+  app.use('/_speaker/help', etag())
+  app.get('/skill.md', (c) => c.text(withAddress(c, skill), 200, markdown))
+  app.get('/_speaker/help', (c) => c.text(withAddress(c, help), 200, markdown))
   const intro = [
     'speaker: owner-approved access to homelab APIs. Agents never get upstream keys.',
-    'agents: read /skill.md. More: /_speaker/help/<topic>',
+    'agents: read /skill.md. More: /_speaker/help',
     'humans: /admin',
     '',
   ].join('\n')
@@ -1002,115 +933,42 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         )
       : c.text(intro),
   )
-  app.get('/llms.txt', (c) => c.text(intro))
-  app.get('/.well-known/speaker.json', (c) =>
-    c.json({ version: 2, skill: '/skill.md', help: '/_speaker/help/<topic>', auth: 'bearer', admin: '/admin' }),
-  )
-  // Holds a call for up to `?wait=` seconds (or `seconds`; max 60) until `settled` turns true, so agents poll once.
-  const settle = async (c: Context<Env>, settled: () => boolean, seconds = Number(c.req.query('wait'))) => {
-    const until = Date.now() + Math.min(seconds || 0, 60) * 1000
-    while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
-  }
-  // Resolves a capability or bundle request body to its members, refusing kinds the caller may not request.
-  const membersFor = (input: z.infer<typeof requestInputSchema>, allowedKinds: string[]) => {
-    const members = input.bundle ? bundles[input.bundle]?.members : input.capability ? [input.capability] : undefined
-    if (!members) throw new HTTPException(404, { message: 'Unknown bundle' })
-    for (const { kind, ref } of members) {
-      if (!allowedKinds.includes(kind))
-        throw new HTTPException(400, { res: Response.json({ error: 'unsupported_kind', kind }, { status: 400 }) })
-      if (kind === 'credential' && !/^[a-zA-Z0-9_-]+\.(read|write)$/.test(ref))
-        throw new HTTPException(400, { message: 'Credential ref must be <provider>.read or <provider>.write' })
-      if (kind === 'credential' && !Object.hasOwn(providers, ref.split('.')[0]))
-        throw new HTTPException(400, { message: 'Unknown provider' })
-      if (kind === 'credential' && secrets.get(ref.split('.')[0]) === undefined)
-        throw new HTTPException(400, { message: 'provider_not_configured' })
-    }
-    return members
-  }
-  // Agents see only providers that have a key; the rest cannot serve a call.
-  const providerList = () =>
-    Object.fromEntries(
-      Object.entries(providers)
-        .filter(([id]) => secrets.get(id) !== undefined)
-        .map(([id, provider]) => [id, { policy: provider.policy, ...(provider.mcp ? { mcp: true } : {}) }]),
-    )
-  if (config.PUBLIC_PROVIDERS) app.get('/_speaker/providers', (c) => c.json(providerList()))
-  app.get(
-    '/_speaker/enforcers/ws',
-    auth,
-    async (c, next) => {
-      enforcerOf(c)
-      await next()
-    },
-    upgradeWebSocket((c) => {
-      const id = enforcerOf(c).id
-      return {
-        onOpen: (_event, ws) => {
-          sockets.get(id)?.close(1000, 'replaced')
-          sockets.set(id, ws)
-          applied.delete(id)
-          ws.send(JSON.stringify(snapshot(id)))
-        },
-        onMessage: (event, ws) => {
-          if (sockets.get(id) !== ws) return
-          const message = z
-            .object({ type: z.literal('applied'), leaseIds: z.array(z.string()) })
-            .parse(JSON.parse(String(event.data)))
-          applied.set(id, new Set(message.leaseIds))
-        },
-        onClose: (_event, ws) => {
-          if (sockets.get(id) !== ws) return
-          sockets.delete(id)
-          applied.delete(id)
-        },
+  app.post('/_speaker/agents', enrollmentLimit, async (c) => {
+    const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
+    const source = sourceOf(c)
+    let agent = [...agents.values()].find((a) => same(a.tokenHash, tokenHash))
+    if (agent && agent.source !== source)
+      throw invalid('This token is already enrolled from another address; make a new token and enroll again')
+    const created = !agent
+    if (!agent) {
+      agent = {
+        id: rid(),
+        tokenHash,
+        ...identity,
+        source,
+        createdAt: Date.now(),
+        lastSeen: Date.now(),
+        uses: 0,
+        lastUsedAt: null,
       }
-    }),
-  )
-  app.post('/_speaker/enforcers', enrollmentLimit, async (c) => {
-    const input = enforcerSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
-    const enforcer: Enforcer = { id: rid(), ...input, status: 'pending' }
-    enforcers.set(enforcer.id, enforcer)
-    await saveList('enforcers.json', enforcers)
-    audit('enforcer_registered', { enforcer: enforcer.id, name: enforcer.name })
-    void notify(`Enforcer ${enforcer.name} wants to register`, `enforcer-${enforcer.id}`)
-    return c.json({ id: enforcer.id, status: enforcer.status }, 201)
-  })
-  app.post('/_speaker/sessions', enrollmentLimit, async (c) => {
-    const { request: wanted, ...input } = sessionEnrollmentSchema.parse(await c.req.json())
-    // Validate the optional first request before storing anything; a session may request credentials only.
-    const members = wanted ? membersFor(wanted, ['credential']) : undefined
-    if ([...sessions.values()].some((s) => s.tokenHash === input.tokenHash))
-      throw new HTTPException(409, { message: 'token_in_use: make a new token for a new session' })
-    const session: Session = {
-      id: rid(),
-      ...input,
-      status: 'pending',
-      expiresAt: null,
-      source: sourceOf(c),
-      enrolledAt: new Date().toISOString(),
+      agents.set(agent.id, agent)
+      audit('agent_enrolled', { agent: agent.id, source })
     }
-    sessions.set(session.id, session)
-    await saveList('sessions.json', sessions)
-    audit('session_enrolled', { session: session.id, label: session.label, llmName: session.llmName })
-    const request =
-      wanted && members ? createRequest(session.id, members, wanted.bundle, wanted.reason, wanted.duration) : undefined
-    if (request) request.atEnrollment = true
-    else void notify(`Session "${session.label}" (${session.llmName}) wants access`, `session-${session.id}`)
+    const result = want.length ? await ask(c, agent, { want, reason: reason ?? '', duration, sshKey }) : undefined
+    if (!result && sshKey) agent.sshKey = sshKey
     return c.json(
-      {
-        id: session.id,
-        ...(request ? { requestId: request.id } : {}),
-        next: `GET /_speaker/sessions/${session.id}?wait=60`,
-        tell_user: tellUser(`session-${session.id}`),
-      },
-      201,
+      { id: agent.id, ...(result ? { request: result } : { next: 'GET /_speaker/me' }) },
+      created ? 201 : 200,
     )
   })
-  app.get('/_speaker/sessions/:id', async (c) => {
-    const session = sessions.get(c.req.param('id'))
-    if (!session) throw new HTTPException(404, { message: 'Session not found' })
-    await settle(c, () => session.status !== 'pending')
-    return c.json({ status: session.status, expiresAt: session.expiresAt })
+  app.post('/_speaker/hosts', enrollmentLimit, async (c) => {
+    const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
+    const host: Host = { id: rid(), ...input, status: 'pending' }
+    hosts.set(host.id, host)
+    await saveHosts()
+    audit('host_registered', { host: host.id, name: host.name })
+    void notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
+    return c.json({ id: host.id, status: host.status }, 201)
   })
   app.all('/_demo-upstream/*', async (c) => {
     if (c.req.header('authorization') !== `Bearer ${demoSecret}`)
@@ -1162,46 +1020,61 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       )
     await next()
   })
-  // Newest entries first, optionally narrowed to one lease, identity (session, subject or enforcer) or provider.
-  admin.get('/log', async (c) => {
-    const { lease, identity, provider } = c.req.query()
-    const members = (entry: LogEntry) => (Array.isArray(entry.capability) ? (entry.capability as Capability[]) : [])
-    const entries = await readLog(
+  const grantState = (grant: Grant): GrantView['state'] => {
+    const hostId = agents.get(grant.agentId)?.host
+    if (!hostId || serviceItem(grant.item)) return 'active'
+    if (!sockets.has(hostId)) return 'waiting'
+    return applied.get(hostId)?.has(grant.id) ? 'active' : 'granted'
+  }
+  const view = (): View => ({
+    hosts: [...hosts.values()],
+    agents: [...agents.values()].map((agent) => ({
+      ...agent,
+      sandboxHost: hostOf(agent)?.name,
+      grants: [...grants.values()].filter((grant) => grant.agentId === agent.id).length,
+    })),
+    requests: [...requests.values()],
+    grants: [...grants.values()].filter(live).map((grant) => {
+      const agent = agents.get(grant.agentId)
+      return { ...grant, label: agent?.label ?? '', agent: agent?.agent ?? '', state: grantState(grant) }
+    }),
+  })
+  // Newest entries first, optionally narrowed to one grant, agent or service.
+  admin.get('/log', (c) => {
+    const { grant, agent, service } = c.req.query()
+    const entries = logged.filter(
       (e) =>
-        (!lease || e.leaseId === lease) &&
-        (!identity || e.subject === identity || e.enforcerId === identity) &&
-        (!provider ||
-          e.provider === provider ||
-          members(e).some((m) => m.kind === 'credential' && m.ref.startsWith(`${provider}.`))),
+        (!grant || e.grant === grant) &&
+        (!agent || e.agent === agent) &&
+        (!service ||
+          e.service === service ||
+          (Array.isArray(e.items) && e.items.some((i) => String(i).startsWith(`${service}.`)))),
     )
     return c.html(
       adminPage(
-        providers,
+        services,
         secrets,
         view(),
         undefined,
         c.get('secureHeadersNonce'),
         'log',
-        bundles,
+        groups,
         undefined,
         {},
-        {
-          entries,
-          filter: lease ? `lease ${lease}` : identity ? `identity ${identity}` : provider ? `provider ${provider}` : '',
-        },
+        { entries, filter: grant ? `grant ${grant}` : agent ? `agent ${agent}` : service ? `service ${service}` : '' },
       ),
     )
   })
   admin.get('/', (c) =>
     c.html(
       adminPage(
-        providers,
+        services,
         secrets,
         view(),
-        c.req.query('provider'),
+        c.req.query('service'),
         c.get('secureHeadersNonce'),
         c.req.query('section'),
-        bundles,
+        groups,
         c.req.query('error'),
         Object.fromEntries(
           [...mcpTools].map(([id, { at, tools }]) => {
@@ -1221,9 +1094,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     ),
   )
   admin.get('/live', (c) => c.json(livePanels(view())))
-  const fields = async (c: Context) => await c.req.parseBody()
+  const fields = async (c: Context) => await c.req.parseBody({ all: true })
   const redirect = (c: Context) => c.redirect('/admin', 303)
-  admin.post('/providers/save', async (c) => {
+  admin.post('/services/save', async (c) => {
     const input = z
       .object({
         id: idSchema,
@@ -1231,17 +1104,24 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         authType: z.enum(['bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),
-        guide: z.string().optional(),
-        read: ruleSchema,
-        write: ruleSchema,
+        notes: z.string().optional(),
+        read: serviceSchema.shape.read,
+        write: serviceSchema.shape.write,
+        readPaths: z.string().optional(),
         mcp: z.literal('on').optional(),
       })
       .parse(await fields(c))
-    const provider = providerSchema.parse({
+    const readPaths = (input.readPaths ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    const service = serviceSchema.parse({
       baseUrl: input.baseUrl,
-      guide: input.guide?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
       auth: { type: input.authType, secret: input.id, headerName: input.headerName },
-      policy: { read: input.read, write: input.write },
+      read: input.read,
+      write: input.write,
+      readPaths: readPaths.length ? readPaths : undefined,
       mcp: input.mcp ? true : undefined,
     })
     if (input.secret) {
@@ -1251,134 +1131,111 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       await writeFile(secretPath(input.id), input.secret, { mode: 0o600 })
       secrets.set(input.id, input.secret)
     }
-    providers[input.id] = provider
+    services[input.id] = service
     mcpTools.delete(input.id)
-    await save(providersFile, providers)
-    audit('provider_saved', { provider: input.id })
-    return c.redirect('/admin?section=providers', 303)
+    await save(servicesFile, services)
+    audit('service_saved', { service: input.id })
+    return c.redirect('/admin?section=services', 303)
   })
-  // Lists an MCP provider's tools now, so the editor shows how they classify (read-only vs write).
-  admin.post('/providers/tools', async (c) => {
+  // Lists an MCP service's tools now, so the editor shows how they classify (read-only vs write).
+  admin.post('/services/tools', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!providers[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP provider' })
+    if (!services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
     const ok = await listMcpTools(id).then(
       () => true,
       () => false,
     )
-    return c.redirect(`/admin?section=providers&provider=${id}${ok ? '' : '&error=tools'}`, 303)
+    return c.redirect(`/admin?section=services&service=${id}${ok ? '' : '&error=tools'}`, 303)
   })
-  admin.post('/providers/delete', async (c) => {
+  admin.post('/services/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!Object.hasOwn(providers, id)) throw new HTTPException(404, { message: 'Unknown provider' })
-    const secret = providers[id].auth.secret
-    delete providers[id]
+    if (!Object.hasOwn(services, id)) throw new HTTPException(404, { message: 'Unknown service' })
+    const secret = services[id].auth.secret
+    delete services[id]
     secrets.delete(id)
-    await save(providersFile, providers)
+    await save(servicesFile, services)
     await rm(secretPath(secret), { force: true })
-    await removeLeases((lease) => lease.kind === 'credential' && lease.ref.startsWith(`${id}.`))
-    for (const [key, request] of pending)
-      if (request.members.some((m) => m.kind === 'credential' && m.ref.startsWith(`${id}.`))) pending.delete(key)
-    audit('provider_deleted', { provider: id })
-    return c.redirect('/admin?section=providers', 303)
+    revokeGrants((grant) => grant.item.startsWith(`${id}.`))
+    for (const [key, request] of requests)
+      if (request.items.some((item) => item.startsWith(`${id}.`))) requests.delete(key)
+    audit('service_deleted', { service: id })
+    return c.redirect('/admin?section=services', 303)
   })
-  const bundleFile = file('bundles.json')
-  admin.post('/bundles/save', async (c) => {
-    const back = (error: string) => c.redirect(`/admin?section=bundles&error=${error}`, 303)
+  admin.post('/groups/save', async (c) => {
+    const back = (error: string) => c.redirect(`/admin?section=groups&error=${error}`, 303)
     const form = await fields(c)
-    const input = z.object({ id: idSchema, members: z.string() }).safeParse(form)
+    const input = z.object({ id: idSchema, items: z.string() }).safeParse(form)
     if (!input.success) return back('id')
-    const description = bundleDescriptionSchema.safeParse(form.description ?? '')
+    const description = groupDescriptionSchema.safeParse(form.description ?? '')
     if (!description.success) return back('description')
-    const lines = input.data.members
+    const lines = input.data.items
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-    const parsed = bundleMembersSchema.safeParse(
-      lines.map((line) => ({ kind: line.split(/\s+/)[0], ref: line.replace(/^\S+\s*/, '') })),
-    )
     if (!lines.length) return back('empty')
+    const parsed = groupItemsSchema.safeParse(lines)
     if (!parsed.success) return back('line')
-    bundles[input.data.id] = { ...(description.data ? { description: description.data } : {}), members: parsed.data }
-    await save(bundleFile, bundles)
-    audit('bundle_saved', { bundle: input.data.id })
-    return c.redirect('/admin?section=bundles', 303)
+    groups[input.data.id] = { ...(description.data ? { description: description.data } : {}), items: parsed.data }
+    await save(groupsFile, groups)
+    audit('group_saved', { group: input.data.id })
+    return c.redirect('/admin?section=groups', 303)
   })
-  admin.post('/bundles/delete', async (c) => {
+  admin.post('/groups/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!Object.hasOwn(bundles, id)) throw new HTTPException(404, { message: 'Unknown bundle' })
-    delete bundles[id]
-    await save(bundleFile, bundles)
-    audit('bundle_deleted', { bundle: id })
-    return c.redirect('/admin?section=bundles', 303)
+    if (!Object.hasOwn(groups, id)) throw new HTTPException(404, { message: 'Unknown group' })
+    delete groups[id]
+    await save(groupsFile, groups)
+    audit('group_deleted', { group: id })
+    return c.redirect('/admin?section=groups', 303)
   })
-  const identity = <T>(store: Map<string, T>, id: string) => {
-    const item = store.get(id)
-    if (!item) throw new HTTPException(404, { message: 'Unknown identity' })
-    return item
+  const hostById = (id: string) => {
+    const host = hosts.get(id)
+    if (!host) throw new HTTPException(404, { message: 'Unknown sandbox host' })
+    return host
   }
-  admin.post('/enforcers/:id/approve', async (c) => {
-    moveIdentity('enforcer', identity(enforcers, c.req.param('id')), 'approve')
-    await saveList('enforcers.json', enforcers)
+  admin.post('/hosts/:id/approve', async (c) => {
+    const host = hostById(c.req.param('id'))
+    host.status = transition('host', hostTable, host.status, 'approve')
+    audit('host_approved', { host: host.id })
+    await saveHosts()
     return redirect(c)
   })
-  // Deny works on pending and approved enforcers; a denied enforcer's subjects stop authenticating.
-  admin.post('/enforcers/:id/deny', async (c) => {
-    const enforcer = identity(enforcers, c.req.param('id'))
-    moveIdentity('enforcer', enforcer, 'deny')
-    sockets.get(enforcer.id)?.close(1008, 'denied')
-    await saveList('enforcers.json', enforcers)
+  // Removing a host (pending or approved) also ends its agents; its tokens stop working.
+  admin.post('/hosts/:id/remove', async (c) => {
+    const host = hostById(c.req.param('id'))
+    for (const agent of [...agents.values()]) if (agent.host === host.id) endAgent(agent.id)
+    sockets.get(host.id)?.close(1008, 'removed')
+    hosts.delete(host.id)
+    audit('host_removed', { host: host.id })
+    await saveHosts()
     return redirect(c)
   })
-  admin.post('/sessions/:id/approve', async (c) => {
-    const { duration, permanent } = decisionSchema.parse(await fields(c))
-    const session = identity(sessions, c.req.param('id'))
-    moveIdentity('session', session, 'approve')
-    session.expiresAt = expiry(permanent ? 'permanent' : duration)
-    session.approvedAt = new Date().toISOString()
-    session.grantedMs = permanent || duration === 'permanent' ? undefined : durations[duration]
-    await saveList('sessions.json', sessions)
-    // The session card showed its first request; approving the session grants that too, for the duration asked.
-    for (const request of [...pending.values()])
-      if (request.subjectId === session.id && request.atEnrollment && request.status === 'pending')
-        await approve(request.id, request.duration)
-    return redirect(c)
-  })
-  admin.post('/sessions/:id/deny', async (c) => {
-    const session = identity(sessions, c.req.param('id'))
-    moveIdentity('session', session, 'deny')
-    await saveList('sessions.json', sessions)
-    await removeLeases((lease) => lease.subjectId === session.id)
-    for (const [key, request] of pending) if (request.subjectId === session.id) pending.delete(key)
+  function endAgent(id: string) {
+    const agent = agents.get(id)
+    if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
+    revoked.add(agent.tokenHash)
+    agents.delete(id)
+    revokeGrants((grant) => grant.agentId === id)
+    for (const [key, request] of requests) if (request.agentId === id) requests.delete(key)
+    audit('agent_revoked', { agent: id, label: agent.label })
+  }
+  admin.post('/agents/:id/revoke', (c) => {
+    endAgent(c.req.param('id'))
     return redirect(c)
   })
   // Extending moves the end to max(current end, now) + the span the owner originally granted.
-  const extended = (expiresAt: string | null, grantedMs: number | undefined) => {
-    if (expiresAt === null || grantedMs === undefined) throw new HTTPException(409, { message: 'Nothing to extend' })
-    return Math.max(Date.parse(expiresAt), Date.now()) + grantedMs
-  }
-  admin.post('/leases/extend', async (c) => {
+  admin.post('/grants/extend', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    const lease = leases.get(id)
-    if (!lease) throw new HTTPException(404, { message: 'Lease not found' })
-    const end = extended(lease.expiresAt, lease.grantedMs)
-    await serial(async () => {
-      const next = new Map(leases)
-      next.set(id, { ...lease, expiresAt: new Date(end).toISOString() })
-      await commitLeases(next)
-      // The lifecycle sweep expires an approval at its expiresAt, so it moves with its lease.
-      for (const request of pending.values())
-        if (request.status === 'approved' && request.leaseIds.includes(id) && (request.expiresAt ?? 0) < end)
-          request.expiresAt = end
-    })
-    void logEvent('lease_extended', lease.subjectId, { leaseId: id, expiresAt: new Date(end).toISOString() })
-    return redirect(c)
-  })
-  admin.post('/sessions/:id/extend', async (c) => {
-    const session = identity(sessions, c.req.param('id'))
-    if (session.status !== 'approved') throw new HTTPException(409, { message: 'Only an approved session extends' })
-    session.expiresAt = new Date(extended(session.expiresAt, session.grantedMs)).toISOString()
-    await saveList('sessions.json', sessions)
-    void logEvent('session_extended', session.id, { expiresAt: session.expiresAt })
+    const grant = grants.get(id)
+    if (!grant) throw new HTTPException(404, { message: 'Grant not found' })
+    if (grant.expiresAt === null || grant.grantedMs === undefined)
+      throw new HTTPException(409, { message: 'Nothing to extend' })
+    const end = Math.max(Date.parse(grant.expiresAt), Date.now()) + grant.grantedMs
+    grant.expiresAt = new Date(end).toISOString()
+    for (const request of requests.values())
+      if (request.grantIds.includes(id) && (request.expiresAt ?? 0) < end) request.expiresAt = end
+    push()
+    audit('grant_extended', { grant: id, agent: grant.agentId, expiresAt: grant.expiresAt })
     return redirect(c)
   })
   // Browser forms and JSON clients share exactly the same approval/revocation implementation.
@@ -1386,275 +1243,282 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const prefix = api ? '/api' : ''
     const body = (c: Context) => (api ? c.req.json() : fields(c))
     admin.post(`${prefix}/requests/:id/approve`, async (c) => {
-      const { duration, permanent } = decisionSchema.parse(await body(c))
-      await approve(c.req.param('id'), permanent ? 'permanent' : duration)
+      const { duration, permanent, items } = decisionSchema.parse(await body(c))
+      await decide(c.req.param('id'), items, permanent ? 'permanent' : duration)
       return api ? c.json({ ok: true }) : redirect(c)
     })
     admin.post(`${prefix}/requests/:id/deny`, async (c) => {
-      await deny(c.req.param('id'))
+      await denyRequest(c.req.param('id'))
       return api ? c.json({ ok: true }) : redirect(c)
     })
-    admin.post(api ? '/api/leases/:id/revoke' : '/leases/revoke', async (c) => {
+    admin.post(api ? '/api/grants/:id/revoke' : '/grants/revoke', async (c) => {
       const id = api ? c.req.param('id') : z.object({ id: idSchema }).parse(await fields(c)).id
-      const revoked = leases.get(id)
-      await removeLeases((lease) => lease.id === id)
-      audit('lease_revoked', { leaseId: id })
-      void logEvent('lease_revoked', revoked?.subjectId, {
-        leaseId: id,
-        capability: revoked && [{ kind: revoked.kind, ref: revoked.ref }],
-      })
+      if (!grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
+      revokeGrants((grant) => grant.id === id)
       return api ? c.json({ ok: true }) : redirect(c)
     })
   }
   admin.get('/api/requests', (c) => c.json(view().requests))
-  admin.get('/api/leases', (c) => c.json(view().leases))
+  admin.get('/api/grants', (c) => c.json(view().grants))
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   app.route('/admin', admin)
 
   app.use('*', auth)
-  app.get('/_speaker/providers', (c) => {
-    subjectOf(c)
-    return c.json(providerList())
-  })
-  // Every provider gets a short generated guide for this caller (policy, lease and session expiry in UTC),
-  // followed by the owner's provider-specific guide when one is configured.
-  app.get('/_speaker/providers/:name/guide', (c) => {
-    const caller = subjectOf(c)
-    const name = c.req.param('name')
-    if (!Object.hasOwn(providers, name)) throw new HTTPException(404, { message: 'Unknown provider' })
-    const provider = providers[name]
-    const until = (expiresAt: string | null) => (expiresAt === null ? 'with no expiry' : `until ${expiresAt} (UTC)`)
-    const access = (group: 'read' | 'write') => {
-      const rule = ruleFor(provider, group, caller.id)
-      if (rule === 'always') {
-        const end = alwaysEnds(caller.id)
-        return `allowed without a request${end === null ? '' : ` until ${end} (UTC)`}.`
+  app.get(
+    '/_speaker/hosts/ws',
+    async (c, next) => {
+      hostCaller(c)
+      await next()
+    },
+    upgradeWebSocket((c) => {
+      const id = hostCaller(c).id
+      return {
+        onOpen: (_event, ws) => {
+          sockets.get(id)?.close(1000, 'replaced')
+          sockets.set(id, ws)
+          applied.delete(id)
+          ws.send(JSON.stringify(snapshot(id)))
+        },
+        onMessage: (event, ws) => {
+          if (sockets.get(id) !== ws) return
+          const message = z
+            .object({ type: z.literal('applied'), grantIds: z.array(z.string()) })
+            .parse(JSON.parse(String(event.data)))
+          applied.set(id, new Set(message.grantIds))
+        },
+        onClose: (_event, ws) => {
+          if (sockets.get(id) !== ws) return
+          sockets.delete(id)
+          applied.delete(id)
+        },
       }
-      if (rule === 'deny') return 'denied by the owner; do not request it.'
-      const lease = matchingLease(caller.id, 'credential', `${name}.${group}`)
-      return lease ? `approved ${until(lease.expiresAt)}.` : `needs \`credential ${name}.${group}\`; not approved yet.`
-    }
-    const session = sessions.get(caller.id)
-    const lines = [
-      `# ${name}`,
-      '',
-      `- Call \`$SPEAKER_URL/${name}/<path>\` with \`Authorization: Bearer <your speaker token>\`. Speaker forwards \`<path>\` to the provider's API root and adds the real credential; send no other credentials.`,
-      `- Read (GET, HEAD, OPTIONS): ${access('read')}`,
-      `- Write (other methods): ${access('write')}`,
-      ...(session ? [`- Your session is approved ${until(session.expiresAt)}.`] : []),
-      '- Without access, send the call with `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`): speaker asks the owner and answers the call once approved. Otherwise a `403` names the `next` step. `denied` is final.',
-      ...(provider.mcp
-        ? [
-            `- MCP server (streamable HTTP) at \`$SPEAKER_URL/${name}\`. Listing tools and read-only tools count as read; other tool calls count as write.`,
-          ]
-        : []),
-      provider.guide
-        ? `\n${provider.guide.trim()}`
-        : '- No provider-specific guide: use the upstream API documentation for paths.',
-    ]
-    return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
-  })
-  app.post('/_speaker/subjects', async (c) => {
-    const enforcer = enforcerOf(c)
-    const { label } = z.object({ label: z.string().trim().min(1).max(200) }).parse(await c.req.json())
+    }),
+  )
+  app.post('/_speaker/hosts/agents', async (c) => {
+    const host = hostCaller(c)
+    const identity = identitySchema.parse(await c.req.json())
     const token = randomBytes(32).toString('base64url')
-    const subject = { id: rid(), label, enforcer: enforcer.id, tokenHash: hash(token) }
-    subjects.set(subject.id, subject)
-    await saveList('subjects.json', subjects)
-    audit('subject_created', { subject: subject.id, enforcer: enforcer.id })
-    return c.json({ id: subject.id, token }, 201)
+    // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
+    const agent: Agent = {
+      id: rid(),
+      tokenHash: hash(token),
+      ...identity,
+      source: sourceOf(c),
+      host: host.id,
+      createdAt: Date.now(),
+      lastSeen: Date.now(),
+      uses: 0,
+      lastUsedAt: null,
+    }
+    agents.set(agent.id, agent)
+    audit('agent_created', { agent: agent.id, host: host.id })
+    return c.json({ id: agent.id, token }, 201)
   })
-  app.delete('/_speaker/subjects/:id', async (c) => {
+  app.delete('/_speaker/hosts/agents/:id', (c) => {
     const id = c.req.param('id')
-    if (subjects.get(id)?.enforcer !== enforcerOf(c).id) throw new HTTPException(404, { message: 'Subject not found' })
-    await deleteSubject(id)
+    if (agents.get(id)?.host !== hostCaller(c).id) throw invalid('Agent not found', undefined, 404)
+    endAgent(id)
     return c.json({ ok: true })
   })
-  const kindsOf = (caller: Caller) =>
-    caller.role === 'enforcer' ? ['credential', ...caller.enforcer.kinds] : caller.kinds
-  // Lists only bundles whose every member the caller may request, since a request with any other member is refused whole.
-  app.get('/_speaker/bundles', (c) => {
-    const allowed = kindsOf(c.get('caller'))
-    return c.json(
-      Object.fromEntries(
-        Object.entries(bundles).filter(([, bundle]) => bundle.members.every((m) => allowed.includes(m.kind))),
+  // Everything an agent needs to know about where it stands. Open services, targets and shares are never listed.
+  app.get('/_speaker/me', (c) => {
+    const agent = agentCaller(c)
+    const mine = [...grants.values()].filter((grant) => grant.agentId === agent.id && live(grant))
+    const state = (id: string, write: boolean) => {
+      const rule = write ? services[id].write : services[id].read
+      const grant = coverFor(agent.id, id, write)
+      return rule === 'never'
+        ? { state: 'never' }
+        : grant
+          ? { state: 'granted', until: grant.expiresAt }
+          : { state: 'ask' }
+    }
+    return c.json({
+      agent: {
+        id: agent.id,
+        label: agent.label,
+        agent: agent.agent,
+        source: agent.source,
+        kind: agent.host ? 'sandboxed' : 'direct',
+        status: mine.length
+          ? 'active'
+          : [...requests.values()].some((r) => r.agentId === agent.id && r.status === 'pending')
+            ? 'pending'
+            : 'idle',
+      },
+      services: Object.fromEntries(
+        Object.entries(services)
+          .filter(([id, service]) => secrets.get(id) !== undefined && service.read !== 'open')
+          .map(([id, service]) => [
+            id,
+            { read: state(id, false), full: state(id, true), ...(service.mcp ? { mcp: true } : {}) },
+          ]),
       ),
-    )
+      grants: mine.map(({ item, expiresAt }) => ({ item, expiresAt })),
+      groups: Object.fromEntries(offered(agent)),
+      requests: [...requests.values()]
+        .filter((request) => request.agentId === agent.id)
+        .map((request) => ({
+          ...outcome(c, request),
+          want: request.want,
+          reason: request.reason,
+          ...certificateOf(request),
+        })),
+    })
   })
   app.post('/_speaker/requests', async (c) => {
-    const input = requestInputSchema.and(z.object({ subjectId: idSchema.optional() })).parse(await c.req.json())
     const caller = c.get('caller')
-    let subjectId: string
-    if (caller.role === 'enforcer') {
-      if (!input.subjectId || subjects.get(input.subjectId)?.enforcer !== caller.enforcer.id)
-        throw new HTTPException(404, { message: 'Subject not found' })
-      subjectId = input.subjectId
+    const input = requestSchema.extend({ agentId: idSchema.optional() }).parse(await c.req.json())
+    let agent: Agent | undefined
+    if (caller.role === 'host') {
+      agent = input.agentId ? agents.get(input.agentId) : undefined
+      if (agent?.host !== caller.host.id) throw invalid('Agent not found', undefined, 404)
     } else {
-      if (input.subjectId && input.subjectId !== caller.id)
-        throw new HTTPException(403, { message: 'A session or subject requests only for itself' })
-      subjectId = caller.id
+      if (input.agentId && input.agentId !== caller.agent.id) throw invalid('An agent requests only for itself')
+      agent = caller.agent
     }
-    const members = membersFor(input, kindsOf(caller))
-    const until = lockedUntil(subjectId, members, input.bundle)
-    if (until !== undefined) return c.json(lockedReply(until, { status: 'denied' }), 403)
-    const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
-    const status = request.status
-    return c.json(
-      {
-        id: request.id,
-        status,
-        ...(status === 'pending'
-          ? { next: `GET /_speaker/requests/${request.id}?wait=60`, tell_user: tellUser(`request-${request.id}`) }
-          : status === 'denied'
-            ? { next: 'Stop: the owner denied this recently.' }
-            : {}),
-      },
-      201,
-    )
+    const result = await ask(c, agent, input)
+    return c.json(result, result.status === 'pending' ? 202 : 200)
   })
-  // Hosts the caller may ask SSH access to, and the login users each accepts.
+  // The existing SSH certificate flow: the reply carries the certificate once the owner approves.
   app.get('/_speaker/ssh/hosts', (c) => {
-    subjectOf(c)
+    agentCaller(c)
     if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
     return c.json({ hosts: ssh.hosts, maxDuration: config.SSH_MAX_DURATION })
   })
   app.post('/_speaker/ssh', async (c) => {
-    const caller = subjectOf(c)
+    const agent = agentCaller(c)
     if (!ssh) throw new HTTPException(404, { message: 'SSH certificates are disabled' })
-    const input = sshRequestSchema
-      .extend({ reason: z.string().trim().min(1).max(500), duration: durationSchema })
-      .parse(await c.req.json())
+    const input = sshRequestSchema.extend({ reason: reasonSchema, duration: durationSchema }).parse(await c.req.json())
     const host = Object.hasOwn(ssh.hosts, input.host) ? ssh.hosts[input.host] : undefined
-    if (!host) throw new HTTPException(400, { message: 'Unknown SSH host' })
-    if (!host.users.includes(input.user)) throw new HTTPException(400, { message: 'User not allowed on this host' })
+    if (!host) throw invalid('Unknown SSH host', Object.keys(ssh.hosts))
+    if (!host.users.includes(input.user)) throw invalid('User not allowed on this host', host.users)
     if (durations[input.duration] > durations[config.SSH_MAX_DURATION])
-      throw new HTTPException(400, { message: `SSH access is limited to ${config.SSH_MAX_DURATION}` })
+      throw invalid(`SSH access is limited to ${config.SSH_MAX_DURATION}`)
     const { reason, duration, ...order } = input
     const keyFingerprint = await fingerprint(order.publicKey)
-    if (!keyFingerprint) throw new HTTPException(400, { message: 'Public key could not be parsed' })
-    const request = createRequest(
-      caller.id,
-      [{ kind: 'ssh', ref: principalOf(input.user, input.host) }],
-      undefined,
-      reason,
-      duration,
-      undefined,
-      undefined,
-      {
-        ...order,
-        hostname: host.hostname,
-        port: host.port,
-        fingerprint: keyFingerprint,
-        maxDuration: config.SSH_MAX_DURATION,
-      },
-    )
-    return c.json({ id: request.id, status: request.status }, 201)
+    if (!keyFingerprint) throw invalid('Public key could not be parsed')
+    const item = `ssh-cert:${principalOf(input.user, input.host)}`
+    const request = createRequest(agent, [item], [item], reason, duration, undefined, {
+      ...order,
+      hostname: host.hostname,
+      port: host.port,
+      fingerprint: keyFingerprint,
+      maxDuration: config.SSH_MAX_DURATION,
+    })
+    await hold(c, () => request.status !== 'pending')
+    return c.json({ ...outcome(c, request), ...certificateOf(request) }, 201)
   })
-  // Status of one request; once approved it carries when the access ends (earliest member lease, null = never).
-  const requestReply = (request: Pending) => {
-    const status = request.status
-    const what = request.bundle
-      ? `bundle ${request.bundle}`
-      : request.members.map((m) => `${m.kind} ${m.ref}`).join(', ')
-    if (status !== 'approved') return { id: request.id, what, status }
-    const ends = request.members
-      .map((m) => matchingLease(request.subjectId, m.kind, m.ref)?.expiresAt)
-      .filter((end): end is string => typeof end === 'string')
-      .sort()
-    return { id: request.id, what, status, expiresAt: ends[0] ?? null }
-  }
-  // A session or subject lists its own requests, so it can see what is pending or granted without re-asking.
-  app.get('/_speaker/requests', (c) => {
-    const caller = subjectOf(c)
-    return c.json([...pending.values()].filter((r) => r.subjectId === caller.id).map(requestReply))
+  // Notes and the caller's current state for one service.
+  app.get('/_speaker/help/:name', (c) => {
+    const agent = agentCaller(c)
+    const name = c.req.param('name')
+    if (!Object.hasOwn(services, name)) throw invalid('Unknown service', undefined, 404)
+    const service = services[name]
+    const until = (expiresAt: string | null) => (expiresAt === null ? 'with no end' : `until ${expiresAt} (UTC)`)
+    const access = (write: boolean) => {
+      const rule = write ? service.write : service.read
+      if (rule === 'open') return 'open: needs no grant.'
+      if (rule === 'never') return 'never granted by the owner; do not ask for it.'
+      const grant = coverFor(agent.id, name, write)
+      return grant
+        ? `granted ${until(grant.expiresAt)}.`
+        : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
+    }
+    const lines = [
+      `# ${name}`,
+      '',
+      `- Call \`${baseOf(c)}/${name}/<path>\` with your header file. Speaker forwards \`<path>\` to the service's API root and adds the real credential; send no other credentials.`,
+      `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
+      `- Everything else (\`${name}.full\`): ${access(true)}`,
+      '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`): speaker asks the owner and answers the call once decided. Without that header the call answers at once. `denied` is final.',
+      ...(service.mcp
+        ? [
+            `- MCP server (streamable HTTP) at \`${baseOf(c)}/${name}\`. Listing tools and read-only tools count as read; other tool calls need full.`,
+          ]
+        : []),
+      service.notes
+        ? `\n${service.notes.trim()}`
+        : '- No notes for this service: use the upstream API documentation for paths.',
+    ]
+    return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
   })
-  const ownRequest = (c: Context<Env>) => {
-    const request = pending.get(c.req.param('id') ?? ''),
-      caller = c.get('caller')
-    const mine =
-      request &&
-      (caller.role === 'enforcer'
-        ? subjects.get(request.subjectId)?.enforcer === caller.enforcer.id
-        : caller.id === request.subjectId)
-    if (!request || !mine) throw new HTTPException(404, { message: 'Request not found' })
-    return request
-  }
-  app.get('/_speaker/requests/:id', async (c) => {
-    const request = ownRequest(c)
-    await settle(c, () => request.status !== 'pending')
-    const certificate =
-      request.status === 'approved' && request.ssh && request.certificate && request.expiresAt
-        ? {
-            certificate: request.certificate,
-            expiresAt: new Date(request.expiresAt).toISOString(),
-            ssh: { hostname: request.ssh.hostname, port: request.ssh.port, user: request.ssh.user },
-          }
-        : {}
-    return c.json({ ...requestReply(request), ...certificate })
-  })
-  app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
+  app.all('/_speaker/*', (c) => c.json({ error: 'invalid', message: 'Unknown route; see GET /_speaker/help' }, 404))
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url),
-      [providerId, ...parts] = incoming.pathname.slice(1).split('/')
-    if (!Object.hasOwn(providers, providerId)) return c.json({ error: 'unknown_provider' }, 404)
-    const provider = providers[providerId],
-      caller = subjectOf(c),
+      [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
+    if (!Object.hasOwn(services, serviceId))
+      return c.json({ error: 'invalid', message: 'Unknown service', next: 'GET /_speaker/me' }, 404)
+    const service = services[serviceId],
+      agent = agentCaller(c),
       method = c.req.method,
       path = `/${parts.join('/')}`
     // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
     let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
-    let group: 'read' | 'write' = ['GET', 'HEAD', 'OPTIONS'].includes(method) ? 'read' : 'write'
+    const trimmed = (p: string) => p.replace(/\/+$/, '')
+    const readPost = method === 'POST' && service.readPaths?.some((p) => trimmed(p) === trimmed(path))
+    let write = !['GET', 'HEAD', 'OPTIONS'].includes(method) && !readPost
     let detail = ''
-    if (provider.mcp && method === 'DELETE') group = 'read'
-    if (provider.mcp && method === 'POST') {
-      if (Number(c.req.header('content-length') ?? 0) > 1_048_576) return c.json({ error: 'mcp_body_too_large' }, 413)
+    if (service.mcp && method === 'DELETE') write = false
+    if (service.mcp && method === 'POST') {
+      if (Number(c.req.header('content-length') ?? 0) > 1_048_576)
+        return c.json({ error: 'invalid', message: 'MCP body too large' }, 413)
       const text = await c.req.text()
-      if (Buffer.byteLength(text) > 1_048_576) return c.json({ error: 'mcp_body_too_large' }, 413)
+      if (Buffer.byteLength(text) > 1_048_576) return c.json({ error: 'invalid', message: 'MCP body too large' }, 413)
       body = text
-      ;({ group, detail } = await mcpAccess(providerId, text))
+      ;({ write, detail } = await mcpAccess(serviceId, text))
     }
-    const capability = `${providerId}.${group}`
-    const rule = ruleFor(provider, group, caller.id)
-    if (rule === 'deny')
-      return c.json({ error: 'denied', capability, next: 'Stop: the owner blocks this; do not request it.' }, 403)
-    const secret = secrets.get(providerId)
-    if (secret === undefined) return c.json({ error: 'provider_not_configured' }, 503)
-    if (rule === 'approval' && !hasLease(caller.id, 'credential', capability)) {
-      const members: Capability[] = [{ kind: 'credential', ref: capability }]
-      const until = lockedUntil(caller.id, members, undefined)
-      if (until !== undefined) return c.json(lockedReply(until, { capability }), 403)
-      const request = createRequest(
-        caller.id,
-        members,
-        undefined,
-        c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
-        '15m',
-        method,
-        detail ? `${path} · ${detail}` : path,
-      )
-      // `Speaker-Wait: <seconds>` holds this call until the owner decides, then forwards it: one call, no retry.
-      await settle(c, () => request.status !== 'pending', Number(c.req.header('speaker-wait')))
-      if (request.status === 'denied')
-        return c.json(
-          { error: 'denied', capability, requestId: request.id, next: 'Stop: the owner denied this request.' },
-          403,
-        )
-      if (!hasLease(caller.id, 'credential', capability))
+    const item = `${serviceId}.${write ? 'full' : 'read'}`
+    const rule = write ? service.write : service.read
+    if (rule === 'never')
+      return c.json({ error: 'denied', item, next: 'Stop: the owner blocks this; do not request it.' }, 403)
+    const secret = secrets.get(serviceId)
+    if (secret === undefined) return c.json({ error: 'invalid', message: 'Service has no key configured' }, 503)
+    if (rule === 'ask' && !coverFor(agent.id, serviceId, write)) {
+      const until = lockedUntil(agent.id, item)
+      if (until !== undefined)
         return c.json(
           {
-            error: 'approval_required',
-            capability,
-            requestId: request.id,
-            next: `GET /_speaker/requests/${request.id}?wait=60, then repeat this call (or repeat it with Speaker-Wait: 60)`,
-            tell_user: tellUser(`request-${request.id}`),
+            error: 'denied',
+            item,
+            next: 'Stop: the owner denied this request.',
+            retry_after: new Date(until).toISOString(),
           },
           403,
         )
+      // A call files a request for exactly the item its method implies.
+      const request = createRequest(
+        agent,
+        [item],
+        [item],
+        c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
+        '2h',
+        `${method} ${detail ? `${path} · ${detail}` : path}`,
+      )
+      await hold(c, () => request.status !== 'pending')
+      if (!coverFor(agent.id, serviceId, write)) {
+        if (request.status === 'decided')
+          return c.json(
+            { error: 'denied', item, request: request.id, next: 'Stop: the owner denied this request.' },
+            403,
+          )
+        return c.json(
+          {
+            error: 'approval_required',
+            item,
+            request: request.id,
+            next: 'Repeat this call with Speaker-Wait: 60 (and Speaker-Reason: <one sentence>)',
+            tell_user: tellUser(c, `request-${request.id}`),
+          },
+          403,
+        )
+      }
     }
-    const lease = rule === 'approval' ? matchingLease(caller.id, 'credential', capability) : undefined
-    const target = upstreamUrl(provider, secret, parts, incoming.search)
-    if (!target) return c.json({ error: 'invalid_provider_url' }, 400)
-    await recordUse(lease?.id, caller.id)
+    const grant = rule === 'ask' ? coverFor(agent.id, serviceId, write) : undefined
+    const target = upstreamUrl(service, secret, parts, incoming.search)
+    if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
+    if (grant) useOf(grant)
+    useOf(agent)
     const headers = new Headers(c.req.raw.headers)
     const hopHeaders = [
       'connection',
@@ -1680,7 +1544,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       )
         headers.delete(name)
     headers.set('accept-encoding', 'identity')
-    applyCredential(provider, secret, headers)
+    applyCredential(service, secret, headers)
     const start = Date.now()
     const upstream = await fetch(target, {
       method,
@@ -1690,33 +1554,25 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       redirect: 'manual',
       signal: c.req.raw.signal,
     } as RequestInit).catch((error: Error) => {
-      audit('upstream_failed', { provider: providerId, error: String(error), cause: String(error.cause ?? '') })
+      audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
       return undefined
     })
-    audit('proxy_request', {
-      subject: caller.id,
-      provider: providerId,
+    audit('proxy', {
+      agent: agent.id,
+      service: serviceId,
       method,
       path,
       ...(detail ? { mcp: detail } : {}),
       status: upstream?.status ?? 502,
       latencyMs: Date.now() - start,
-    })
-    await logEvent('proxy', caller.id, {
-      provider: providerId,
-      method,
-      path,
-      ...(detail ? { mcp: detail } : {}),
-      status: upstream?.status ?? 502,
-      latencyMs: Date.now() - start,
-      leaseId: lease?.id ?? null,
+      grant: grant?.id ?? null,
       rule,
     })
     if (!upstream) return c.json({ error: 'upstream_unavailable' }, 502)
     const responseHeaders = new Headers(upstream.headers)
     for (const name of [...hopHeaders, 'content-encoding', 'content-length']) responseHeaders.delete(name)
     const location = responseHeaders.get('location')
-    if (provider.auth.type === 'path' && location?.includes(secret))
+    if (service.auth.type === 'path' && location?.includes(secret))
       responseHeaders.set('location', location.replaceAll(secret, '<redacted>'))
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
   })
@@ -1735,6 +1591,6 @@ if (import.meta.main) {
   })()
   const app = await createApp(config)
   serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0', websocket: { server: wss } }, (info) =>
-    audit('listening', { port: info.port }),
+    console.log(JSON.stringify({ time: new Date().toISOString(), event: 'listening', port: info.port })),
   )
 }
