@@ -10,8 +10,13 @@ try {
   if (extra.length || (which !== undefined && which !== "speaker" && which !== "bottle-school"))
     throw new Error("usage: mise run init [speaker | bottle-school] [flags]");
   let speakerUrl = values["speaker-url"];
-  if (which !== "bottle-school") speakerUrl ??= (await initSpeaker(values)).url;
-  if (which !== "speaker") await initBottleSchool({ ...values, "speaker-url": speakerUrl });
+  let password: string | undefined;
+  if (which !== "bottle-school") {
+    const speaker = await initSpeaker(values);
+    speakerUrl ??= speaker.url;
+    password = speaker.password; // so the owner is not asked again to unlock speaker
+  }
+  if (which !== "speaker") await initBottleSchool({ ...values, "speaker-url": speakerUrl }, password);
 } catch (error) {
   console.error(`error: ${(error as Error).message}`);
   process.exitCode = 1;

@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { loadConfig, validateConfig } from "./src/config.ts";
+import { configPathFromEnv, loadConfig, validateConfig } from "./src/config.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
@@ -22,6 +22,7 @@ export const bottleFlags = {
   "model-endpoint": { type: "string" },
   model: { type: "string" },
   image: { type: "string" },
+  "password-stdin": { type: "boolean" },
   config: { type: "string" },
   "skip-build": { type: "boolean" },
   "skip-register": { type: "boolean" },
@@ -135,10 +136,40 @@ async function waitFor(message: string, done: string, timeout: string, check: ()
   spin.stop(done);
 }
 
-export async function initBottleSchool(flags: BottleFlags) {
+const readStdin = async () => {
+  let text = "";
+  for await (const chunk of process.stdin) text += chunk;
+  return text.replace(/\r?\n$/, "");
+};
+
+/** Signs in to speaker's /admin; true when it accepted the password, false when it was wrong. */
+async function signIn(speakerUrl: string, password: string) {
+  const response = await fetch(`${speakerUrl}/admin/signin`, { method: "POST", headers: { origin: new URL(speakerUrl).origin }, body: new URLSearchParams({ password }), redirect: "manual", signal: AbortSignal.timeout(10_000) });
+  if (response.status === 303) return true;
+  if (response.status === 401) return false;
+  return fail(`speaker answered the sign-in with HTTP ${response.status}`, `sign in at ${speakerUrl}/admin yourself`);
+}
+
+/** Unlocks a locked speaker with the owner password (given, piped in, or typed); Enter at the prompt leaves it to the owner. */
+async function unlockSpeaker(speakerUrl: string, flags: BottleFlags, known: string | undefined) {
+  const given = known ?? (flags["password-stdin"] ? await readStdin() : undefined);
+  if (given !== undefined) {
+    if (!(await signIn(speakerUrl, given))) fail("speaker rejected the owner password", `pass the right one, or sign in at ${speakerUrl}/admin yourself`);
+  } else if (flags.yes) return;
+  else
+    for (;;) {
+      const typed = answered(await p.password({ message: `Speaker is locked. Enter the owner password to unlock it (or press Enter to sign in at ${speakerUrl}/admin yourself)` }));
+      if (typed === "") return;
+      if (await signIn(speakerUrl, typed)) break;
+      p.log.warn("Wrong password. Try again.");
+    }
+  p.log.success("Speaker is unlocked.");
+}
+
+export async function initBottleSchool(flags: BottleFlags, ownerPassword?: string) {
   const yes = flags.yes ?? false;
   p.intro("bottle-school setup");
-  const configPath = resolve(flags.config ?? process.env.PI_V2_CONFIG ?? join(here, "config.json"));
+  const configPath = resolve(flags.config ?? configPathFromEnv());
   if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "delete it, or pass --force to replace it");
   checkHost(!flags["skip-build"]);
   p.log.success("KVM access, setsid, and Docker are available.");
@@ -174,7 +205,7 @@ export async function initBottleSchool(flags: BottleFlags) {
   const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server (host:port, OpenAI-compatible)", placeholder: "192.168.1.20:8080" }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
   const model = await pickModel(endpoint, flags.model, yes);
 
-  const image = flags.image ?? "pi-v5-guest";
+  const image = await ask(flags.image, yes, "bottle-school-guest", () => p.text({ message: "Guest image tag", placeholder: "bottle-school-guest", defaultValue: "bottle-school-guest" }));
   const config = {
     ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
     bindHost: "127.0.0.1",
@@ -198,12 +229,12 @@ export async function initBottleSchool(flags: BottleFlags) {
   for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
   p.log.success(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
 
-  const env = { ...process.env, PI_V2_CONFIG: configPath };
+  const env = { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath };
   if (!flags["skip-build"]) {
     const build = yes || answered(await p.confirm({ message: `Build the guest image "${image}" now? It needs about 10 GiB under ${stateRoot} and several minutes the first time.`, initialValue: true }));
     if (build) {
       const status = await new Promise<number | null>((done) => spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done));
-      if (status !== 0) fail("the guest image build failed", `read the output above, then run: PI_V2_CONFIG=${configPath} mise run guest-build ${image}`);
+      if (status !== 0) fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run guest-build ${image}`);
       p.log.success(`Guest image ${image} is built and loaded.`);
     } else p.log.info(`Build it later with: mise run guest-build ${image}`);
   }
@@ -211,6 +242,8 @@ export async function initBottleSchool(flags: BottleFlags) {
   const loaded = loadConfig(configPath);
   if (!flags["skip-register"]) {
     // After a restart speaker is locked until the owner signs in; registering needs it open.
+    const isLocked = () => fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
+    if (await isLocked()) await unlockSpeaker(speakerUrl, flags, ownerPassword);
     await waitFor(`Speaker is locked: sign in at ${speakerUrl}/admin to unlock it`, "Speaker is unlocked.", "speaker stayed locked", async () =>
       fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status !== 503),
     );

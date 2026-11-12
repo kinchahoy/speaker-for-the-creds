@@ -45,7 +45,7 @@ Both must move at once; the API, admin sign-in and secret handling changed.
 3. **Secrets:** re-enter each secret from bottle-school's old `secrets.env` in speaker's Setup (name, value, allowed hosts, variable name), then delete `secrets.env`; bottle-school refuses to start while it exists.
 4. **bottle-school:** rerun `mise run init bottle-school --force` (templates and catalog changed format; it registers the host again and learns speaker's `PROXY_PORT`), approve it in `/admin`, and remove the old one.
 5. **SSH targets:** in Setup, add each target and put the shown line into the chosen account's `authorized_keys`.
-6. **Guest image:** rebuild `pi-v5-guest`, then restart bottle-school.
+6. **Guest image:** rebuild `bottle-school-guest`, then restart bottle-school.
 7. **Agents:** direct agents enroll again by following `$SPEAKER_URL/_speaker/help`.
 
 ## To explore later

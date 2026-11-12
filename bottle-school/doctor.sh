@@ -5,7 +5,8 @@ set -u
 umask 077
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 failed=0
-config=${PI_V2_CONFIG:-$root/config.json}
+[ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
+config=${BOTTLE_SCHOOL_CONFIG:-$root/config.json}
 cfg() { node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))[process.argv[2]] ?? ''" "$config" "$1" 2>/dev/null; }
 check() { # check <label> <fix> <command...>
 	label=$1 fix=$2

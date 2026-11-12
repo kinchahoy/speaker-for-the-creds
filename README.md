@@ -35,7 +35,7 @@ mise install
 mise run init
 ```
 
-`init` installs both packages, then asks the questions needed to set up speaker and then bottle-school. It offers to start each and to run a smoke-test task. Every question has a flag, and `--yes` takes the defaults, so it also runs unattended. Each package README lists the flags.
+`init` installs both packages, then asks the questions needed to set up speaker and then bottle-school. It offers to start each and to run a smoke-test task. The owner password is asked once: after speaker starts, `init` signs in with it, and bottle-school's step reuses it if speaker is locked. Every question has a flag, and `--yes` takes the defaults, so it also runs unattended. Each package README lists the flags.
 {.ai}
 
 To use two machines, run `mise run init speaker` on the server and `mise run init bottle-school` on the sandbox machine. To set up only one, name it the same way.
@@ -90,7 +90,7 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | `mise run bottle-cli ls` | List tasks |
 | `mise run bottle-cli attach <id>` | Join Pi in a running guest |
 | `mise run bottle-cli stop <id>` | Stop and archive a task |
-| `mise run guest-build pi-v5-guest` | Build the guest image and load it into microsandbox |
+| `mise run guest-build bottle-school-guest` | Build the guest image and load it into microsandbox |
 
 <!-- author: ai -->
 

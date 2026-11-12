@@ -2,10 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-const control = { url: process.env.PI_V2_CONTROL!, token: process.env.PI_V2_TOKEN! };
+const control = { url: process.env.BOTTLE_SCHOOL_CONTROL!, token: process.env.BOTTLE_SCHOOL_TOKEN! };
 // SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token.
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
-const PROMPT = "/etc/pi-v2/prompt.md";
+const PROMPT = "/etc/bottle-school/prompt.md";
 const WAIT_MS = 30 * 60_000;
 
 /** `wait` holds the reply for up to that many seconds (speaker's Speaker-Wait header). */

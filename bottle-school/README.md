@@ -23,14 +23,14 @@ From the repository root, run `mise trust && mise install` once, then:
 mise run init bottle-school
 ```
 
-The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. Every question has a flag, so it also runs unattended:
+The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. It asks for the guest image tag (default `bottle-school-guest`). If speaker is locked when it registers, it asks for the owner password to unlock it; press Enter to sign in at speaker's `/admin` yourself. Every question has a flag, so it also runs unattended:
 {.ai}
 
 ```sh
 mise run init bottle-school --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model
 ```
 
-The other flags are `--home`, `--control-port`, `--guest-port`, `--image`, `--config`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run doctor` rechecks the host later.
+The other flags are `--home`, `--control-port`, `--guest-port`, `--image`, `--config`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. With `--password-stdin`, `init bottle-school` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run doctor` rechecks the host later.
 {.ai}
 
 To configure by hand, copy `config.example.json` to `config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`.
@@ -42,7 +42,7 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
 - `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
-- `PI_V2_CONFIG` selects the service configuration, and `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
+- `BOTTLE_SCHOOL_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `bottle-school/config.json`. The older names `PI_V2_CONFIG` and `BOTTLE_CONFIG` still work for one release and print a deprecation note.
 
 <!-- author: ai -->
 
@@ -53,7 +53,7 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 `mise run init bottle-school` builds the guest image, registers the host, and can start the service. To do these steps by hand:
 
 ```sh
-mise run guest-build pi-v5-guest
+mise run guest-build bottle-school-guest
 mise run bottle-cli register   # prints the approve link; approve the sandbox host in speaker /admin
 mise run bottle
 ```
@@ -251,7 +251,7 @@ Placeholder substitution keeps the real value off the guest and off bottle-schoo
 
 <sub>AI-written</sub>
 
-bottle-school mounts `/input` for leased shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/pi-v2` for trusted read-only configuration. Pi runs as guest root.
+bottle-school mounts `/input` for leased shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle-school` for trusted read-only configuration. Pi runs as guest root.
 {.ai}
 
 At close, bottle-school stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker subject, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, lease and policy events, a hashed artifact manifest, the Pi session and transcript, and `trace.jsonl`.

@@ -6,7 +6,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
 import { reconcile } from "./sandbox.ts";
-import { assertNoHostSecrets, loadConfig, type Config } from "./config.ts";
+import { assertNoHostSecrets, configPathFromEnv, loadConfig, type Config } from "./config.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
@@ -185,7 +185,7 @@ export const startBroker = (config: Config) => {
 };
 
 if (import.meta.main) {
-  const configPath = process.env.PI_V2_CONFIG ?? `${import.meta.dirname}/../config.json`;
+  const configPath = configPathFromEnv();
   const config = loadConfig(configPath);
   const staleSessions = await reconcile(config);
   if (staleSessions) console.log(`removed ${staleSessions} microsandbox VMs a crashed service left behind`);

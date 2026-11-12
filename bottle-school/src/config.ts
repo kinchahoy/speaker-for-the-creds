@@ -113,6 +113,13 @@ export const validateConfig = (data: unknown): Config => {
 /** Parse the owner-owned file before the service ever opens a network listener. */
 export const loadConfig = (path: string): Config => validateConfig(JSON.parse(readFileSync(path, "utf8")));
 
+/** The config file path: BOTTLE_SCHOOL_CONFIG, else the legacy PI_V2_CONFIG or BOTTLE_CONFIG (deprecated for one release). */
+export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
+  const old = ["PI_V2_CONFIG", "BOTTLE_CONFIG"].find((name) => env[name]);
+  if (!env.BOTTLE_SCHOOL_CONFIG && old) console.error(`note: ${old} is deprecated; use BOTTLE_SCHOOL_CONFIG.`);
+  return env.BOTTLE_SCHOOL_CONFIG || (old && env[old]) || `${import.meta.dirname}/../config.json`;
+};
+
 export const controlOrigin = (config: Config) => `http://${config.bindHost}:${config.controlPort}`;
 
 /**

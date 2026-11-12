@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
-import { controlOrigin, loadConfig, type Config } from "./config.ts";
+import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
 /** The owner's terminal client: `mise run bottle-cli register | run | ls | attach | stop`. */
 type Task = {
@@ -22,7 +22,7 @@ type Task = {
 
 const SELF = "mise run bottle-cli";
 const root = resolve(import.meta.dirname, "../..");
-const configPath = process.env.BOTTLE_CONFIG ?? `${import.meta.dirname}/../config.json`;
+const configPath = configPathFromEnv();
 const run = promisify(execFile);
 
 const COMMANDS = {

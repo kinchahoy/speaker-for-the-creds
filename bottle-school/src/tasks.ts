@@ -188,7 +188,7 @@ export class Tasks {
         live,
         template.limits,
         { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, capture: `${outputDir}/_control/blobs` },
-        { PI_V2_TOKEN: token, PI_V2_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
+        { BOTTLE_SCHOOL_TOKEN: token, BOTTLE_SCHOOL_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
         { url: this.config.speaker.url, token: subject.token },
         () => speakerProxy(this.config, subject.token),
       );
