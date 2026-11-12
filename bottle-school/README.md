@@ -138,7 +138,7 @@ Build the guest image into that storage before the first task (it needs Docker, 
 guest/build-microsandbox.sh <stateRoot> pi-v5-ms    # then set "guestImage": "pi-v5-ms" and "backend": "microsandbox"
 ```
 
-`guest/microsandbox.Dockerfile` adds `socat` and `sshfs` to that base; the script `docker save`s the result and imports it with `msb load`. Linux needs `/dev/kvm` access and nothing else; the `microsandbox` package carries its own runtime. `mise run doctor` and `guest/build.sh` are Gondolin's and do not apply. Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, terminal resize.
+The backend takes any OCI image, however it was built, as long as it holds Node, Pi, git, curl, `socat`, `sshfs`, `openssh-client` and `ca-certificates` and has been imported into microsandbox's cache under the `guestImage` name (it never pulls). The loading step is only `docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestImage>` (`msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder), so another image builder can replace the Dockerfile below without touching the backend. The shipped Dockerfile is the quickest route, not a polished image: `guest/microsandbox.Dockerfile` adds `socat` and `sshfs` to that base; the script `docker save`s the result and imports it with `msb load`. Linux needs `/dev/kvm` access and nothing else; the `microsandbox` package carries its own runtime. `mise run doctor` and `guest/build.sh` are Gondolin's and do not apply. Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, terminal resize.
 {.ai}
 
 <!-- author: ai -->
