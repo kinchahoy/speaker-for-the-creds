@@ -304,7 +304,9 @@ export class Tasks {
         // The template's want list is the task's first request. A hosted model's key is a speaker secret, asked for here too.
         const first = launchRequest(template, task.subjectId, this.#providerSecrets(model));
         if (first) await this.speaker.request(first);
-        await pi.start(guest);
+        // A launch prompt is sent once, to a fresh session: if the hosted model's key were still missing, that first turn
+        // would fail for good. Pi then starts when the key arrives (#fetchProviderKey restarts it with the key in place).
+        if (!(input.prompt && this.#providerSecrets(model).length)) await pi.start(guest);
         task.state = "idle";
         if (input.prompt)
           this.#event(task, `owner launch prompt queued; archival at ${task.deadline}`);
