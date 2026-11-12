@@ -112,3 +112,16 @@ test('init speaker --start signs in once with the owner password, so speaker is 
   const me = await fetch(`http://127.0.0.1:${port}/_speaker/me`)
   assert.notEqual(me.status, 503)
 })
+
+test('init refuses a data directory that already has a key store, and says how to proceed', async (t) => {
+  const dir = await scratch(t)
+  const { args } = await ports()
+  assert.equal(run([...where(dir), ...args]).status, 0)
+  await rm(join(dir, '.env'))
+  const again = run([...where(dir), ...(await ports()).args])
+  assert.equal(again.status, 1)
+  assert.match(
+    again.stderr,
+    /already has a key store \(store\.json\).*choose another data directory, or keep using that install/,
+  )
+})

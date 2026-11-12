@@ -93,7 +93,7 @@ async function pickPort(
           : undefined
     if (!problem) return port
     if (value !== undefined || yes) fail(`${label} port ${raw} ${problem}`, `choose another with --${flag}`)
-    p.log.warn(`${raw} ${problem}. Choose another.`)
+    p.log.warn(`Port ${raw} ${problem === 'is already in use' ? 'is in use' : problem}; choose another.`)
   }
 }
 
@@ -181,8 +181,8 @@ export async function initSpeaker(flags: SpeakerFlags) {
   )
   if (existsSync(join(dataDir, 'store.json')))
     fail(
-      `${dataDir} already holds an owner password`,
-      'choose another data directory, or delete store.json there to start over (this loses every stored key)',
+      `${dataDir} already has a key store (store.json) from an earlier install`,
+      'choose another data directory, or keep using that install as it is (start it with mise run speaker); deleting store.json there loses every stored key',
     )
 
   const port = await pickPort(flags.port, yes, 'Web', 'the admin page and agents use it', 'port', 3000, [])
