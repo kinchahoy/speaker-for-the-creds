@@ -38,7 +38,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | Item | Grants | Who may ask |
 | --- | --- | --- |
 | `<service>.read` | GET, HEAD, OPTIONS to a service (for MCP services: listing and read-only tools) | any agent |
-| `<service>.write` | every other method or tool call; includes read | any agent |
+| `<service>.full` | read plus every other method or tool call | any agent |
 | `ssh:<target>` | running commands on that target as its agent account | any agent |
 | `folder:<share>` / `folder:<share>:rw` | the share, read-only unless the agent asks for `:rw`; delivered as a VM mount or over SSH (see below) | any agent |
 | `site:<host>` or `site:*.<domain>` | network access from the sandbox | sandboxed |
@@ -185,7 +185,7 @@ All secrets (service keys, secrets for sandboxes, and speaker's SSH key) are enc
 
 **Sign-in:** a login form with the owner's password (rate limited, session cookie). Plain HTTP works, for example on a single laptop; the sign-in page notes when the password is about to cross the network unencrypted. Network identity (for example a tailnet login) is never accepted as the owner: agents on the owner's machines share it.
 
-- **Inbox:** pending requests as cards. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and VM mount or over SSH; items that can change things (`<service>.write`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
+- **Inbox:** pending requests as cards. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and VM mount or over SSH; items that can change things (`<service>.full`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
 - **Active:** grants and agents, each with time left, **Extend** (labelled with the amount, such as "Extend 1h": one more span of its original length) and **Revoke**; open SSH sessions with **End**.
 - **Setup:** services (URL, key, read and write rules, notes for agents), secrets with their allowed hosts, targets, shares, groups, sandbox hosts.
 - **Log:** recent forwarded calls, SSH sessions and file operations, decisions, and requests for unknown names, filterable by agent, grant, service, target or share. It is an in-memory buffer; standard output is the full record.
