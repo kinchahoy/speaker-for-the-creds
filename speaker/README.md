@@ -213,8 +213,8 @@ protected.
 - A session works only from the address it enrolled from: the socket address. Behind a reverse proxy, set
   `TRUSTED_PROXY` to the proxy's IP; speaker then takes the last `X-Forwarded-For` entry from it and ignores that
   header from every other sender.
-- Agents extend their own grants up to three times, each by at most the span you approved; larger extensions
-  come to you as a new request. A denial stands for 15 minutes without re-asking you.
+- Only you extend access: Extend on a lease or session adds the span you originally granted.
+- A denial stands for 15 minutes without re-asking you.
 {.ai}
 
 <!-- author: ai -->

@@ -615,23 +615,25 @@ test('providers without a key are hidden from agents and cannot be requested', a
   assert.equal(((await refused.json()) as { error: string }).error, 'provider_not_configured')
 })
 
-test('an agent extends its grant itself within the approved span, and asks the owner beyond it', async (t) => {
+test('agents cannot extend; the owner extends a lease by its granted span', async (t) => {
   const f = await setup(t)
   await approvedSession(f, 'tok')
   const { requestId } = await firstRequest(f, 'tok')
   await f.owner(`/api/requests/${requestId}/approve`, { duration: '30m' })
-  const extend = (duration: string) =>
-    f.call(`/_speaker/requests/${requestId}/extend`, {
-      method: 'POST',
-      headers: bearer('tok'),
-      body: JSON.stringify({ duration }),
-    })
-  const small = await extend('15m')
-  assert.equal(small.status, 200)
-  assert.equal(((await small.json()) as { status: string }).status, 'approved')
-  const large = await extend('1h')
-  assert.equal(large.status, 202)
-  assert.equal(((await large.json()) as { status: string }).status, 'pending')
+  for (const path of [`/_speaker/requests/${requestId}/extend`, `/_speaker/sessions/${requestId}/extend`]) {
+    const gone = await f.call(path, { method: 'POST', headers: bearer('tok'), body: '{"duration":"15m"}' })
+    assert.equal(gone.status, 404)
+  }
+  const [before] = await f.leases()
+  assert.equal((await f.ownerForm('/leases/extend', { id: before.id })).status, 303)
+  const [after] = await f.leases()
+  assert.equal(Date.parse(after.expiresAt ?? '') - Date.parse(before.expiresAt ?? ''), 1_800_000)
+  const request = (await (await f.call(`/_speaker/requests/${requestId}`, { headers: bearer('tok') })).json()) as {
+    status: string
+    expiresAt: string
+  }
+  assert.equal(request.status, 'approved')
+  assert.equal(request.expiresAt, after.expiresAt)
 })
 
 test('a session token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {

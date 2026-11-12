@@ -14,4 +14,4 @@ Speaker holds the real keys and the owner approves each grant. Never ask for or 
 - Without access, add `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>'`: speaker asks the owner and answers the call once approved. Tell the user to approve at `$SPEAKER_URL/admin`.
 - Any 401 or 403 has a `next` field: do exactly that, and pass on `tell_user`. Stop on `denied`; never reach a denied service another way.
 - SSH to a homelab host: `/_speaker/help/ssh` (a short-lived certificate for your own key).
-- More: `/_speaker/help/requests` (asking and extending), `/_speaker/help/kinds`, `/_speaker/help/bundles`.
+- More: `/_speaker/help/requests` (asking for access), `/_speaker/help/kinds`, `/_speaker/help/bundles`.

@@ -9,6 +9,29 @@ const select = (name: string, label: string, values: readonly string[], chosen =
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
+// The owner's quiet Extend button next to Revoke; only when there is an end and a span to add.
+const spanLabel = (ms: number) =>
+  ms % 86_400_000 === 0
+    ? `${ms / 86_400_000}d`
+    : ms % 3_600_000 === 0
+      ? `${ms / 3_600_000}h`
+      : `${Math.round(ms / 60_000)}m`
+const extend = (
+  action: string,
+  fields: unknown,
+  expiresAt: string | null,
+  grantedMs: number | undefined,
+  name: string,
+) =>
+  expiresAt !== null && grantedMs !== undefined
+    ? form(
+        action,
+        fields,
+        `Extend ${spanLabel(grantedMs)}`,
+        'inline quiet',
+        `Extend ${name} by ${spanLabel(grantedMs)}`,
+      )
+    : ''
 const durations = ['15m', '30m', '1h', '1d', '7d', '30d', '90d']
 const permanentOverride = html`<label class="override" title="Creates a permanent lease that stays until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
 
@@ -229,6 +252,7 @@ button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min
 button:hover{filter:brightness(1.1)}button:active{transform:translateY(1px);filter:brightness(.94)}button:disabled{opacity:.5;cursor:not-allowed}
 .approve{background:var(--go);color:var(--on-go);font-weight:750}
 .deny{background:transparent;color:var(--bad);border-color:var(--bad)}.danger button{background:transparent;color:var(--bad);border-color:var(--line);font-weight:600}.deny:hover,.danger button:hover{background:var(--bad-bg);filter:none}
+.quiet button{background:transparent;color:var(--ink);border-color:var(--line);font-weight:600}.quiet button:hover{background:var(--sunk);filter:none}
 .dlg-actions .ok{background:var(--bad);color:var(--surface);border-color:var(--bad)}
 .row{display:flex;gap:12px;align-items:center}.row-main{flex:1;min-width:0;overflow-wrap:anywhere}.row-title{font-weight:650}.row-sub{color:var(--dim);font-size:.85rem}
 .row-act{display:flex;gap:6px;align-items:center;flex:none}.row-act a{display:inline-flex;align-items:center;min-height:44px;padding:0 10px;font-weight:600}
@@ -274,8 +298,15 @@ const notices = {
   failed: 'Phone notification failed. Access stays locked.',
 }
 const searchable = (...parts: unknown[]) => parts.join(' ').toLowerCase()
-const identity = (type: 'enforcer' | 'session', what: string, meta: unknown, kindList: string[], path: string) =>
-  html`<li data-search="${searchable(type, what, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${what}</div><div class="row-sub">${meta}</div></div><div class="row-act">${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger', `Revoke ${type} ${what}`, `Revoke ${type} ${what}? It stops working immediately and must be approved again.`)}</div></div></li>`
+const identity = (
+  type: 'enforcer' | 'session',
+  what: string,
+  meta: unknown,
+  kindList: string[],
+  path: string,
+  extension: unknown = '',
+) =>
+  html`<li data-search="${searchable(type, what, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${what}</div><div class="row-sub">${meta}</div></div><div class="row-act">${extension}${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger', `Revoke ${type} ${what}`, `Revoke ${type} ${what}? It stops working immediately and must be approved again.`)}</div></div></li>`
 const bundleErrors: Record<string, string> = {
   empty: 'Bundle not saved: list at least one member, one per line as "kind ref".',
   line: `Bundle not saved: each line must be "kind ref", with kind one of ${kindNames.join(', ')}.`,
@@ -334,6 +365,7 @@ export function adminPage(
           html`${who(s)} · ${activity(s, `identity=${encodeURIComponent(s.id)}`)} · ${s.expiresAt ?? 'until revoked'}`,
           ['credential'],
           `sessions/${s.id}`,
+          extend(`/admin/sessions/${s.id}/extend`, '', s.expiresAt, s.grantedMs, `session ${s.label}`),
         ),
       ),
   ]
@@ -536,7 +568,7 @@ export function livePanels({ enforcers, sessions, requests, leases, always }: Vi
   )
   const leaseList = ordered.map((l) => {
     const [tone, state] = chips[l.state]
-    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l, `lease=${encodeURIComponent(l.id)}`) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
+    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l, `lease=${encodeURIComponent(l.id)}`) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${extend('/admin/leases/extend', input('id', '', 'hidden', l.id), l.expiresAt, l.grantedMs, `lease ${l.label} ${l.ref}`)}${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
   })
   return {
     pending: items.length,
