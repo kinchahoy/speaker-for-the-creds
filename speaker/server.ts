@@ -56,10 +56,10 @@ const durations = {
   '30d': 2_592_000_000,
   '90d': 7_776_000_000,
 }
-// An agent may extend a grant itself this many times, each by at most the span the owner approved.
-const autoExtensions = 3
-// A denied request is answered as denied, without asking the owner again, for this long.
-const deniedCooldown = durations['15m']
+// Three denials of the same request within this window lock it: it is answered as denied, without asking the owner,
+// until the window after the third denial has passed.
+const denialLimit = 3
+const denialWindow = durations['15m']
 // An `always` policy grants a session access without a request, for at most this long after its approval.
 const alwaysLimit = durations['90d']
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
@@ -145,9 +145,8 @@ const sessionSchema = z.object({
   // Address the session enrolled from; its token is refused from anywhere else.
   source: z.string().max(100).optional(),
   enrolledAt: z.string().optional(),
-  // Span the owner approved, and how many times the agent extended it without asking.
+  // Span the owner approved; the owner's Extend adds it again.
   grantedMs: z.number().int().positive().optional(),
-  extensions: z.number().int().nonnegative().optional(),
 })
 const requestInputSchema = z
   .object({
@@ -168,7 +167,6 @@ const leaseSchema = z.object({
   ref: z.string(),
   expiresAt: z.string().nullable(),
   grantedMs: z.number().int().positive().optional(),
-  extensions: z.number().int().nonnegative().optional(),
 })
 const usageSchema = z.object({
   uses: z.number().int().nonnegative(),
@@ -265,6 +263,8 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       SSH_CA_KEY: z.string().min(1).optional(),
       SSH_MAX_DURATION: durationSchema.unwrap().default('1h'),
       // When on, GET /_speaker/providers answers without a token (names, auth type and policy only).
+      // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
+      TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
       PUBLIC_PROVIDERS: z
         .enum(['0', '1', 'false', 'true'])
         .default('0')
@@ -747,11 +747,31 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       expiresAt,
     })
   }
+  // Denial times per subject and identical member set, in memory only.
+  const denials = new Map<string, number[]>()
+  const strikeKey = (subjectId: string, members: Capability[], bundle: string | undefined) =>
+    JSON.stringify([subjectId, bundle, members])
+  const recentDenials = (key: string) => (denials.get(key) ?? []).filter((at) => Date.now() - at < denialWindow)
+  // When asking the owner works again for a request denied three times (a time in ms), else undefined.
+  const lockedUntil = (subjectId: string, members: Capability[], bundle: string | undefined) => {
+    const struck = recentDenials(strikeKey(subjectId, members, bundle))
+    return struck.length >= denialLimit ? struck[struck.length - 1] + denialWindow : undefined
+  }
+  const lockedReply = (until: number, fields: Record<string, unknown>) => ({
+    error: 'denied',
+    ...fields,
+    next: 'Stop: the owner denied this request.',
+    retry_after: new Date(until).toISOString(),
+  })
   function deny(id: string) {
     return serial(() => {
       const request = decidable(id, 'deny')
       move(request, 'deny')
       request.decidedAt = Date.now()
+      if (!request.ssh) {
+        const key = strikeKey(request.subjectId, request.members, request.bundle)
+        denials.set(key, [...recentDenials(key), request.decidedAt])
+      }
       void logEvent('request_denied', request.subjectId, {
         requestId: id,
         capability: request.bundle ?? request.members,
@@ -815,11 +835,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       r.subjectId === subjectId &&
       r.bundle === bundle &&
       JSON.stringify(r.members) === JSON.stringify(members)
-    // A recent denial stands: answer with it instead of asking the owner again.
-    const denied = [...pending.values()].find(
-      (r) => matches(r) && r.status === 'denied' && Date.now() - (r.decidedAt ?? r.createdAt) < deniedCooldown,
-    )
-    if (denied) return denied
     const existing = [...pending.values()].find((r) => matches(r) && r.status === 'pending')
     if (existing) {
       if (reason) Object.assign(existing, { reason, duration })
@@ -882,14 +897,22 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
 
   const base = config.PUBLIC_URL.replace(/\/$/, '')
   const tellUser = (anchor: string) => `Ask the owner to approve at ${base}/admin#${anchor}`
-  // The caller's address: the first X-Forwarded-For hop (speaker runs behind the owner's reverse proxy), else the
-  // socket; in-process app.fetch callers have neither and share 'unknown'.
-  const sourceOf = (c: Context) =>
-    (
-      c.req.header('x-forwarded-for')?.split(',')[0].trim() ||
-      (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ||
-      'unknown'
-    ).replace(/^::ffff:/, '')
+  // The caller's address is the socket's; only the trusted proxy may name another one, with the last
+  // X-Forwarded-For entry it appended. In-process app.fetch callers have no socket and share 'unknown'.
+  const sourceOf = (c: Context) => {
+    const socket = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket
+    const peer = socket?.remoteAddress?.replace(/^::ffff:/, '')
+    if (peer === undefined) return 'unknown'
+    if (peer !== config.TRUSTED_PROXY) return peer
+    return (
+      c.req
+        .header('x-forwarded-for')
+        ?.split(',')
+        .at(-1)
+        ?.trim()
+        .replace(/^::ffff:/, '') || peer
+    )
+  }
   // Every agent-facing 401 names its cause and the next step, and points at the skill.
   const unauthorized = (c: Context, error: string, fields: Record<string, string>) => {
     c.header('www-authenticate', 'Bearer realm="speaker"')
@@ -1328,6 +1351,36 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     for (const [key, request] of pending) if (request.subjectId === session.id) pending.delete(key)
     return redirect(c)
   })
+  // Extending moves the end to max(current end, now) + the span the owner originally granted.
+  const extended = (expiresAt: string | null, grantedMs: number | undefined) => {
+    if (expiresAt === null || grantedMs === undefined) throw new HTTPException(409, { message: 'Nothing to extend' })
+    return Math.max(Date.parse(expiresAt), Date.now()) + grantedMs
+  }
+  admin.post('/leases/extend', async (c) => {
+    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    const lease = leases.get(id)
+    if (!lease) throw new HTTPException(404, { message: 'Lease not found' })
+    const end = extended(lease.expiresAt, lease.grantedMs)
+    await serial(async () => {
+      const next = new Map(leases)
+      next.set(id, { ...lease, expiresAt: new Date(end).toISOString() })
+      await commitLeases(next)
+      // The lifecycle sweep expires an approval at its expiresAt, so it moves with its lease.
+      for (const request of pending.values())
+        if (request.status === 'approved' && request.leaseIds.includes(id) && (request.expiresAt ?? 0) < end)
+          request.expiresAt = end
+    })
+    void logEvent('lease_extended', lease.subjectId, { leaseId: id, expiresAt: new Date(end).toISOString() })
+    return redirect(c)
+  })
+  admin.post('/sessions/:id/extend', async (c) => {
+    const session = identity(sessions, c.req.param('id'))
+    if (session.status !== 'approved') throw new HTTPException(409, { message: 'Only an approved session extends' })
+    session.expiresAt = new Date(extended(session.expiresAt, session.grantedMs)).toISOString()
+    await saveList('sessions.json', sessions)
+    void logEvent('session_extended', session.id, { expiresAt: session.expiresAt })
+    return redirect(c)
+  })
   // Browser forms and JSON clients share exactly the same approval/revocation implementation.
   for (const api of [false, true]) {
     const prefix = api ? '/api' : ''
@@ -1390,7 +1443,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       `- Write (other methods): ${access('write')}`,
       ...(session ? [`- Your session is approved ${until(session.expiresAt)}.`] : []),
       '- Without access, send the call with `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`): speaker asks the owner and answers the call once approved. Otherwise a `403` names the `next` step. `denied` is final.',
-      '- Running out of time: `POST /_speaker/requests/<id>/extend` with `{"duration":"15m"}`.',
       ...(provider.mcp
         ? [
             `- MCP server (streamable HTTP) at \`$SPEAKER_URL/${name}\`. Listing tools and read-only tools count as read; other tool calls count as write.`,
@@ -1443,6 +1495,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       subjectId = caller.id
     }
     const members = membersFor(input, kindsOf(caller))
+    const until = lockedUntil(subjectId, members, input.bundle)
+    if (until !== undefined) return c.json(lockedReply(until, { status: 'denied' }), 403)
     const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
     const status = request.status
     return c.json(
@@ -1538,62 +1592,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         : {}
     return c.json({ ...requestReply(request), ...certificate })
   })
-  const extendInput = async (c: Context) =>
-    z.object({ duration: durationSchema }).parse(await c.req.json().catch(() => ({}))).duration
-  // Extends an approved request's leases from now. Small extensions (at most the span the owner approved, a few
-  // times) need no owner; a larger one files a new request for the same access.
-  app.post('/_speaker/requests/:id/extend', async (c) => {
-    const request = ownRequest(c),
-      duration = await extendInput(c)
-    if (request.status !== 'approved' || request.ssh)
-      return c.json({ error: 'not_extendable', next: 'Request the access again (POST /_speaker/requests)' }, 409)
-    if (request.expiresAt === null) return c.json({ status: 'approved', expiresAt: null })
-    const owned = request.leaseIds.map((id) => leases.get(id)).filter((lease): lease is Lease => Boolean(lease))
-    const wanted = durations[duration]
-    if (owned.some((l) => l.grantedMs === undefined || wanted > l.grantedMs || (l.extensions ?? 0) >= autoExtensions)) {
-      const again = createRequest(request.subjectId, request.members, request.bundle, 'extend access', duration)
-      return c.json(
-        {
-          status: again.status,
-          requestId: again.id,
-          next: `GET /_speaker/requests/${again.id}?wait=60`,
-          tell_user: tellUser(`request-${again.id}`),
-        },
-        202,
-      )
-    }
-    await serial(async () => {
-      const next = new Map(leases)
-      const end = Math.max(Date.now() + wanted, request.expiresAt ?? 0)
-      for (const lease of owned)
-        next.set(lease.id, {
-          ...lease,
-          expiresAt: new Date(end).toISOString(),
-          extensions: (lease.extensions ?? 0) + 1,
-        })
-      await commitLeases(next)
-      // The lifecycle sweep expires the approval at request.expiresAt, so it moves with its leases.
-      request.expiresAt = end
-    })
-    const expiresAt = new Date(request.expiresAt).toISOString()
-    void logEvent('lease_extended', request.subjectId, { requestId: request.id, expiresAt })
-    return c.json({ status: 'approved', expiresAt })
-  })
-  // A session extends itself the same way; beyond the automatic limit it enrolls again.
-  app.post('/_speaker/sessions/:id/extend', async (c) => {
-    const caller = subjectOf(c),
-      session = sessions.get(c.req.param('id'))
-    if (!session || session.id !== caller.id) throw new HTTPException(404, { message: 'Session not found' })
-    const wanted = durations[await extendInput(c)]
-    if (session.expiresAt === null) return c.json({ status: 'approved', expiresAt: null })
-    if (session.grantedMs === undefined || wanted > session.grantedMs || (session.extensions ?? 0) >= autoExtensions)
-      return c.json({ error: 'extension_needs_approval', next: enroll }, 403)
-    session.expiresAt = new Date(Math.max(Date.now() + wanted, Date.parse(session.expiresAt))).toISOString()
-    session.extensions = (session.extensions ?? 0) + 1
-    await saveList('sessions.json', sessions)
-    void logEvent('session_extended', session.id, { expiresAt: session.expiresAt })
-    return c.json({ status: 'approved', expiresAt: session.expiresAt })
-  })
   app.all('/_speaker/*', (c) => c.json({ error: 'unknown_control_route' }, 404))
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url),
@@ -1622,9 +1620,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const secret = secrets.get(providerId)
     if (secret === undefined) return c.json({ error: 'provider_not_configured' }, 503)
     if (rule === 'approval' && !hasLease(caller.id, 'credential', capability)) {
+      const members: Capability[] = [{ kind: 'credential', ref: capability }]
+      const until = lockedUntil(caller.id, members, undefined)
+      if (until !== undefined) return c.json(lockedReply(until, { capability }), 403)
       const request = createRequest(
         caller.id,
-        [{ kind: 'credential', ref: capability }],
+        members,
         undefined,
         c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
         '15m',

@@ -28,7 +28,7 @@ type Snapshot = {
 }
 const port = (server: { address(): string | AddressInfo | null }) => (server.address() as AddressInfo).port
 
-async function setup(t: TestContext, bundles: object = {}) {
+async function setup(t: TestContext, bundles: object = {}, env: Record<string, string> = {}) {
   const calls: { url?: string; headers: IncomingHttpHeaders }[] = []
   const upstream = createServer(async (req, res) => {
     calls.push({ url: req.url, headers: req.headers })
@@ -59,7 +59,9 @@ async function setup(t: TestContext, bundles: object = {}) {
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
   await writeFile(join(dataDir, 'bundles.json'), JSON.stringify(bundles))
-  const app = await createApp(readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost' }))
+  const app = await createApp(
+    readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }),
+  )
   const server = serve({
     fetch: app.fetch,
     port: 0,
@@ -589,13 +591,29 @@ test('Speaker-Wait holds a call until approval and then returns the upstream res
   assert.equal(f.calls.at(-1)?.headers['speaker-reason'], undefined)
 })
 
-test('a denied request stays denied instead of asking the owner again', async (t) => {
+test('the third denial of an identical request locks it with retry_after; earlier denials ask the owner again', async (t) => {
   const f = await setup(t)
   await approvedSession(f, 'tok')
-  const { requestId } = await firstRequest(f, 'tok')
-  assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
-  const again = (await (await f.call('/notes/x', { headers: bearer('tok') })).json()) as { error: string }
-  assert.equal(again.error, 'denied')
+  for (const strike of [1, 2, 3]) {
+    const asked = await f.call('/notes/x', { headers: bearer('tok') })
+    const { requestId, error } = (await asked.json()) as { requestId: string; error: string }
+    assert.equal(error, 'approval_required', `denial ${strike} was still asked`)
+    assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
+  }
+  const locked = await f.call('/notes/x', { headers: bearer('tok') })
+  const body = (await locked.json()) as { error: string; next: string; retry_after: string }
+  assert.equal(locked.status, 403)
+  assert.equal(body.error, 'denied')
+  assert.equal(body.next, 'Stop: the owner denied this request.')
+  const wait = Date.parse(body.retry_after) - Date.now()
+  assert.ok(wait > 14 * 60_000 && wait <= 15 * 60_000)
+  const direct = await f.call('/_speaker/requests', {
+    method: 'POST',
+    headers: bearer('tok'),
+    body: JSON.stringify({ capability: { kind: 'credential', ref: 'notes.read' }, reason: 'r' }),
+  })
+  assert.equal(direct.status, 403)
+  assert.equal(((await direct.json()) as { retry_after: string }).retry_after, body.retry_after)
 })
 
 test('providers without a key are hidden from agents and cannot be requested', async (t) => {
@@ -613,33 +631,44 @@ test('providers without a key are hidden from agents and cannot be requested', a
   assert.equal(((await refused.json()) as { error: string }).error, 'provider_not_configured')
 })
 
-test('an agent extends its grant itself within the approved span, and asks the owner beyond it', async (t) => {
+test('agents cannot extend; the owner extends a lease by its granted span', async (t) => {
   const f = await setup(t)
   await approvedSession(f, 'tok')
   const { requestId } = await firstRequest(f, 'tok')
   await f.owner(`/api/requests/${requestId}/approve`, { duration: '30m' })
-  const extend = (duration: string) =>
-    f.call(`/_speaker/requests/${requestId}/extend`, {
-      method: 'POST',
-      headers: bearer('tok'),
-      body: JSON.stringify({ duration }),
-    })
-  const small = await extend('15m')
-  assert.equal(small.status, 200)
-  assert.equal(((await small.json()) as { status: string }).status, 'approved')
-  const large = await extend('1h')
-  assert.equal(large.status, 202)
-  assert.equal(((await large.json()) as { status: string }).status, 'pending')
+  for (const path of [`/_speaker/requests/${requestId}/extend`, `/_speaker/sessions/${requestId}/extend`]) {
+    const gone = await f.call(path, { method: 'POST', headers: bearer('tok'), body: '{"duration":"15m"}' })
+    assert.equal(gone.status, 404)
+  }
+  const [before] = await f.leases()
+  assert.equal((await f.ownerForm('/leases/extend', { id: before.id })).status, 303)
+  const [after] = await f.leases()
+  assert.equal(Date.parse(after.expiresAt ?? '') - Date.parse(before.expiresAt ?? ''), 1_800_000)
+  const request = (await (await f.call(`/_speaker/requests/${requestId}`, { headers: bearer('tok') })).json()) as {
+    status: string
+    expiresAt: string
+  }
+  assert.equal(request.status, 'approved')
+  assert.equal(request.expiresAt, after.expiresAt)
 })
 
-test('a session token works only from the address it enrolled from', async (t) => {
+test('a session token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {
   const f = await setup(t)
-  const from = (ip: string) => ({ 'x-forwarded-for': ip })
-  const { id } = (await (await enroll(f, 'tok', from('100.64.0.7'))).json()) as { id: string }
+  const { id } = (await (await enroll(f, 'tok', { 'x-forwarded-for': '100.64.0.7' })).json()) as { id: string }
   await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7') } })
+  // Bound to the socket address (127.0.0.1); a spoofed header changes nothing.
+  const spoofed = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  assert.equal(spoofed.status, 200)
+})
+
+test('a trusted proxy names the caller with the last X-Forwarded-For entry', async (t) => {
+  const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
+  const from = (chain: string) => ({ 'x-forwarded-for': chain })
+  const { id } = (await (await enroll(f, 'tok', from('6.6.6.6, 100.64.0.7'))).json()) as { id: string }
+  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
+  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
   assert.equal(home.status, 200)
-  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.9') } })
+  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
   assert.equal(away.status, 401)
   assert.equal(((await away.json()) as { error: string }).error, 'source_mismatch')
 })
