@@ -1,9 +1,9 @@
 [tools]
 node = "26.13.0"
 pnpm = "12.16.1"
-zig = "0.17.1" # only for `mise run krun-runner`
 
-# Host-specific bottle-school settings (model endpoint, speaker URL, VMM). Gitignored; see bottle-school/.env.example.
+
+# Host-specific bottle-school settings (model endpoint, speaker URL). Gitignored; see bottle-school/.env.example.
 [env]
 _.file = "bottle-school/.env"
 
@@ -45,14 +45,10 @@ dir = "bottle-school"
 run = "./start.sh"
 
 [tasks.guest-build]
-description = "Build the guest image for both backends: mise run guest-build pi-v5-guest"
+description = "Build the guest image and load it into microsandbox: mise run guest-build pi-v5-guest"
 dir = "bottle-school"
 run = "guest/build.sh"
 
-[tasks.krun-runner]
-description = "Build the Krun runner without AVX-512 into bottle-school/.runtime/krun-runner (once per machine)"
-dir = "bottle-school"
-run = "./krun-runner.sh"
 
 [tasks.bottle-cli]
 description = "Run the bottle CLI: mise run bottle-cli register|run|ls|attach|stop"

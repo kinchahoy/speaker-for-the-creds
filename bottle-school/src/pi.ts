@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import type { Config } from "./config.ts";
-import type { Guest } from "./backend.ts";
+import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./leases.ts";
 import type { Lease, SecretInfo } from "./speaker.ts";
 
@@ -91,11 +91,8 @@ const modelsJson = (config: Config, keys: Map<string, string>) => ({
       config.hostedProviders.map((provider) => [
         provider.id,
         {
-          // The microsandbox guest has no route to the provider: its model endpoint forwards /hosted/<id>/... there.
-          baseUrl:
-            config.backend === "microsandbox"
-              ? `http://${config.localModel.guestHost}/hosted/${provider.id}${new URL(provider.baseUrl).pathname}`
-              : provider.baseUrl,
+          // The guest has no route to the provider: its model endpoint forwards /hosted/<id>/... there.
+          baseUrl: `http://${config.localModel.guestHost}/hosted/${provider.id}${new URL(provider.baseUrl).pathname}`,
           api: "openai-completions",
           // Speaker's proxy swaps this placeholder for the real key in requests to the secret's hosts.
           apiKey: keys.get(provider.credential) ?? `speaker-secret-${provider.credential}-not-granted-yet`,

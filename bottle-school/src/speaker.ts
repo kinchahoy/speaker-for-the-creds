@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { ProxyAgent } from "undici";
 import { z } from "zod";
 import type { Config } from "./config.ts";
@@ -108,19 +108,8 @@ export const speakerProxy = async (config: Config, agentToken: string) => {
   });
 };
 
-/**
- * The shares this host holds and whether the VM can mount each (its directory is readable), for speaker's choice of
- * delivery. The microsandbox guest has no VM mount: it reaches folders over SSH through speaker.
- */
-export const shareReport = (config: Config) =>
-  Object.entries(config.shareRoots).map(([name, root]) => {
-    try {
-      accessSync(root, constants.R_OK | constants.X_OK);
-      return { name, mount: config.backend !== "microsandbox" };
-    } catch {
-      return { name, mount: false };
-    }
-  });
+/** The shares this host holds, for speaker's choice of delivery: the guest has no VM mount, its folders arrive over SSH. */
+export const shareReport = (config: Config) => Object.keys(config.shareRoots).map((name) => ({ name, mount: false }));
 
 /**
  * How long the service may run without reaching speaker: at startup, and after losing it. After `dropMs` without

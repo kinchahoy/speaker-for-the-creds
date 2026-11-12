@@ -1,10 +1,13 @@
+// One microsandbox VM per task. The guest has no network device: five vsock doors (egress proxy, model endpoint,
+// speaker's agent API, the control API, and ssh to speaker's jump server) are its only way out, each served here on a
+// unix socket and decided by the live lease view.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { once } from "node:events";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
-import { connect, createServer as createNetServer, isIP, type Socket } from "node:net";
+import { BlockList, connect, createServer as createNetServer, isIP, type Socket } from "node:net";
 import { pipeline } from "node:stream/promises";
 import { buffer } from "node:stream/consumers";
 import { promisify } from "node:util";
@@ -12,23 +15,98 @@ import { RequestError, Server as ProxyServer } from "proxy-chain";
 import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
-import { countModelRequest, isInternalIp, note, recordHttp, secretRoute, type Backend, type Live } from "../backend.ts";
-import type { Config } from "../config.ts";
-import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired } from "../leases.ts";
+import type { Config } from "./config.ts";
+import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./leases.ts";
+import { recordHttp, type HttpResponseRecord } from "./trace.ts";
+
+/** The live lease view the doors read. Each speaker snapshot replaces these entries; every use checks expiry. */
+export type Live = {
+  hosts: (Timed & { host: string })[];
+  /** Granted `secret:` items and the hosts speaker bound them to. Requests to these hosts go through speaker's proxy. */
+  secretHosts: (Timed & { name: string; hosts: string[] })[];
+  /** Folder grants by share, mounted under /input over SSH through speaker. */
+  shares: Map<string, Timed & { writable: boolean }>;
+  events: { at: string; text: string }[];
+  httpResponses: HttpResponseRecord[];
+  httpResponsesOmitted: number;
+  httpBodyBytes: number;
+  /** Spend cap: model requests allowed so far, the owner's limit, and whether the refusal was recorded. */
+  modelRequests: number;
+  maxModelRequests?: number;
+  modelCapNoted: boolean;
+};
+
+export type Guest = {
+  /** The task's throwaway SSH public key; it goes to speaker with the task's requests. */
+  sshKey?: string;
+  /** The microsandbox name; `attach` turns it into the owner's terminal command. */
+  sessionId: string;
+  exec: (command: string) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  close: () => Promise<void>;
+};
+export type Boot = typeof boot;
+
+export const note = (live: Pick<Live, "events">, text: string) => {
+  live.events.push({ at: new Date().toISOString(), text });
+  if (live.events.length > 2_000) live.events.splice(0, live.events.length - 2_000);
+};
+
+export const countModelRequest = (live: Live) => {
+  if (live.maxModelRequests === undefined || live.modelRequests < live.maxModelRequests) {
+    live.modelRequests += 1;
+    return true;
+  }
+  if (!live.modelCapNoted) note(live, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
+  live.modelCapNoted = true;
+  return false;
+};
+
+/**
+ * Where requests to a granted secret's hosts go: through speaker's proxy, which holds the value and swaps the agent's
+ * placeholder in. `allow` answers for those hosts (undefined for every other host, which the rest of the policy decides);
+ * `dispatcher` is the upstream route for them. The proxy connection is made at first use.
+ */
+export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: () => Promise<Dispatcher>) => {
+  let viaSpeaker: Dispatcher | undefined;
+  const covered = (host: string) => hostMatches(unexpired(live.secretHosts).flatMap((entry) => entry.hosts), host);
+  return {
+    allow: async (host: string) => {
+      if (!covered(host)) return undefined;
+      try {
+        viaSpeaker ??= await proxy();
+        return true;
+      } catch (error) {
+        // Never fall back to a direct request: the placeholder would reach the real host instead of the secret.
+        note(live, `blocked a request to ${host}: ${(error as Error).message}`);
+        return false;
+      }
+    },
+    dispatcher: (host: string) => {
+      if (!covered(host)) return undefined;
+      if (!viaSpeaker) throw new Error(`speaker's proxy is not connected; refusing a direct request to ${host}`);
+      return viaSpeaker;
+    },
+    close: async () => void (await viaSpeaker?.close()),
+  };
+};
+
+const internal = new BlockList();
+for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["255.0.0.0", 8]] as const)
+  internal.addSubnet(network, prefix, "ipv4");
+internal.addAddress("::1", "ipv6");
+export const isInternalIp = (ip: string) => internal.check(ip, ip.includes(":") ? "ipv6" : "ipv4");
 
 /** Guest vsock ports, one per door; `socat` in the guest exposes each as a localhost TCP port. */
 const DOORS = { egress: [5000, 3128], model: [5001, 80], speaker: [5002, 3129], control: [5003, 3130] } as const;
-
 /** The fifth door: the guest's ssh reaches speaker's jump server through it (`ProxyCommand socat`), for folders over `sshfs`. */
 const SSH_VSOCK = 5004;
 const GUEST_SSH = { key: "/run/speaker/ssh_key", config: "/run/speaker/ssh_config", knownHosts: "/run/speaker/known_hosts" };
 
 /** microsandbox keeps its images and sandbox records here. It refuses a folder other accounts could write. */
-const home = (config: Config) => {
+const msbHome = (config: Config) => {
   const dir = `${config.stateRoot}/microsandbox`;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   process.env.MSB_HOME = dir;
-  return dir;
 };
 
 /** What the guest's HTTP proxy does with a host: refuse it, route it through speaker's proxy (a secret host), or go direct. */
@@ -48,11 +126,7 @@ export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof s
 const publicLookup = ((hostname: string, options: dns.LookupOptions, callback: (...result: unknown[]) => void) =>
   dns.lookup(hostname, { ...options, family: 4 }, (error, address, family) => {
     const addresses = typeof address === "string" ? [address] : address.map((entry) => entry.address);
-    callback(
-      error ?? (addresses.some(isInternalIp) ? new Error(`${hostname} resolves to an internal address`) : null),
-      address,
-      family,
-    );
+    callback(error ?? (addresses.some(isInternalIp) ? new Error(`${hostname} resolves to an internal address`) : null), address, family);
   })) as unknown as typeof dns.lookup;
 
 /** The guest's only route to the internet: allowed hosts go direct, secret hosts go through speaker's proxy, the rest get 403. */
@@ -61,9 +135,7 @@ export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, s
     prepareRequestFunction: async ({ hostname }) => {
       const decision = await egressDecision(live, route, hostname);
       if (decision === "refuse") throw new RequestError(`${hostname} is not approved for this task`, 403);
-      return decision === "speaker"
-        ? { upstreamProxyUrl: `http://agent:${speaker.token}@${speaker.proxy}` }
-        : { dnsLookup: publicLookup };
+      return decision === "speaker" ? { upstreamProxyUrl: `http://agent:${speaker.token}@${speaker.proxy}` } : { dnsLookup: publicLookup };
     },
   });
 
@@ -72,8 +144,7 @@ export const serveEgress = async (proxy: ProxyServer, path: string) => {
   const server = createNetServer((socket) => {
     Object.defineProperty(socket, "remoteAddress", { value: "unix" });
     proxy.server.emit("connection", socket);
-  });
-  server.listen(path);
+  }).listen(path);
   await once(server, "listening");
   return Object.assign(server, { closeAllConnections: () => proxy.closeConnections() });
 };
@@ -88,8 +159,7 @@ const serveSsh = async (path: string, host: string, port: number) => {
       socket.on("close", () => (sockets.delete(socket), guest.destroy(), speaker.destroy())).on("error", () => undefined);
     }
     guest.pipe(speaker).pipe(guest);
-  });
-  server.listen(path);
+  }).listen(path);
   await once(server, "listening");
   return Object.assign(server, { closeAllConnections: () => sockets.forEach((socket) => socket.destroy()) });
 };
@@ -175,8 +245,8 @@ export const modelDoor = (config: Config, live: Live, route: ReturnType<typeof s
   };
 
 /**
- * Speaker's agent API for the guest: the same paths the Gondolin backend allows, with the task's real token added here.
- * The task's SSH public key rides along on its requests, so a `folder:` grant is deliverable over SSH.
+ * Speaker's agent API for the guest, with the task's real token added here. The task's SSH public key rides along on
+ * its requests, so a `folder:` grant is deliverable over SSH.
  */
 export const speakerDoor = (speaker: { url: string; token: string }, sshKey?: string): RequestListener => async (req, res) => {
   const target = new URL(req.url ?? "/", speaker.url);
@@ -207,9 +277,7 @@ export const folderSync = (
   const failing = new Map<string, number>();
   let used = false;
   return async () => {
-    const wanted = new Map(
-      [...live.shares].filter(([, share]) => unexpired([share]).length).map(([name, share]) => [name, share.writable]),
-    );
+    const wanted = new Map([...live.shares].filter(([, share]) => unexpired([share]).length).map(([name, share]) => [name, share.writable]));
     if (!wanted.size && !used) return;
     const mounted = await guest.mounted();
     for (const share of failing.keys()) if (!wanted.has(share)) failing.delete(share);
@@ -244,14 +312,27 @@ const Me = z.object({
 export const listen = async (path: string, handler: RequestListener) => {
   const server = createServer((req, res) => {
     Promise.resolve(handler(req, res)).catch((error: Error) => (res.headersSent ? res.destroy() : reply(res, 502, error.message)));
-  });
-  server.listen(path);
+  }).listen(path);
   await once(server, "listening");
   return server;
 };
 
-const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, proxy) => {
-  home(config);
+/**
+ * Starts one VM for a task: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
+ * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
+ * /work, /output and /etc/pi-v2, and model request bodies recorded into `live.httpResponses` with their blobs under
+ * `paths.capture`. Grant changes need no VM call: the doors re-read `live` on every use.
+ */
+export async function boot(
+  config: Config,
+  live: Live,
+  limits: { cpus: number; memoryMiB: number; rootfsGiB: number },
+  paths: { work: string; artifacts: string; guestConfig: string; capture: string },
+  env: Record<string, string>,
+  speaker: { url: string; token: string },
+  proxy: () => Promise<Dispatcher>,
+): Promise<Guest> {
+  msbHome(config);
   const { MiB, Sandbox } = await import("microsandbox");
   const name = `bs-${randomBytes(4).toString("hex")}`;
   const dir = paths.work.slice(0, paths.work.lastIndexOf("/"));
@@ -397,20 +478,19 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
       }
     },
   };
-};
+}
 
-export const microsandbox: Backend = {
-  boot,
-  folders: true,
-  attach: (config, sessionId, command) => ({
-    file: "env",
-    args: [`MSB_HOME=${config.stateRoot}/microsandbox`, `${import.meta.dirname}/../../node_modules/.bin/msb`, "exec", "-t", sessionId, "--", ...command],
-  }),
-  reconcile: async (config) => {
-    home(config);
-    const { Sandbox } = await import("microsandbox");
-    const stale = (await Sandbox.list()).sandboxes.filter((handle) => handle.name.startsWith("bs-"));
-    await Promise.all(stale.map((handle) => Sandbox.remove(handle.name)));
-    return stale.length;
-  },
+/** The owner's terminal into a running guest, as a command to spawn. */
+export const attach = (config: Config, sessionId: string, command: string[]) => ({
+  file: "env",
+  args: [`MSB_HOME=${config.stateRoot}/microsandbox`, `${import.meta.dirname}/../node_modules/.bin/msb`, "exec", "-t", sessionId, "--", ...command],
+});
+
+/** Removes the VMs a crashed service left behind; returns how many. */
+export const reconcile = async (config: Config) => {
+  msbHome(config);
+  const { Sandbox } = await import("microsandbox");
+  const stale = (await Sandbox.list()).sandboxes.filter((handle) => handle.name.startsWith("bs-"));
+  await Promise.all(stale.map((handle) => Sandbox.remove(handle.name)));
+  return stale.length;
 };

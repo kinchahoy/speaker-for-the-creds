@@ -14,12 +14,11 @@ import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import type { Config } from "./config.ts";
-import { note, type CapturedBody, type Guest, type Live } from "./backend.ts";
-import { backends } from "./backends/index.ts";
+import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
 import { attendedFor, folderRef, launchRequest, secretHosts, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
 import { availableModels, pi, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerClient, speakerProxy, watchLeases, type Lease, type SecretInfo, type Snapshot } from "./speaker.ts";
-import { assembleStream, createModelRuns, createToolRuns } from "./trace-runs.ts";
+import { assembleStream, createModelRuns, createToolRuns, type CapturedBody } from "./trace.ts";
 
 export type TaskState =
   | "starting"
@@ -146,7 +145,11 @@ export class Tasks {
   secrets: SecretInfo[] = [];
   speaker: ReturnType<typeof speakerClient>;
 
-  constructor(config: Config, templates: Map<string, Template>, catalog: Catalog, hostToken: string) {
+  readonly #boot: Boot;
+
+  /** `vm` starts a task's VM; tests pass a stand-in. */
+  constructor(config: Config, templates: Map<string, Template>, catalog: Catalog, hostToken: string, vm: Boot = boot) {
+    this.#boot = vm;
     this.config = config;
     this.templates = templates;
     this.catalog = catalog;
@@ -252,7 +255,7 @@ export class Tasks {
         [],
         this.secrets,
       );
-      const guest = await backends[this.config.backend].boot(
+      const guest = await this.#boot(
         this.config,
         live,
         template.limits,
@@ -349,7 +352,7 @@ export class Tasks {
         if (lease.subjectId !== task.subjectId) return false;
         const valid = lease.kind === "credential" ||
           (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && secretHosts.safeParse(lease.hosts).success) ||
-          (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && this.#shareRoot(lease.ref.split(":")[0]!) !== undefined) ||
+          (lease.kind === "folder" && folderRef.safeParse(lease.ref).success) ||
           (lease.kind === "site" && siteRef.safeParse(lease.ref).success) ||
           (lease.kind === "mcp" && Object.hasOwn(this.catalog.mcps, lease.ref)) ||
           (lease.kind === "extension" && Object.hasOwn(this.catalog.extensions, lease.ref));
@@ -408,9 +411,6 @@ export class Tasks {
   #wantedExtensions = (task: Task) =>
     [...new Set(this.#leased(task, "extension").map((lease) => lease.ref))].filter((id) => this.catalog.extensions[id]);
 
-  /** A share's host directory. On microsandbox shares live on speaker's targets and are mounted over SSH, so none is needed. */
-  #shareRoot = (share: string) =>
-    Object.hasOwn(this.config.shareRoots, share) ? this.config.shareRoots[share] : this.config.backend === "microsandbox" ? "" : undefined;
 
   #leased = (task: Task, kind: string) => unexpired(task.leases).filter((lease) => lease.kind === kind);
 
@@ -430,13 +430,8 @@ export class Tasks {
     task.live.shares.clear();
     for (const { ref, expiresAt } of this.#leased(task, "folder")) {
       const [share, mode] = ref.split(":");
-      const root = this.#shareRoot(share!);
-      if (root === undefined) {
-        this.#event(task, `folder lease names unknown share ${share}`);
-        continue;
-      }
       if (task.live.shares.has(share!) && mode !== "rw") continue;
-      task.live.shares.set(share!, { expiresAt, root, writable: mode === "rw" });
+      task.live.shares.set(share!, { expiresAt, writable: mode === "rw" });
     }
 
     // Pi loads MCP servers and extensions only at start, so a changed set restarts it at the next idle boundary.

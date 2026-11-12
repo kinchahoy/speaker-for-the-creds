@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-bottle-school runs Pi inside disposable micro-VMs (microsandbox by default, or Gondolin: see "The microsandbox backend" and "VM backends"). Speaker approves capabilities; bottle-school applies their leases.
+bottle-school runs Pi inside disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see "The VM"). Speaker approves capabilities; bottle-school applies their leases.
 {.ai}
 
 <!-- author: ai -->
@@ -13,7 +13,7 @@ bottle-school runs Pi inside disposable micro-VMs (microsandbox by default, or G
 
 <sub>AI-written</sub>
 
-The Linux host needs hardware virtualization, KVM access, Docker for image builds, and `setsid`. The Gondolin backend also needs `qemu-img` (and `qemu-system-x86` for `PI_V2_VMM=qemu`); on a Debian-family host install `qemu-utils` and `qemu-system-x86`. Add the service account to the `kvm` group; start a new login session afterward. Run the service as the owner account that holds its configuration and archives.
+The Linux host needs hardware virtualization, KVM access, Docker for image builds, and `setsid`. Add the service account to the `kvm` group; start a new login session afterward. Run the service as the owner account that holds its configuration and archives.
 {.ai}
 
 Run these commands from the repository root:
@@ -26,17 +26,16 @@ mise run setup
 mise run doctor
 ```
 
-Host-specific values (model endpoint, speaker URL, VM backend) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
+Host-specific values (model endpoint, speaker URL) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
 {.ai}
 
 To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`. bottle-school holds no secrets: see "Secrets and speaker's proxy". The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
-- `backend` selects the sandbox runtime: `microsandbox` (default) or `gondolin`. "The microsandbox backend" describes the default; the other sections (VM backends, QEMU and Krun) describe Gondolin. Switching needs only this setting and a restart: speaker chooses folder delivery from the shares bottle-school reports.
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` is speaker's `PROXY_PORT`, on the same host as `speaker.url`. Set it to use `secret:` items; without it a task that is granted a secret cannot reach the secret's hosts (the request is refused with that message).
-- `speaker.sshPort` is speaker's `SSH_PORT`, on the same host as `speaker.url`. The microsandbox backend needs it for `folder:` grants (see "The microsandbox backend"); Gondolin does not use it.
+- `speaker.sshPort` is speaker's `SSH_PORT`, on the same host as `speaker.url`. It is needed for `folder:` grants (see "The VM").
 - `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.
 - `shareRoots` defines the host folders a grant may expose. Begin with no sensitive shares and one task.
@@ -55,44 +54,7 @@ mise run bottle-cli register
 mise run bottle
 ```
 
-One guest image serves both backends. `guest/Dockerfile` is a Debian slim image in five layers (apt system packages; Node via mise; Playwright with Chromium; the other mise tools in `guest/mise.toml` plus uv's CPython and the default environment in `guest/python/requirements.in`; Pi and its extensions). Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi; the extensions stay pinned and everything else takes the latest release. `guest-build` builds the image with `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` builds both where Docker has emulation), then imports it into Gondolin as VM assets under the tag (`guest/build.json`, `boot-assets.mjs`, `rootfs-init.sh`) and loads it into microsandbox's storage under `<stateRoot>/microsandbox` (`stateRoot` from `config.json`). It needs `config.json`, so run `mise run setup` first. Builds need internet access and about 10 GiB of disk space.
-{.ai}
-
-<!-- author: ai -->
-
-## VM backends: QEMU and Krun
-
-<sub>AI-written</sub>
-
-`PI_V2_VMM` selects Gondolin's VMM for the service (and `mise run doctor`). It defaults to `krun` (libkrun); set `PI_V2_VMM=qemu` in `bottle-school/.env` to use QEMU. One guest image boots under both, so switching needs no rebuild. Both need `qemu-utils` (`qemu-img` creates each task's copy-on-write disk); only `PI_V2_VMM=qemu` needs `qemu-system-*`. On x86_64, build the Krun runner once with `mise run krun-runner` (the published runner uses AVX-512, which many CPUs lack); `start.sh` stops with that instruction if it is missing.
-{.ai}
-
-**QEMU (`PI_V2_VMM=qemu`).** Install `qemu-system-x86` and `qemu-utils` (arm64: `qemu-system-arm`; macOS: `brew install qemu`). Nothing host-specific is needed beyond KVM access. `mise run doctor` checks all of it.
-{.ai}
-
-**Krun (libkrun, no QEMU process).** Needs a Krun runner that matches the host CPU:
-{.ai}
-
-- Linux x86_64: build it once per machine with `mise run krun-runner` (`krun-runner.sh`). Gondolin's published runner is compiled on an AVX-512 machine (Zig targets the build host's CPU) and crashes with an illegal instruction on CPUs without AVX-512, such as Intel Core Ultra. The script builds `host/krun-runner` from the pinned Gondolin tag `v0.13.0` (commit `fcbcef1`) with Zig 0.17 and `-Dcpu=x86_64_v3`, copies the published `libkrun.so.1.17.4` (no AVX-512; the version Gondolin pins) next to it, and fails unless both contain zero `zmm` instructions. It installs into the gitignored `.runtime/krun-runner/`; `start.sh` and `doctor.sh` use it automatically through `GONDOLIN_KRUN_RUNNER`. Rebuild it when you upgrade Gondolin (bump `REF` and `SHA` in the script).
-- macOS and Linux arm64: Gondolin's published runner is used as is (no AVX-512 issue; macOS signs it with the Hypervisor entitlement). Not tested here.
-{.ai}
-
-How one image serves both backends (`guest/boot-assets.mjs`, x86_64): QEMU and libkrun both load the uncompressed ELF `vmlinux` extracted from Alpine's kernel, and both use the trimmed initramfs, which loads `virtio_blk` and `ext4` and then switches to the rootfs and our `rootfs-init.sh`. The manifest's `krunKernel` and `krunInitrd` slots point at those same two files, so the image is no larger. Gondolin's stock Krun slots (libkrunfw's raw kernel plus an empty initrd) are dropped on x86_64: libkrun rejects that raw kernel ("Kernel doesn't fit in RAM"), and Alpine's kernel has no built-in block driver, so an empty initrd cannot mount the root disk. On aarch64 and macOS the stock libkrunfw kernel and empty initrd are kept, since that kernel has the drivers built in. This is untested here.
-{.ai}
-
-Krun-specific differences: libkrun exposes virtio-mmio devices and a virtio-console multiport (`vport*`), which Gondolin's init and `rootfs-init.sh` already handle; sandboxfs runs over the same `virtio-fs` port as under QEMU, and DHCP, DNS and the HTTPS MITM behave identically. The kernel command line is `console=hvc0 root=/dev/vda rootfstype=ext4 rw init=/init quiet initcall_blacklist=i8042_init` (set in `src/gondolin.ts`); the blacklisted i8042 driver spends ~0.25s probing libkrun's emulated keyboard controller. The kernel prints a harmless `free_init_pages` warning for the initrd under libkrun. To debug a Krun boot, set `console: "stdio"` in the VM options and point `GONDOLIN_KRUN_RUNNER` at a wrapper script that redirects the runner's output to a file.
-{.ai}
-
-Measured on a Core Ultra 7 265K (no AVX-512), 2 vCPU, 2 GiB, the same image, `bootGuest` create to first exec, n=12 each, interleaved, host under a load of ~3:
-{.ai}
-
-| | QEMU | Krun |
-| --- | --- | --- |
-| median / min / max | 0.95 s / 0.73 s / 1.27 s | 1.05 s / 0.78 s / 1.20 s |
-| 200 MB write / read on `/work` (sandboxfs) | 100-157 MB/s / 74-78 MB/s | 75-78 MB/s / 92-107 MB/s |
-| 200 MB write / read on the rootfs disk | 0.9-1.4 GB/s / page cache | 1.1-1.4 GB/s / page cache |
-
-Networking, `getent hosts model.internal`, HTTPS through the MITM (allowed host 200, blocked host 403) from curl, Python, requests and Node, and the sandboxfs mounts all gave identical results under both. `/work` throughput is bounded by the host-side sandboxfs RPC, not the VMM. QEMU stays the default: it is slightly faster to boot here and is the better-exercised path. Krun is a supported alternative; `mise run doctor` with `PI_V2_VMM=krun` checks the runner (present, no AVX-512) and the image's Krun assets.
+`guest/Dockerfile` is a Debian slim image in five layers (apt system packages; Node via mise; Playwright with Chromium; the other mise tools in `guest/mise.toml` plus uv's CPython and the default environment in `guest/python/requirements.in`; Pi and its extensions). Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi; the extensions stay pinned and everything else takes the latest release. `guest-build` builds the image with `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` builds both where Docker has emulation), then loads it into microsandbox's storage under `<stateRoot>/microsandbox` (`stateRoot` from `config.json`). It needs `config.json`, so run `mise run setup` first. Builds need internet access and about 10 GiB of disk space.
 {.ai}
 
 From another terminal, launch and inspect a task:
@@ -117,25 +79,25 @@ A task is attended (the owner is at its terminal) or unattended (nobody is). Wit
 
 <!-- author: ai -->
 
-## The microsandbox backend
+## The VM
 
 <sub>AI-written</sub>
 
-`"backend": "microsandbox"` (the default) in `config.json` runs each task in a [microsandbox](https://github.com/superradcompany/microsandbox) VM (libkrun, from the `microsandbox` npm package); `"backend": "gondolin"` runs a Gondolin VM instead. The guest has **no network device**. Its only doors are host unix sockets on guest vsock ports. Four, which `socat` in the guest exposes as localhost ports, are an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`), the model endpoint (`http://model.internal`), speaker (`SPEAKER_URL`), and the control channel Pi's status reports use. The fifth, with `speaker.sshPort` set, is a raw connection to speaker's SSH jump server, which the guest's `ssh` reaches through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (folders, below). `/work`, `/output` and `/etc/pi-v2` are bind mounts of the same host directories as on Gondolin.
+Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). The guest has **no network device**. Its only doors are host unix sockets on guest vsock ports. Four, which `socat` in the guest exposes as localhost ports, are an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`), the model endpoint (`http://model.internal`), speaker (`SPEAKER_URL`), and the control channel Pi's status reports use. The fifth, with `speaker.sshPort` set, is a raw connection to speaker's SSH jump server, which the guest's `ssh` reaches through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (folders, below). `/work`, `/output` and `/etc/pi-v2` are bind mounts of host directories.
 {.ai}
 
-- **Egress.** One `proxy-chain` server per task decides every request from the live lease view: a host on the task's allow list goes direct (to public IPv4 addresses only), a host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials, and anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate (fetched from `/_speaker/proxy/ca.pem` at boot, installed in the guest's trust store, and set as `NODE_EXTRA_CA_CERTS`); without `speaker.proxyPort` secrets are unavailable, as on Gondolin.
-- **Model endpoint.** A small forwarder to `localModel.upstream` that counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl` with the same code as the Gondolin backend. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`; the forwarder sends those through speaker's proxy once the provider's secret is granted.
-- **Speaker.** The speaker door allows the same paths as Gondolin and adds the task's token itself, so the guest never holds it (`SPEAKER_TOKEN` is only a placeholder).
+- **Egress.** One `proxy-chain` server per task decides every request from the live lease view: a host on the task's allow list goes direct (to public IPv4 addresses only), a host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials, and anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate (fetched from `/_speaker/proxy/ca.pem` at boot, installed in the guest's trust store, and set as `NODE_EXTRA_CA_CERTS`); without `speaker.proxyPort` secrets are unavailable.
+- **Model endpoint.** A small forwarder to `localModel.upstream` that counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`; the forwarder sends those through speaker's proxy once the provider's secret is granted.
+- **Speaker.** The speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it (`SPEAKER_TOKEN` is only a placeholder).
 - **Terminal.** `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
-- **Folders** go over `sshfs` through speaker's jump server, so speaker enforces the share, read-only grants and revocation, and logs every file operation. Speaker delivers a `folder:` grant that way because bottle-school reports every share as not mountable on this backend (a share reported mountable is a VM mount instead). Each task gets a throwaway ed25519 key: the public half goes to speaker as the agent's `sshKey` (added to the task's launch request and to every request the guest sends through the speaker door), the private half is a root-only file in the guest (`/run/speaker/ssh_key`). While a folder grant is in force, bottle-school (not Pi) mounts `/input/<share>` inside the guest with the `sshfs` command speaker gives in `GET /_speaker/me`, with `-o ro` added for a read-only grant as a second guard; a changed mode is remounted, and when the grant ends or is revoked speaker ends the relay session and bottle-school unmounts it. Set `speaker.sshPort`; without it the guest has no route to speaker's SSH port and a folder grant fails to mount (noted in the task's events). A share needs no entry in `shareRoots` on this backend. `sshfs` is much slower than a VM mount for `grep -r`, `find` and `git status` over many files.
+- **Folders** go over `sshfs` through speaker's jump server, so speaker enforces the share, read-only grants and revocation, and logs every file operation. Speaker delivers a `folder:` grant that way because bottle-school reports every share as not mountable. Each task gets a throwaway ed25519 key: the public half goes to speaker as the agent's `sshKey` (added to the task's launch request and to every request the guest sends through the speaker door), the private half is a root-only file in the guest (`/run/speaker/ssh_key`). While a folder grant is in force, bottle-school (not Pi) mounts `/input/<share>` inside the guest with the `sshfs` command speaker gives in `GET /_speaker/me`, with `-o ro` added for a read-only grant as a second guard; a changed mode is remounted, and when the grant ends or is revoked speaker ends the relay session and bottle-school unmounts it. Set `speaker.sshPort`; without it the guest has no route to speaker's SSH port and a folder grant fails to mount (noted in the task's events). A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find` and `git status` over many files.
 - **Storage.** microsandbox keeps images and VM records in `<stateRoot>/microsandbox`, created with mode 700. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`), so use a `stateRoot` whose parents are not group-writable. `start.sh` checks this and stops with the directory to `chmod 700`.
 {.ai}
 
-`mise run guest-build <tag>` (see "Build and run") loads the image into that storage; set `"guestImage"` to the tag and `"backend": "microsandbox"`.
+`mise run guest-build <tag>` (see "Build and run") loads the image into that storage; set `"guestImage"` to the tag.
 {.ai}
 
-The backend takes any OCI image, however it was built, as long as it holds Node, Pi, git, curl, `socat`, `sshfs`, `openssh-client` and `ca-certificates` and has been imported into microsandbox's cache under the `guestImage` name (it never pulls). The loading step is only `docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestImage>` (`msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder), so another image builder can replace the Dockerfile without touching the backend. The shipped `guest/Dockerfile` (the same image Gondolin uses) holds apt packages (compilers, ffmpeg, imagemagick, OCR, `socat`, `sshfs`, `dtach`, and the usual command-line tools), mise for Node, pnpm, uv, `gh`, ripgrep, pandoc and tmux, Pi and its extensions, Python only through uv (its managed CPython is `python` and `python3`, with the default environment in `/opt/uv/venv`; the image keeps a ready uv cache in `/opt/uv/cache`, writable per VM, so `uv venv`, `uv pip install` and `uv run --with` for the default packages work offline and instantly), and Playwright with Chromium. mise stays in the image so agents can install Go or Rust on demand. Linux needs `/dev/kvm` access and nothing else; the `microsandbox` package carries its own runtime. `mise run doctor` checks the guest image loads and boots. Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, terminal resize.
+bottle-school takes any OCI image, however it was built, as long as it holds Node, Pi, git, curl, `socat`, `sshfs`, `openssh-client` and `ca-certificates` and has been imported into microsandbox's cache under the `guestImage` name (it never pulls). The loading step is only `docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestImage>` (`msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder), so another image builder can replace the Dockerfile without touching bottle-school. The shipped `guest/Dockerfile` holds apt packages (compilers, ffmpeg, imagemagick, OCR, `socat`, `sshfs`, `dtach`, and the usual command-line tools), mise for Node, pnpm, uv, `gh`, ripgrep, pandoc and tmux, Pi and its extensions, Python only through uv (its managed CPython is `python` and `python3`, with the default environment in `/opt/uv/venv`; the image keeps a ready uv cache in `/opt/uv/cache`, writable per VM, so `uv venv`, `uv pip install` and `uv run --with` for the default packages work offline and instantly), and Playwright with Chromium. mise stays in the image so agents can install Go or Rust on demand. Linux needs `/dev/kvm` access and nothing else; the `microsandbox` package carries its own runtime. `mise run doctor` checks the guest image loads and boots. Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, terminal resize.
 {.ai}
 
 <!-- author: ai -->
@@ -158,10 +120,10 @@ The task starts at once; it does not wait for the first request. When an `mcp` o
 - `catalog.json` contains `mcps` and `extensions`. An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command (`transport: "stdio"`, an absolute `command`, `args`, the advertised `tools` and whether it can write). **Remote and hosted MCP servers are not catalog entries:** they are speaker services. The owner adds one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search), and a task asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. The shipped catalog therefore has no `mcps` entries; a remote entry fails validation with that explanation. Extension entries name a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), and an optional system-prompt note. An `ext:<id>` grant loads one; unknown ids are skipped like other unsupported grants. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
 - The guest image loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions` in every task. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets the owner set up in speaker (names, hosts and the variable each one uses; speaker sends this list with its grant snapshots), the `<service>.read` / `.full` form for homelab APIs and remote MCP servers, and how to use a secret.
-- The guest calls speaker with its agent-token placeholder; Gondolin substitutes the token only for speaker's host. Credential-backed homelab APIs pass through speaker's service proxy.
+- The guest calls speaker with its agent-token placeholder; the speaker door adds the real token. Credential-backed homelab APIs pass through speaker's service proxy.
 - Each snapshot from speaker replaces the live grants. A grant counts as in force for the agent once bottle-school reports it: sites, secrets and folders apply the moment they are installed; an MCP server or extension only after Pi has restarted with it. If bottle-school hears nothing from speaker for 30 seconds (connection lost, or snapshots stopped) it drops all of its tasks' grants until the connection is back. A task's grants therefore end within 30 seconds of losing speaker; a brief blip changes nothing. It skips unsupported refs.
 - Sites, secrets, and folders apply live. MCP and extension changes take effect after Pi restarts at idle. A folder grant exposes a whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
-- On every connection bottle-school tells speaker which shares it holds (`shareRoots`, plus `archive`) and whether the VM can mount each one (its directory is readable; always "no" on microsandbox, whose folders come over SSH). Speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise) for `folder:` items, and sends the over-SSH folder grants to the host so it can mount them with `sshfs`.
+- On every connection bottle-school tells speaker which shares it holds (`shareRoots`, plus `archive`) and whether the VM can mount each one (its directory is readable; always "no", since folders come over SSH). Speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise) for `folder:` items, and sends the over-SSH folder grants to the host so it can mount them with `sshfs`.
 
 <!-- author: ai -->
 
@@ -169,13 +131,10 @@ The task starts at once; it does not wait for the first request. When an `mcp` o
 
 <sub>AI-written</sub>
 
-bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` variables are retired (startup stops with a message while either is present), and Gondolin's own placeholder substitution is used for one thing only: the task's speaker token. The owner adds each secret once in speaker's Setup with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`); a task asks for `secret:<NAME>`, and the card shows the hosts.
+bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` variables are retired (startup stops with a message while either is present). The owner adds each secret once in speaker's Setup with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`); a task asks for `secret:<NAME>`, and the card shows the hosts.
 {.ai}
 
-**The route.** When speaker's grant snapshot names a secret grant it carries the secret's hosts, not its value. bottle-school opens those hosts for the VM and sends every request the VM makes to them through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README): the guest's TLS is still terminated by Gondolin's certificate authority, which the VM already trusts, and Gondolin's upstream connection for that request is an HTTP CONNECT tunnel to the proxy, authenticated as the task's agent (bottle-school holds that token; the guest has only a placeholder) and trusting speaker's proxy CA for the tunnel only. Speaker checks the grant on every request, swaps the agent's placeholder for the value in the `Authorization` header (also inside Basic credentials, as `git` sends them), and forwards to the real host. Revoke or expiry makes speaker answer 403 at once; bottle-school also drops the route when its grant goes. The guest needs no proxy settings and no extra certificate: Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it.
-{.ai}
-
-**Why this route.** Gondolin supports it with a small patch: a hook (`httpHooks.upstreamDispatcher`, about ten lines in `patches/`) that lets bottle-school choose the upstream dispatcher per request. The alternatives were worse: pointing `HTTPS_PROXY` in the guest at speaker needs a raw TCP route from the VM to speaker's proxy port (Gondolin's `tcp.hosts`), puts the real agent token inside the VM because the CONNECT line is not HTTP that Gondolin can rewrite, and needs speaker's CA in the guest; and Gondolin's `fetch` option replaces its IP-checked upstream dispatcher for all traffic, not only for secret hosts. The cost, as in speaker's design, is that all traffic to a secret's hosts (including large `git clone`s) passes through speaker. If speaker's proxy is unreachable the request is refused, never sent directly.
+**The route.** When speaker's grant snapshot names a secret grant it carries the secret's hosts, not its value. bottle-school's egress proxy sends every request the VM makes to those hosts through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README) as a CONNECT tunnel authenticated as the task's agent (bottle-school holds that token; the guest has only a placeholder). The guest's TLS for those hosts ends at speaker's proxy, whose certificate the guest trusts (see "Egress" under "The VM"). Speaker checks the grant on every request, swaps the agent's placeholder for the value in the `Authorization` header (also inside Basic credentials, as `git` sends them), and forwards to the real host. Revoke or expiry makes speaker answer 403 at once; bottle-school also drops the route when its grant goes. Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it. The cost, as in speaker's design, is that all traffic to a secret's hosts (including large `git clone`s) passes through speaker. If speaker's proxy is unreachable the request is refused, never sent directly.
 {.ai}
 
 **Hosted model providers.** A hosted provider's key is a speaker secret like any other: set `hostedProviders[].credential` to the speaker secret's name. A task using a hosted model adds `secret:<credential>` to its first request; once granted, bottle-school asks speaker for the task's placeholder, writes it into `models.json` and restarts Pi at idle. The model host must be one of the secret's allowed hosts in speaker's Setup. Until then Pi's key reads `speaker-secret-<NAME>-not-granted-yet`, so a hosted model's first turn can fail before the owner approves.
@@ -205,7 +164,6 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 - **Secrets move to speaker.** Add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees), delete `secrets.env` and the `BROKER_SECRET_*` variables (startup refuses to run while they exist), set `speaker.proxyPort` in `config.json` to speaker's `PROXY_PORT`, and publish that port. A grant for `secret:<NAME>@host` in old groups becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now be a speaker secret.
 - **Templates.** `bundle` becomes `want: ["group:<name>"]` and `bundleDuration` becomes `duration`; copy the new `templates.json` into `configRoot` or edit yours (the old keys fail validation).
 - **Catalog.** Remove remote MCP entries from `catalog.json` (`mcps` keeps only servers that run inside the VM) and add them in speaker's Setup as services (tick "MCP server"); replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
-- **Gondolin patch.** `pnpm install` applies the updated `patches/@earendil-works__gondolin@0.14.0.patch` (it adds `httpHooks.upstreamDispatcher`). The sandbox host's registered item kinds are unchanged.
 
 <!-- author: ai -->
 
@@ -217,7 +175,7 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 | --- | --- | --- |
 | A speaker secret (`secret:<NAME>`, including a hosted model provider's key) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle-school never has it |
 | Remote MCP server | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
-| Speaker agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle-school, which created the agent; Gondolin substitutes it only for speaker's host. It is bound to this host's address |
+| Speaker agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle-school, which created the agent; the speaker door adds it only to requests to speaker. It is bound to this host's address |
 | Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
 | stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
 
@@ -248,11 +206,10 @@ The owner deletes archives manually. An archival failure preserves the work tree
 
 <sub>AI-written</sub>
 
-Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop) and the secret route against a real speaker proxy. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. In particular check, with `PROXY_PORT` set in speaker and `speaker.proxyPort` here: `gh` and `git` with a granted secret through Gondolin's patched upstream hook (placeholder in, real value only at the real host, a `git clone` through speaker), a revoke ending it, the model-request capture for routed requests, and certificate inheritance through dtach.
+Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop) and the secret route against a real speaker proxy. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. In particular check, with `PROXY_PORT` set in speaker and `speaker.proxyPort` here: `gh` and `git` with a granted secret through the egress proxy (placeholder in, real value only at the real host, a `git clone` through speaker), a revoke ending it, the model-request capture for routed requests, and certificate inheritance through dtach.
 {.ai}
 
-- A missing `setsid` (or, on Gondolin, `qemu-img`) stops startup with a clear error; so does a microsandbox storage folder or parent that is group- or world-writable.
-- With `PI_V2_VMM=krun`, a missing kernel or incompatible Krun runner prevents guest creation.
+- A missing `setsid` stops startup with a clear error; so does a microsandbox storage folder or parent that is group- or world-writable.
 - `speaker.token is missing` means the owner must register the sandbox host first.
 - A blocked guest request returns 403; the agent requests the required capability. An expired or revoked grant also blocks subsequent use. A secret host blocked with "speaker.proxyPort is not set" or "speaker's proxy certificate is unavailable" in the policy events means speaker's proxy is not configured, not enabled (`PROXY_PORT`) or locked.
 - The service archives open tasks on SIGINT or SIGTERM. The owner must inspect the archive outcome before discarding recovery files.

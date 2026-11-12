@@ -7,8 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { Client, type Dispatcher } from "undici";
-import { secretRoute, type Live } from "../src/backend.ts";
-import { egressDecision, egressProxy, folderSync, listen, modelDoor, serveEgress, speakerDoor } from "../src/backends/microsandbox.ts";
+import { egressDecision, egressProxy, folderSync, listen, modelDoor, secretRoute, serveEgress, speakerDoor, type Live } from "../src/sandbox.ts";
 import type { Config } from "../src/config.ts";
 
 const live = (extra: Partial<Live> = {}): Live => ({
@@ -139,13 +138,13 @@ describe("folders over SSH", () => {
     const sync = folderSync(view, guest);
     await sync();
     assert.deepEqual(guest.calls, []);
-    view.shares.set("docs", { root: "", writable: false, expiresAt: future });
+    view.shares.set("docs", { writable: false, expiresAt: future });
     await sync();
-    view.shares.set("docs", { root: "", writable: true, expiresAt: future });
+    view.shares.set("docs", { writable: true, expiresAt: future });
     await sync();
     guest.table.delete("docs"); // speaker ended the session
     await sync();
-    view.shares.set("docs", { root: "", writable: true, expiresAt: new Date(Date.now() - 1).toISOString() });
+    view.shares.set("docs", { writable: true, expiresAt: new Date(Date.now() - 1).toISOString() });
     await sync();
     assert.deepEqual(guest.calls, ["mount docs ro", "unmount docs", "mount docs rw", "mount docs rw", "unmount docs"]);
     assert.equal(guest.table.size, 0);
@@ -153,7 +152,7 @@ describe("folders over SSH", () => {
 
   test("notes a failed mount once and retries it", async () => {
     const view = live();
-    view.shares.set("docs", { root: "", writable: false, expiresAt: future });
+    view.shares.set("docs", { writable: false, expiresAt: future });
     const guest = fakeGuest(true);
     const sync = folderSync(view, guest, 0);
     await sync();
