@@ -91,11 +91,11 @@ Without access, the agent repeats the call with `Speaker-Wait: 60` and `Speaker-
 
 ### Requesting access
 
-`POST /_speaker/requests` with `{"want":["group:developer","site:example.org"],"reason":"…","duration":"2h"}`. SSH and folder requests also carry the agent's throwaway public key (`"sshKey":"ssh-ed25519 …"`). The agent is told:
+`POST /_speaker/requests` with `{"want":["group:developer","site:example.org"],"reason":"…","duration":"2h"}`. SSH and folder requests also carry the agent's throwaway public key (`"sshKey":"ssh-ed25519 …"`). Target and share names come only from the owner's instructions (the task prompt or the conversation); speaker never lists them. The agent is told:
 
 > Ask for the minimum the task needs. If a group fits the task closely, i.e. you need most of its items, ask for the group: it is one decision for the owner. If you need one or two things, ask for exactly those items (`site:google.com`), even when a larger group contains them. Never ask for a group to cover a single item, and never list a group's items one by one.
 
-The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"…"}`. The agent works with what was granted and does not ask again for what was denied.
+The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"…"}`. The agent works with what was granted and does not ask again for what was denied. A request for a target or share that does not exist, or cannot be delivered to that agent, is answered exactly like a denial and never reaches the owner, so guessing names reveals nothing beyond response timing.
 
 ### Using SSH and folders over SSH
 
@@ -106,13 +106,13 @@ Speaker runs an SSH jump server (stock OpenSSH, in speaker's container). It list
 
 ### Knowing where it stands
 
-`GET /_speaker/me` returns the agent's status, the services it may use with read and write state and end times, its SSH and folder grants with the exact commands to use, the groups it may ask for (with description and items), and its requests with per-item outcomes. `?wait=60` holds the reply until something the agent waits on is decided.
+`GET /_speaker/me` returns the agent's status, the services it may use with read and write state and end times, its own SSH and folder grants with the exact commands to use, the groups it may ask for (with description and items; `ssh:` and `folder:` members appear only as a count, such as "1 folder"), and its requests with per-item outcomes. `?wait=60` holds the reply until something the agent waits on is decided.
 
 ### Errors
 
 Every error is JSON with `error`, and where useful `next` and `tell_user`. `next` is either `GET /_speaker/me?wait=60` or an instruction to stop; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
 
-Error codes: `locked`, `unknown_token`, `expired`, `source_mismatch`, `approval_required`, `denied` (with `retry_after` when applicable), `blocked`, `not_configured`, `rate_limited`.
+Error codes: `locked`, `unknown_token`, `expired`, `source_mismatch`, `approval_required`, `denied` (with `retry_after` when applicable), `blocked`, `not_configured` (services only), `rate_limited`.
 
 ### Denials
 
@@ -157,7 +157,7 @@ Limits: commands are not folder-limited (they run as the target's agent account)
 Each share lists how it may be delivered: **VM mount** (by a sandbox host that has the folder locally), **over SSH** (through speaker), or both. The agent asks only for `folder:<share>`; speaker picks the delivery:
 
 - a sandboxed agent whose sandbox host has the share, where the share allows VM mounts, gets a VM mount (fast, enforced by the VM boundary);
-- every other agent, including every direct agent, gets it over SSH, if the share allows that; otherwise the item is refused as `not_configured`.
+- every other agent, including every direct agent, gets it over SSH, if the share allows that; otherwise the item is answered like a denial.
 
 The card, `/me` and the Active list label each folder grant **VM mount** or **over SSH**, so the owner always sees which one is in use. Over SSH, a sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is much slower than a VM mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
 
@@ -194,7 +194,7 @@ A sandbox host registers with a name and the item kinds it can enforce; the owne
 - `GET /_speaker/help`: one page with setup (sh and PowerShell), asking and groups, SSH and folders, and sandbox notes.
 - `GET /_speaker/help/<service>`: that service's notes plus the caller's current state.
 
-Services, rules, targets, shares and groups stay behind authentication.
+Services, rules and groups stay behind authentication. Targets and shares are never listed to agents at all, not even to approved ones: an agent knows only the names the owner gives it and the grants it holds.
 
 ## Routes
 
