@@ -214,7 +214,8 @@ protected.
   `TRUSTED_PROXY` to the proxy's IP; speaker then takes the last `X-Forwarded-For` entry from it and ignores that
   header from every other sender.
 - Only you extend access: Extend on a lease or session adds the span you originally granted.
-- A denial stands for 15 minutes without re-asking you.
+- A request denied three times (same session, same access) within 15 minutes is answered as denied without asking
+  you again until 15 minutes after the third denial.
 {.ai}
 
 <!-- author: ai -->

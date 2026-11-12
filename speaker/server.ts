@@ -56,8 +56,10 @@ const durations = {
   '30d': 2_592_000_000,
   '90d': 7_776_000_000,
 }
-// A denied request is answered as denied, without asking the owner again, for this long.
-const deniedCooldown = durations['15m']
+// Three denials of the same request within this window lock it: it is answered as denied, without asking the owner,
+// until the window after the third denial has passed.
+const denialLimit = 3
+const denialWindow = durations['15m']
 // An `always` policy grants a session access without a request, for at most this long after its approval.
 const alwaysLimit = durations['90d']
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
@@ -745,11 +747,31 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       expiresAt,
     })
   }
+  // Denial times per subject and identical member set, in memory only.
+  const denials = new Map<string, number[]>()
+  const strikeKey = (subjectId: string, members: Capability[], bundle: string | undefined) =>
+    JSON.stringify([subjectId, bundle, members])
+  const recentDenials = (key: string) => (denials.get(key) ?? []).filter((at) => Date.now() - at < denialWindow)
+  // When asking the owner works again for a request denied three times (a time in ms), else undefined.
+  const lockedUntil = (subjectId: string, members: Capability[], bundle: string | undefined) => {
+    const struck = recentDenials(strikeKey(subjectId, members, bundle))
+    return struck.length >= denialLimit ? struck[struck.length - 1] + denialWindow : undefined
+  }
+  const lockedReply = (until: number, fields: Record<string, unknown>) => ({
+    error: 'denied',
+    ...fields,
+    next: 'Stop: the owner denied this request.',
+    retry_after: new Date(until).toISOString(),
+  })
   function deny(id: string) {
     return serial(() => {
       const request = decidable(id, 'deny')
       move(request, 'deny')
       request.decidedAt = Date.now()
+      if (!request.ssh) {
+        const key = strikeKey(request.subjectId, request.members, request.bundle)
+        denials.set(key, [...recentDenials(key), request.decidedAt])
+      }
       void logEvent('request_denied', request.subjectId, {
         requestId: id,
         capability: request.bundle ?? request.members,
@@ -813,11 +835,6 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       r.subjectId === subjectId &&
       r.bundle === bundle &&
       JSON.stringify(r.members) === JSON.stringify(members)
-    // A recent denial stands: answer with it instead of asking the owner again.
-    const denied = [...pending.values()].find(
-      (r) => matches(r) && r.status === 'denied' && Date.now() - (r.decidedAt ?? r.createdAt) < deniedCooldown,
-    )
-    if (denied) return denied
     const existing = [...pending.values()].find((r) => matches(r) && r.status === 'pending')
     if (existing) {
       if (reason) Object.assign(existing, { reason, duration })
@@ -1478,6 +1495,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       subjectId = caller.id
     }
     const members = membersFor(input, kindsOf(caller))
+    const until = lockedUntil(subjectId, members, input.bundle)
+    if (until !== undefined) return c.json(lockedReply(until, { status: 'denied' }), 403)
     const request = createRequest(subjectId, members, input.bundle, input.reason, input.duration)
     const status = request.status
     return c.json(
@@ -1601,9 +1620,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     const secret = secrets.get(providerId)
     if (secret === undefined) return c.json({ error: 'provider_not_configured' }, 503)
     if (rule === 'approval' && !hasLease(caller.id, 'credential', capability)) {
+      const members: Capability[] = [{ kind: 'credential', ref: capability }]
+      const until = lockedUntil(caller.id, members, undefined)
+      if (until !== undefined) return c.json(lockedReply(until, { capability }), 403)
       const request = createRequest(
         caller.id,
-        [{ kind: 'credential', ref: capability }],
+        members,
         undefined,
         c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
         '15m',

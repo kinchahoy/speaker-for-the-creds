@@ -591,13 +591,29 @@ test('Speaker-Wait holds a call until approval and then returns the upstream res
   assert.equal(f.calls.at(-1)?.headers['speaker-reason'], undefined)
 })
 
-test('a denied request stays denied instead of asking the owner again', async (t) => {
+test('the third denial of an identical request locks it with retry_after; earlier denials ask the owner again', async (t) => {
   const f = await setup(t)
   await approvedSession(f, 'tok')
-  const { requestId } = await firstRequest(f, 'tok')
-  assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
-  const again = (await (await f.call('/notes/x', { headers: bearer('tok') })).json()) as { error: string }
-  assert.equal(again.error, 'denied')
+  for (const strike of [1, 2, 3]) {
+    const asked = await f.call('/notes/x', { headers: bearer('tok') })
+    const { requestId, error } = (await asked.json()) as { requestId: string; error: string }
+    assert.equal(error, 'approval_required', `denial ${strike} was still asked`)
+    assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
+  }
+  const locked = await f.call('/notes/x', { headers: bearer('tok') })
+  const body = (await locked.json()) as { error: string; next: string; retry_after: string }
+  assert.equal(locked.status, 403)
+  assert.equal(body.error, 'denied')
+  assert.equal(body.next, 'Stop: the owner denied this request.')
+  const wait = Date.parse(body.retry_after) - Date.now()
+  assert.ok(wait > 14 * 60_000 && wait <= 15 * 60_000)
+  const direct = await f.call('/_speaker/requests', {
+    method: 'POST',
+    headers: bearer('tok'),
+    body: JSON.stringify({ capability: { kind: 'credential', ref: 'notes.read' }, reason: 'r' }),
+  })
+  assert.equal(direct.status, 403)
+  assert.equal(((await direct.json()) as { retry_after: string }).retry_after, body.retry_after)
 })
 
 test('providers without a key are hidden from agents and cannot be requested', async (t) => {
