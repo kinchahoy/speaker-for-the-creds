@@ -890,10 +890,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         authenticate(token, source) {
           if (!store) throw new Refusal(503, `Speaker is locked: the owner signs in at ${config.PUBLIC_URL}/admin`)
           const digest = hash(token)
-          if (revoked.has(digest)) throw new Refusal(403, 'The owner revoked this agent: stop and tell the user')
+          if (revoked.has(digest)) throw new Refusal(403, 'The owner revoked this agent. Stop and tell the user')
           const agent = [...agents.values()].find((a) => same(a.tokenHash, digest))
           if (!agent || agent.source !== source)
-            throw new Refusal(407, 'Unknown token or address: enroll again (GET /_speaker/help)')
+            throw new Refusal(407, 'Unknown token or address. Enroll again (GET /_speaker/help)')
           agent.lastSeen = Date.now()
           return { agent: agent.id }
         },

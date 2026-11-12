@@ -245,7 +245,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const source = sourceOf(c)
     let agent = [...agents.values()].find((a) => same(a.tokenHash, tokenHash))
     if (agent && agent.source !== source)
-      throw invalid('This token is already enrolled from another address; make a new token and enroll again')
+      throw invalid('This token is already enrolled from another address. Make a new token and enroll again')
     const created = !agent
     if (!agent) {
       agent = {
@@ -379,7 +379,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               placeholder,
               environment: { [env]: placeholder },
               ...gitHint(hosts),
-              note: "Set the variable on the command that needs it (for example GH_TOKEN=... gh pr list). No proxy settings or certificate are needed: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
+              note: "Set the variable on the command that needs it, for example GH_TOKEN=... gh pr list. You need no proxy settings or certificate: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
             }
           : {
               until,
@@ -391,9 +391,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
                 SSL_CERT_FILE: ca,
               },
               token: '<token> is the part after "Bearer " in your header file; do not print it',
-              certificate: `Once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh; for git set GIT_SSL_CAINFO to the same file or run git config --global http.sslCAInfo "${ca}".`,
+              certificate: `Run once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh. For git, set GIT_SSL_CAINFO to the same file, or run git config --global http.sslCAInfo "${ca}".`,
               ...gitHint(hosts),
-              note: 'Set these only on the command that needs them (for example HTTPS_PROXY=... gh pr list): the proxy refuses every host except these.',
+              note: 'Set these only on the command that needs them, for example HTTPS_PROXY=... gh pr list. The proxy refuses every host except these.',
             },
       ]),
     )
@@ -496,7 +496,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const access = (write: boolean) => {
       const rule = write ? service.write : service.read
       if (rule === 'open') return 'open: needs no grant.'
-      if (rule === 'never') return 'never granted by the owner; do not ask for it.'
+      if (rule === 'never') return 'never granted by the owner. Do not ask for it.'
       const grant = coverFor(agent.id, name, write)
       return grant
         ? `granted ${until(grant.expiresAt)}.`
@@ -505,18 +505,18 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const lines = [
       `# ${name}`,
       '',
-      `- Call \`${baseOf(c)}/${name}/<path>\` with your header file. Speaker forwards \`<path>\` to the service's API root and adds the real credential; send no other credentials.`,
+      `- Call \`${baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
       `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
       `- Everything else (\`${name}.full\`): ${access(true)}`,
-      '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`): speaker asks the owner and answers the call once decided. Without that header the call answers at once. `denied` is final.',
+      '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`). Speaker asks the owner and answers the call once they decide. Without that header, the call answers at once. `denied` is final.',
       ...(service.mcp
         ? [
-            `- MCP server (streamable HTTP) at \`${baseOf(c)}/${name}\`. Listing tools and read-only tools count as read; other tool calls need full.`,
+            `- MCP server (streamable HTTP) at \`${baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
           ]
         : []),
       service.notes
         ? `\n${service.notes.trim()}`
-        : '- No notes for this service: use the upstream API documentation for paths.',
+        : '- No notes for this service. Use the upstream API documentation for paths.',
     ]
     return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
   })
