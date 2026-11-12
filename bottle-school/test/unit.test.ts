@@ -76,13 +76,14 @@ describe("configuration", () => {
 
 });
 
-test("speaker exception permits subject routes only at the configured origin", () => {
+test("speaker exception permits agent routes only at the configured origin", () => {
   const speaker = new URL("https://speaker.example:7000");
   const allowed = (path: string, method = "GET") => speakerRequestAllowed(speaker, new URL(path, speaker), method);
-  assert.ok(allowed("/_speaker/providers"));
+  assert.ok(allowed("/_speaker/me"));
+  assert.ok(allowed("/_speaker/help/obsidian"));
   assert.ok(allowed("/_speaker/requests", "POST"));
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
-  for (const path of ["/admin", "/admin/api/leases", "/_speaker/subjects", "/_speaker/sessions", "http://speaker.example:7000/obsidian/", "https://speaker.example:8080/obsidian/"])
+  for (const path of ["/admin", "/admin/api/leases", "/_speaker/hosts/agents", "/_speaker/agents", "/_speaker/providers", "http://speaker.example:7000/obsidian/", "https://speaker.example:8080/obsidian/"])
     assert.equal(allowed(path), false, path);
 });
 

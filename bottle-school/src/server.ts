@@ -10,7 +10,7 @@ import { loadConfig, type Config } from "./config.ts";
 import { loadSecrets, secretNames } from "./credentials.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
-import { readEnforcerToken } from "./speaker.ts";
+import { readHostToken } from "./speaker.ts";
 import { Tasks, type Task } from "./tasks.ts";
 
 type Env = { Variables: { task: Task } };
@@ -178,7 +178,7 @@ export const startBroker = (config: Config) => {
   const catalog = Catalog.parse(readJson("catalog.json"));
   const secrets = loadSecrets(`${config.configRoot}/secrets.env`);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
-  const tasks = new Tasks(config, templates, catalog, secrets, readEnforcerToken(config));
+  const tasks = new Tasks(config, templates, catalog, secrets, readHostToken(config));
   startControl(config, tasks);
   startGuestListener(config, tasks);
   console.log(`templates ${[...templates.keys()].join(" ")}`);

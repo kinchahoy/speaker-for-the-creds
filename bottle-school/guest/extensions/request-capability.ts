@@ -1,30 +1,34 @@
 import { existsSync, readFileSync } from "node:fs";
-import { setTimeout as sleep } from "node:timers/promises";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const control = { url: process.env.PI_V2_CONTROL!, token: process.env.PI_V2_TOKEN! };
-// SPEAKER_TOKEN is a placeholder; Gondolin swaps in the task's subject token only for speaker's host.
+// SPEAKER_TOKEN is a placeholder; Gondolin swaps in the task's agent token only for speaker's host.
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
 const PROMPT = "/etc/pi-v2/prompt.md";
-const POLL_MS = 5_000;
 const WAIT_MS = 30 * 60_000;
 
+/** `wait` holds the reply for up to that many seconds (speaker's Speaker-Wait header). */
 const call = async (
   to: { url: string; token: string },
   method: "GET" | "POST",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  wait?: number,
 ) => {
   const response = await fetch(`${to.url}/${path}`, {
     method,
-    headers: { "content-type": "application/json", authorization: `Bearer ${to.token}` },
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${to.token}`,
+      ...(wait ? { "speaker-wait": String(wait) } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   });
-  const result = (await response.json()) as Record<string, string>;
-  if (!response.ok) throw new Error(result.error ?? `${to.url} returned ${response.status}`);
+  const result = (await response.json()) as Record<string, any>;
+  if (!response.ok) throw new Error(JSON.stringify(result));
   return result;
 };
 
@@ -48,8 +52,8 @@ const lastMessage = (
 };
 
 /**
- * Reports progress to bottle-school and asks speaker for capabilities on the task's behalf. The owner
- * approves each request in speaker; nothing here grants a capability.
+ * Reports progress to bottle-school and asks speaker for items on the task's behalf. The owner
+ * approves each request in speaker; nothing here grants access.
  */
 export default function (pi: ExtensionAPI) {
   const report = (busy: boolean, summary?: string) =>
@@ -74,41 +78,30 @@ export default function (pi: ExtensionAPI) {
       name: "request_capability",
       label: "Request capability",
       description:
-        "Ask the owner for a lease: a credential, secret, site, folder, MCP server, or Pi extension, or a named bundle. Waits up to 30 minutes for the owner's decision and returns it.",
+        "Ask the owner for items: a service, site, secret, folder, MCP server, Pi extension, or a named group. Waits up to 30 minutes for the owner's decision and returns what was granted and denied.",
       parameters: Type.Object({
-        kind: Type.Optional(
-          Type.Union(["credential", "secret", "site", "folder", "mcp", "extension"].map((v) => Type.Literal(v))),
-        ),
-        ref: Type.Optional(
-          Type.String({
-            description:
-              "credential: <provider>.read|write. secret: <NAME>@<host>[,<host>]. site: <host> or *.<domain>. folder: <share> or <share>:rw. mcp: <catalog id>. extension: <extension catalog id>.",
-          }),
-        ),
-        bundle: Type.Optional(Type.String({ description: "A bundle name, in place of kind and ref" })),
+        want: Type.Array(Type.String(), {
+          description:
+            "Items. <service>.read or <service>.full. site:<host> or site:*.<domain>. secret:<NAME>@<host>[,<host>]. folder:<share> or folder:<share>:rw. mcp:<catalog id>. ext:<extension catalog id>. group:<name>.",
+        }),
         reason: Type.String({ description: "One sentence on what this unblocks" }),
-        duration: Type.Union(["15m", "30m", "1h", "1d", "7d", "30d"].map((v) => Type.Literal(v))),
+        duration: Type.Union(["30m", "1h", "2h", "1d", "30d"].map((v) => Type.Literal(v))),
       }),
       async execute(_id, params, signal) {
-        const { kind, ref, bundle, reason, duration } = params;
-        const capability = kind && ref ? { kind, ref } : undefined;
-        const { id } = await call(speaker, "POST", "requests", { capability, bundle, reason, duration }, signal);
+        // Repeating the request joins the pending one, so each hold is at most a minute.
         const deadline = Date.now() + WAIT_MS;
-        let status = "pending";
-        while (status === "pending" && Date.now() < deadline) {
-          await sleep(POLL_MS, undefined, { signal });
-          ({ status } = await call(speaker, "GET", `requests/${id}`, undefined, signal));
-        }
-        const what = bundle ? `bundle ${bundle}` : `${kind} ${ref}`;
+        let result = await call(speaker, "POST", "requests", params, signal, 60);
+        while (result.status === "pending" && Date.now() < deadline)
+          result = await call(speaker, "POST", "requests", params, signal, 60);
+        const { granted = [], denied = [], status, id } = result;
         const text =
-          status === "approved"
-            ? `The owner approved ${what}. Retry now.`
-            : status === "denied"
-              ? `The owner denied ${what}; continue without it or explain what is blocked.`
-              : status === "expired"
-                ? `The request for ${what} expired undecided; continue other work.`
-                : "The owner has not decided yet; continue other work.";
-        return { content: [{ type: "text", text }], details: { id, status } };
+          status === "pending"
+            ? "The owner has not decided yet; continue other work."
+            : status === "expired"
+              ? `The request for ${params.want.join(", ")} expired undecided; continue other work.`
+              : `Granted: ${granted.join(", ") || "nothing"}. Denied: ${denied.join(", ") || "nothing"}.` +
+                (granted.length ? " Retry now." : " Continue without it or explain what is blocked.");
+        return { content: [{ type: "text", text }], details: { id, status, granted, denied } };
       },
     }),
   );

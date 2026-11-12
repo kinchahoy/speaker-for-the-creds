@@ -30,7 +30,7 @@ const COMMANDS = {
     positional: 0,
     help: `usage: ${SELF} register [--name NAME]
 
-Registers this host as a speaker enforcer and writes its token. Approve the enforcer in speaker /admin,
+Registers this host as a speaker sandbox host and writes its token. Approve the sandbox host in speaker /admin,
 then start the service.`,
   },
   run: {
@@ -72,7 +72,7 @@ const usage = `usage: ${SELF} <command> [options]
   ls         List live tasks
   attach     Open a task's Pi terminal
   stop       Close a task and archive it
-  register   Register this host as a speaker enforcer
+  register   Register this host as a speaker sandbox host
 
 Run \`${SELF} help <command>\` or \`${SELF} <command> --help\` for options.`;
 
@@ -184,12 +184,12 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     const token = randomBytes(32).toString("hex");
     writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
     const name = values.name ?? "bottle-school";
-    await api("POST", `${config.speaker.url}/_speaker/enforcers`, {
+    await api("POST", `${config.speaker.url}/_speaker/hosts`, {
       name,
-      kinds: ["secret", "site", "folder", "mcp", "extension"],
+      kinds: ["secret", "site", "folder", "mcp", "ext"],
       tokenHash: createHash("sha256").update(token).digest("hex"),
     });
-    console.log(`Registered enforcer "${name}". Approve it in speaker /admin, then start bottle-school.`);
+    console.log(`Registered sandbox host "${name}". Approve it in speaker /admin, then start bottle-school.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     if (values.attended && values.unattended) throw new UsageError("pass at most one of --attended and --unattended");
