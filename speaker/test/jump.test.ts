@@ -156,13 +156,19 @@ async function fixture(t: TestContext) {
     assert.equal(response.status, 303)
     return page
   }
-  const me = async () => (await (await agent('/_speaker/me')).json()) as { ssh: { item: string; commands: string[] }[] }
+  const me = async () =>
+    (await (await agent('/_speaker/me')).json()) as {
+      ssh: { item: string; commands: string[]; knownHosts: { line: string } }[]
+    }
   // The command line /me prints for an item, with the agent's own details filled in.
   async function line(item: string, which: 'ssh' | 'sftp' | 'sshfs' | 'scp', fill: Record<string, string> = {}) {
     const found = (await me()).ssh.find((entry) => entry.item === item)
     const text = found?.commands.find((c) => c.startsWith(which))
     assert.ok(text, `${item} has a ${which} line in /me`)
-    return Object.entries({ '<key>': join(dir, 'agent_key'), ...fill }).reduce((l, [k, v]) => l.replaceAll(k, v), text)
+    // The one-time step /me gives: save the jump server's host key line.
+    await writeFile(join(dir, 'known_hosts'), `${found?.knownHosts.line}\n`)
+    const filled = { '<key>': join(dir, 'agent_key'), '<known_hosts>': join(dir, 'known_hosts'), ...fill }
+    return Object.entries(filled).reduce((l, [k, v]) => l.replaceAll(k, v), text)
   }
   return { dir, world, url, owner, ownerGet, ownerForm, agent, enroll, approve, me, line, sshPort }
 }

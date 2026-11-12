@@ -236,7 +236,9 @@ export const folderSync = (
   };
 };
 
-const Me = z.object({ ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()) })) });
+const Me = z.object({
+  ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()), knownHosts: z.object({ line: z.string() }) })),
+});
 
 /** Starts a server on a unix socket that a vsock route reaches; a failed request ends as a 502, never an unhandled error. */
 export const listen = async (path: string, handler: RequestListener) => {
@@ -338,18 +340,15 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
           });
           if (!response.ok) throw new Error(`speaker GET me returned ${response.status}`);
           const item = `folder:${share}${writable ? ":rw" : ""}`;
-          const command = Me.parse(await response.json()).ssh.find((entry) => entry.item === item)?.commands[0];
-          if (!command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
-          // sshfs 3.7 hands ssh only the options it knows, and KnownHostsCommand is not one: the pinned key goes in a file.
-          const pinned = /-o 'KnownHostsCommand=\/bin\/echo "([^"]+)"'/.exec(command);
-          if (!pinned) throw new Error(`speaker's sshfs command for ${item} has no pinned host key`);
+          const grant = Me.parse(await response.json()).ssh.find((entry) => entry.item === item);
+          const command = grant?.commands[0];
+          if (!grant || !command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
           const sshfs = command
-            .replace(pinned[0], "")
-            .replace("UserKnownHostsFile=/dev/null", `UserKnownHostsFile=${GUEST_SSH.knownHosts}`)
+            .replace("<known_hosts>", () => GUEST_SSH.knownHosts)
             .replace("<key>", () => GUEST_SSH.key)
             .replace("<mountpoint>", () => `/input/${share}`)
             .replace("sshfs ", `sshfs -F ${GUEST_SSH.config}${writable ? "" : " -o ro"} `);
-          await run(`mkdir -p /input/${share} && echo '${pinned[1]}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
+          await run(`mkdir -p /input/${share} && echo '${grant.knownHosts.line}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
         },
         // speaker ending a session takes its mount with it, so there may be nothing left to unmount.
         unmount: (share) => run(`if grep -q ' /input/${share} ' /proc/mounts; then fusermount3 -uz /input/${share}; fi`),

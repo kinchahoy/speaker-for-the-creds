@@ -77,7 +77,7 @@ Calls made where the design left room; each can be revisited.
 **Phase 4 (SSH and folders)**
 - The login name in agents' SSH commands is the account speaker runs as (`node` in the image), not `s`: a non-root `sshd` can only log in its own user.
 - No maintained library parses SFTP from a plain stream, so `speaker/sftp.ts` is a small parser for the SFTP v3 packets clients use; the target's own `sftp-server -d <path> [-R]` does the file work.
-- Command lines pin the jump server's host key with `KnownHostsCommand=/bin/echo "<line>"`, so nothing prompts.
+- Command lines pin the jump server's host key through a `known_hosts` file the agent saves once from `/me` (`knownHosts`), so nothing prompts; older `sshfs` rejects `KnownHostsCommand`.
 - On an `ssh:` grant, `scp`/`sftp` paths are `<target>/<absolute path>` with no folder limit; a share with the same name as a target takes precedence.
 - Refusal messages reach `ssh` command sessions; in `sftp`/`scp` sessions a refusal shows as "permission denied" and in the Log. Path operations are logged; reads and writes on open files are not logged one by one.
 - The jump server's runtime files live in a private temporary directory (public keys, the ssh-agent socket, its per-start host key); speaker's private key goes straight into `ssh-agent`.

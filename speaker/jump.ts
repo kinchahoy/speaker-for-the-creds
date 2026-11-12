@@ -399,7 +399,10 @@ export async function createJump(env: Env) {
   function commands(agentId: string, host: string) {
     if (!hostKey) return []
     const known = `[${host}]:${env.port} ${hostKey}`
-    const options = `-o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o 'KnownHostsCommand=/bin/echo "${known}"'`
+    // A known_hosts file, not KnownHostsCommand: sshfs before 3.8 rejects options it does not know.
+    const options =
+      '-o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<known_hosts> -o StrictHostKeyChecking=yes'
+    const knownHosts = { line: known, save: `printf '%s\\n' '${known}' > <known_hosts>` }
     const at = `${login}@${host.includes(':') ? `[${host}]` : host}`
     const key = '-i <key>'
     return sshGrants()
@@ -410,6 +413,7 @@ export async function createJump(env: Env) {
           return {
             item,
             expiresAt,
+            knownHosts,
             commands: [
               `ssh -p ${env.port} ${key} ${options} ${login}@${host} ${alias} '<command>'`,
               `scp -P ${env.port} ${key} ${options} <file> ${at}:${alias}/<absolute path on ${alias}>`,
@@ -420,8 +424,9 @@ export async function createJump(env: Env) {
         return {
           item,
           expiresAt,
+          knownHosts,
           commands: [
-            `sshfs -p ${env.port} -o IdentityFile=<key> -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o 'KnownHostsCommand=/bin/echo "${known}"' ${at}:${share} <mountpoint>`,
+            `sshfs -p ${env.port} -o IdentityFile=<key> ${options} ${at}:${share} <mountpoint>`,
             `scp -P ${env.port} ${key} ${options} <file> ${at}:${share}/<path>`,
             `sftp -P ${env.port} ${key} ${options} ${at}:${share}/<path>`,
           ],
