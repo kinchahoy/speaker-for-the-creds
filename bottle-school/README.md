@@ -41,7 +41,7 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-cli register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Local inference is baseline access, independent of speaker leases.
-- `shareRoots`: unused. Folders now always arrive over SSH. bottle-school only validates it at config load, and keeps it so older configs still load.
+- `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
 - `PI_V2_CONFIG` selects the service configuration, and `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
 
 <!-- author: ai -->
@@ -177,7 +177,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
 - Each snapshot from speaker replaces the live grants. A grant takes effect once bottle-school reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle-school skips unsupported refs. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
-- On every connection, bottle-school tells speaker which shares it holds (`shareRoots`, plus `archive`) and whether the VM can mount each one. The answer is always "no", because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
+- On every connection, bottle-school reports the names in `shareRoots` to speaker, each as not mountable, because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
 
 <!-- author: ai -->
 
