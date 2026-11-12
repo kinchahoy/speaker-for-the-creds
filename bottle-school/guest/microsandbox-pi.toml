@@ -1,0 +1,11 @@
+# Layer 4 of guest/microsandbox.Dockerfile: Pi and its extensions. Pi is the latest release; the extensions stay pinned
+# as in mise-config.toml.
+[tools]
+"npm:@earendil-works/pi-coding-agent" = "latest"
+"npm:pi-loop-police" = "1.14.1"
+"npm:pi-token-speed" = "0.12.0"
+"npm:@juicesharp/rpiv-ask-user-question" = "2.15.0"
+"npm:pi-web-access" = "0.47.0"
+# 0.7.9 is the last pi-cc-* release with provenance (see mise-config.toml).
+"npm:pi-cc-loop" = "0.7.9"
+"npm:pi-cc-monitor" = "0.7.9"
