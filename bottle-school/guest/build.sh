@@ -1,15 +1,16 @@
 #!/bin/sh
 # Builds the guest image and loads it into microsandbox.
-# Usage: guest/build.sh [image-tag]   (default: pi-v5-guest; set it as "guestImage" in config.json)
+# Usage: guest/build.sh [image-tag]   (default: bottle-school-guest; set it as "guestImage" in config.json)
 # Docker (buildx) builds guest/Dockerfile for the host architecture under the tag, then microsandbox loads it into
-# <stateRoot>/microsandbox (stateRoot from config.json, or PI_V2_CONFIG).
+# <stateRoot>/microsandbox (stateRoot from config.json, or BOTTLE_SCHOOL_CONFIG).
 # microsandbox refuses storage another account could write to; keep everything it and we create private.
 umask 077
 set -eu
-IMAGE=${1:-pi-v5-guest}
+IMAGE=${1:-bottle-school-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 MSB=${MSB:-"$ROOT/node_modules/.bin/msb"}
-CONFIG=${PI_V2_CONFIG:-"$ROOT/config.json"}
+[ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
+CONFIG=${BOTTLE_SCHOOL_CONFIG:-"$ROOT/config.json"}
 
 case "$(uname -m)" in
   arm64|aarch64) PLATFORM=linux/arm64 ;;

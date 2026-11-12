@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
-  const root = mkdtempSync(join(tmpdir(), "pi-v2-config-"));
+  const root = mkdtempSync(join(tmpdir(), "bottle-school-config-"));
   roots.push(root);
   for (const name of ["config", "state", "output", "documents"]) mkdirSync(join(root, name));
   const path = join(root, "config.json");
@@ -29,7 +29,7 @@ const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
         guestPort: 7002,
         speaker: { url: "http://127.0.0.1:7000" },
         maxTasks: 1,
-        guestImage: "pi-v2-guest",
+        guestImage: "bottle-school-guest",
         configRoot: join(root, "config"),
         stateRoot: join(root, "state"),
         outputRoot: join(root, "output"),
@@ -290,7 +290,7 @@ test("guest configuration loads the access-and-creds skill alone and the curated
   writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, new Map(), [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
   assert.equal(args.filter((arg) => arg === "--skill").length, 1);
-  assert.ok(args.includes("/etc/pi-v2/skills/access-and-creds"));
+  assert.ok(args.includes("/etc/bottle-school/skills/access-and-creds"));
   assert.match(readFileSync(join(directory, "skills/access-and-creds/SKILL.md"), "utf8"), /^name: access-and-creds$/m);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
@@ -325,12 +325,12 @@ test("attended mode loads ask-user-question; extension leases load catalog exten
   };
 
   const attended = write(true, []);
-  assert.deepEqual(attended.loaded, ["/etc/pi-v2/extensions/request-capability.ts", "/opt/pi-plugins/rpiv-ask-user-question"]);
+  assert.deepEqual(attended.loaded, ["/etc/bottle-school/extensions/request-capability.ts", "/opt/pi-plugins/rpiv-ask-user-question"]);
   assert.ok(attended.tools.includes("ask_user_question"));
   assert.match(attended.system, /## Attended task/);
 
   const research = write(false, ["pi-web-access"], "Find three sources");
-  assert.deepEqual(research.loaded, ["/etc/pi-v2/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
+  assert.deepEqual(research.loaded, ["/etc/bottle-school/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
   assert.ok(research.tools.includes("web_search") && !research.tools.includes("ask_user_question"));
   assert.match(research.system, /## Unattended task[\s\S]*Nobody is watching[\s\S]*## Owner prompt\n\nFind three sources$/);
   const webSearch = JSON.parse(readFileSync(join(research.directory, "web-search.json"), "utf8"));

@@ -84,3 +84,46 @@ test("init bottle-school refuses a home so deep that microsandbox's unix sockets
   assert.equal(result.status, 1);
   assert.match(result.stderr, /too long for microsandbox's unix sockets.*Fix: choose a shorter --home/);
 });
+
+// A speaker that is locked until /admin/signin gets the owner password; it approves any host token at once.
+const lockedSpeaker = async (t: TestContext, owner: string) => {
+  let unlocked = false;
+  const port = await listen(t, "0.0.0.0", (request, response) => {
+    const url = request.url ?? "";
+    if (request.method === "POST" && url === "/admin/signin") {
+      let body = "";
+      request.on("data", (chunk) => (body += chunk));
+      request.on("end", () => {
+        unlocked ||= new URLSearchParams(body).get("password") === owner;
+        response.writeHead(unlocked ? 303 : 401, { location: "/admin" }).end();
+      });
+    } else if (!unlocked && url.startsWith("/_speaker/") && !url.endsWith("/health")) response.writeHead(503).end("{}");
+    else if (request.method === "POST" && url === "/_speaker/hosts") response.writeHead(201).end('{"id":"h1"}');
+    else response.end('{"ok":true}');
+  });
+  return { port, unlocked: () => unlocked };
+};
+
+const registering = async (t: TestContext, owner: string, typed: string) => {
+  const dir = scratch(t);
+  const speaker = await lockedSpeaker(t, owner);
+  const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
+  const args = [init, "bottle-school", "--yes", "--skip-build", "--skip-smoke", "--password-stdin", "--home", join(dir, "h"), "--config", join(dir, "config.json")];
+  args.push("--control-port", "7401", "--guest-port", "7402", "--speaker-url", `http://${lan}:${speaker.port}`, "--model-endpoint", `127.0.0.1:${model}`);
+  const child = execFile(process.execPath, args);
+  child.stdin?.end(`${typed}\n`);
+  const status = await new Promise<number | null>((done) => child.once("exit", done));
+  return { status, speaker };
+};
+
+test("init bottle-school unlocks a locked speaker with the password from --password-stdin", { skip: !kvm || !lan }, async (t) => {
+  const { status, speaker } = await registering(t, "the owner password", "the owner password");
+  assert.equal(status, 0);
+  assert.equal(speaker.unlocked(), true);
+});
+
+test("init bottle-school stops when --password-stdin carries the wrong password", { skip: !kvm || !lan }, async (t) => {
+  const { status, speaker } = await registering(t, "the owner password", "not it");
+  assert.equal(status, 1);
+  assert.equal(speaker.unlocked(), false);
+});

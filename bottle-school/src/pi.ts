@@ -252,7 +252,7 @@ const mcpServers = (catalog: Catalog, ids: string[]) =>
     }),
   );
 
-/** Writes the whole trusted guest configuration to a host directory mounted read-only at /etc/pi-v2. */
+/** Writes the whole trusted guest configuration to a host directory mounted read-only at /etc/bottle-school. */
 export const writeGuestConfig = (
   directory: string,
   config: Config,
@@ -312,11 +312,11 @@ export const writeGuestConfig = (
     "--no-context-files",
     "--no-approve",
     "--skill",
-    "/etc/pi-v2/skills/access-and-creds",
+    "/etc/bottle-school/skills/access-and-creds",
     "--append-system-prompt",
-    "/etc/pi-v2/APPEND_SYSTEM.md",
+    "/etc/bottle-school/APPEND_SYSTEM.md",
     "-e",
-    "/etc/pi-v2/extensions/request-capability.ts",
+    "/etc/bottle-school/extensions/request-capability.ts",
     // `--no-extensions` also disables Pi's built-in MCP, so an MCP lease loads it explicitly.
     ...(mcpIds.length ? ["-e", "builtin:mcp"] : []),
     ...extensions.flatMap((entry) => ["-e", entry.guestPath]),

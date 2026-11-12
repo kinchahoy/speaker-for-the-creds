@@ -165,7 +165,14 @@ export async function createJump(env: Env) {
     process.once('exit', cleanup)
     publicKey = key.public
     await writeFile(path('speaker.pub'), `${publicKey}\n`)
-    agentProcess = spawn('ssh-agent', ['-D', '-a', path('agent.sock')], { stdio: ['ignore', 'pipe', 'inherit'] })
+    agentProcess = spawn('ssh-agent', ['-D', '-a', path('agent.sock')], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // Pass ssh-agent's errors through, but not the "exiting on signal 15" it prints when speaker stops it.
+    agentProcess.stderr?.on('data', (chunk: Buffer) => {
+      const lines = String(chunk)
+        .split('\n')
+        .filter((line) => line && !line.startsWith('exiting on signal'))
+      if (lines.length) process.stderr.write(`${lines.join('\n')}\n`)
+    })
     // ssh-agent prints its environment once the socket is bound.
     await once(agentProcess.stdout ?? agentProcess, 'data')
     const add = run('ssh-add', ['-'], { env: { ...process.env, SSH_AUTH_SOCK: path('agent.sock') } })

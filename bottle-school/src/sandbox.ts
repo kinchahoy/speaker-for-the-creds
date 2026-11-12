@@ -320,7 +320,7 @@ export const listen = async (path: string, handler: RequestListener) => {
 /**
  * Starts one VM for a task: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
  * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
- * /work, /output and /etc/pi-v2, and model request bodies recorded into `live.httpResponses` with their blobs under
+ * /work, /output and /etc/bottle-school, and model request bodies recorded into `live.httpResponses` with their blobs under
  * `paths.capture`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
 export async function boot(
@@ -379,7 +379,7 @@ export async function boot(
       NODE_USE_ENV_PROXY: "1",
       ...(ca ? { NODE_EXTRA_CA_CERTS: caPath } : {}),
       ...env,
-      PI_V2_CONTROL: `http://127.0.0.1:${DOORS.control[1]}`,
+      BOTTLE_SCHOOL_CONTROL: `http://127.0.0.1:${DOORS.control[1]}`,
     };
     let builder = Sandbox.builder(name)
       .imageWith((image) => image.oci(config.guestImage).rootDisk(limits.rootfsGiB * 1024))
@@ -389,7 +389,7 @@ export async function boot(
       .disableNetwork()
       .volume("/work", (mount) => mount.bind(paths.work))
       .volume("/output", (mount) => mount.bind(paths.artifacts))
-      .volume("/etc/pi-v2", (mount) => mount.bind(paths.guestConfig).readonly());
+      .volume("/etc/bottle-school", (mount) => mount.bind(paths.guestConfig).readonly());
     for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${dir}/${door}.sock`, port);
     if (key) builder = builder.vsock(`${dir}/ssh.sock`, SSH_VSOCK);
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);

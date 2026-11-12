@@ -141,6 +141,19 @@ async function startSpeaker(envFile: string, dataDir: string, port: number) {
   return fail('speaker did not start', `read ${join(dataDir, 'speaker.log')}`)
 }
 
+// Speaker starts locked; one sign-in with the owner password unlocks it. The password stays in memory.
+async function unlock(port: number, publicUrl: string, password: string) {
+  const response = await fetch(`http://127.0.0.1:${port}/admin/signin`, {
+    method: 'POST',
+    // /admin refuses form posts that do not come from its own origin.
+    headers: { origin: new URL(publicUrl).origin },
+    body: new URLSearchParams({ password }),
+    redirect: 'manual',
+  })
+  if (response.status !== 303)
+    fail(`speaker did not accept the owner password (HTTP ${response.status})`, 'sign in at /admin yourself')
+}
+
 export async function initSpeaker(flags: SpeakerFlags) {
   const yes = flags.yes ?? false
   p.intro('speaker setup')
@@ -247,14 +260,16 @@ export async function initSpeaker(flags: SpeakerFlags) {
   if (start) {
     const pid = await startSpeaker(envFile, dataDir, port)
     p.log.success(`Speaker is running (pid ${pid}). Log: ${join(dataDir, 'speaker.log')}. Stop it with: kill ${pid}`)
-  } else p.log.info(`Start speaker with: ${command}`)
-  p.log.info(
-    `Open ${publicUrl}/admin and sign in with the owner password. Speaker stays locked until you do, and again after every restart.`,
-  )
+    await unlock(port, publicUrl, password)
+    p.log.success(`Speaker is unlocked. After every restart, sign in at ${publicUrl}/admin with the owner password.`)
+  } else {
+    p.log.info(`Start speaker with: ${command}`)
+    p.log.info(`Then sign in at ${publicUrl}/admin with the owner password. Speaker stays locked until you do.`)
+  }
   if (trustedProxy)
     p.log.warn(
       `Behind a reverse proxy, open ports ${proxyPort} (secrets proxy) and ${sshPort} (SSH) on this machine directly: the proxy cannot carry them. Also raise its timeout above 120 s, since speaker holds requests for up to 120 s.`,
     )
   p.outro('Speaker is set up.')
-  return { url: publicUrl, started: start }
+  return { url: publicUrl, started: start, password }
 }

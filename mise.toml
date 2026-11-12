@@ -47,7 +47,7 @@ dir = "bottle-school"
 run = "./start.sh"
 
 [tasks.guest-build]
-description = "Build the guest image and load it into microsandbox: mise run guest-build pi-v5-guest"
+description = "Build the guest image and load it into microsandbox: mise run guest-build bottle-school-guest"
 dir = "bottle-school"
 run = "guest/build.sh"
 

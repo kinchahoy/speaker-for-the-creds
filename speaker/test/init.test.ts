@@ -96,3 +96,19 @@ test('init stops with the fix when a port is taken, and writes nothing', async (
   await assert.rejects(stat(join(dir, '.env')))
   await assert.rejects(stat(join(dir, 'data')))
 })
+
+test('init speaker --start signs in once with the owner password, so speaker is unlocked', async (t) => {
+  const dir = await scratch(t)
+  const { port, args } = await ports()
+  const result = spawnSync(
+    process.execPath,
+    [init, 'speaker', '--yes', '--start', '--password-stdin', ...where(dir), ...args],
+    { input: `${password}\n`, encoding: 'utf8' },
+  )
+  const pid = Number(/pid (\d+)/.exec(result.stdout)?.[1])
+  if (pid) t.after(() => process.kill(pid))
+  assert.equal(result.status, 0, result.stderr + result.stdout)
+  // Locked speaker answers 503 to every API call; an unlocked one asks for credentials instead.
+  const me = await fetch(`http://127.0.0.1:${port}/_speaker/me`)
+  assert.notEqual(me.status, 503)
+})
