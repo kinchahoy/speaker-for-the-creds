@@ -23,15 +23,40 @@ export type Setup = {
 const css = `
 main{max-width:1100px}nav a[aria-current]{font-weight:700;text-decoration:underline}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:1rem;align-items:start}
-article{margin:0}fieldset label{display:flex;gap:.5rem;align-items:baseline}label.risky{background:var(--pico-mark-background-color);border-radius:.25rem;padding:0 .25rem}
+article{margin:0}article>header>small{display:block}
+fieldset label{display:flex;gap:.5rem;align-items:flex-start;padding:.25rem .5rem;border-radius:.25rem}label.risky{background:var(--pico-mark-background-color)}
+fieldset input[type=checkbox],fieldset input[type=checkbox]:checked{appearance:auto;background:none;flex:none;width:1.1rem;height:1.1rem;margin:.15rem 0 0;accent-color:var(--pico-primary)}
+button.secondary{background:transparent;color:var(--pico-muted-color);border-color:var(--pico-muted-border-color)}
+button.deny{background:transparent;color:var(--pico-del-color);border-color:var(--pico-del-color)}
 .actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.actions form,.actions button{margin:0;width:auto}
 ul.rows{padding:0}ul.rows>li{list-style:none;border-top:1px solid var(--pico-muted-border-color);padding:.5rem 0}
 .warn{color:var(--pico-del-color)}small{color:var(--pico-muted-color)}
 `
-// A ticked group box ticks its members; htmx is loaded without eval, so this is the page's only script.
-const groupScript = `document.addEventListener('change', (e) => {
+// The page's only script (htmx is loaded without eval): a ticked group box ticks its members; the filter bar hides
+// cards and rows by kind and text; times show in the viewer's zone, with a live countdown where data-left is set.
+// Filtering and times are re-applied after every swap and then every second.
+const pageScript = `document.addEventListener('change', (e) => {
   if (e.target.matches('[data-all]')) e.target.closest('fieldset').querySelectorAll('input[name=items]').forEach((i) => { i.checked = e.target.checked })
-})`
+})
+const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'always' })
+const units = [['day', 86400], ['hour', 3600], ['minute', 60], ['second', 1]]
+const tick = () => {
+  const kind = document.querySelector('[name=kind]:checked')?.value
+  const q = document.querySelector('[name=q]')?.value.toLowerCase() ?? ''
+  document.querySelectorAll('[data-kind]').forEach((el) => {
+    el.hidden = !((!kind || el.dataset.kind.split(' ').includes(kind)) && el.textContent.toLowerCase().includes(q))
+  })
+  document.querySelectorAll('time[data-local]').forEach((t) => {
+    const at = new Date(t.dateTime)
+    const secs = Math.max(0, Math.round((at - Date.now()) / 1000))
+    const [unit, size] = units.find(([, size]) => secs >= size) ?? units[3]
+    t.textContent = at.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) + ('left' in t.dataset ? ' (' + rtf.format(Math.floor(secs / size), unit).replace(/^in /, '') + ' left)' : '')
+  })
+}
+document.addEventListener('input', tick)
+document.addEventListener('htmx:afterSwap', tick)
+document.addEventListener('DOMContentLoaded', tick)
+setInterval(tick, 1000)`
 const htmxConfig = JSON.stringify({
   includeIndicatorStyles: false,
   allowEval: false,
@@ -43,7 +68,7 @@ const htmxConfig = JSON.stringify({
   ],
 })
 const head = (nonce = '') =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker</title><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script nonce="${nonce}">${raw(groupScript)}</script></head>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker</title><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
 
 const sections = [
   ['approvals', 'Inbox', '/admin'],
@@ -52,11 +77,22 @@ const sections = [
   ['log', 'Log', '/admin/log'],
 ] as const
 export type Section = (typeof sections)[number][0]
+const kinds = {
+  service: 'services',
+  site: 'sites',
+  secret: 'secrets',
+  folder: 'folders',
+  ssh: 'SSH',
+  mcp: 'MCP',
+  ext: 'extensions',
+}
+// Kind chips and a text box that narrow the cards and rows of the live panels (see pageScript).
+const filterBar = html`<div class="actions" role="search"><label><input type="radio" name="kind" value="" checked>all</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${text}</label>`)}<input type="text" name="q" placeholder="Search" aria-label="Search"></div>`
 export const layout = (nonce: string | undefined, section: Section, body: Html | string) =>
   html`${head(nonce)}<body hx-boost="true"><header><nav><ul><li><strong>Speaker</strong></li></ul><ul>${sections.map(
     ([id, label, href]) =>
       html`<li><a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}</a></li>`,
-  )}</ul></nav></header><main>${typeof body === 'string' ? raw(body) : body}</main></body></html>`
+  )}</ul></nav></header><main>${section === 'approvals' || section === 'active' ? filterBar : ''}${typeof body === 'string' ? raw(body) : body}</main></body></html>`
 
 // Sign-in and first-run pages: just one form.
 const authPage = (
@@ -114,20 +150,16 @@ const button = (action: string, fields: Html | string, label: string, confirm = 
   html`<form method="post" action="${action}" ${raw(confirm ? `hx-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button class="${kind}">${label}</button></form>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16)
-const left = (iso: string) => {
-  const minutes = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 60_000))
-  return minutes >= 1440
-    ? `${Math.round(minutes / 1440)}d`
-    : minutes >= 60
-      ? `${Math.round(minutes / 60)}h`
-      : `${minutes}m`
-}
+// A time the page rewrites into the viewer's zone (UTC until the script runs); `countdown` adds the time left.
+const local = (ms: number, countdown = false) =>
+  html`<time datetime="${new Date(ms).toISOString()}" data-local ${raw(countdown ? 'data-left' : '')}>${time(ms)} UTC</time>`
 const kindOf = (item: string) => (item.includes(':') ? item.split(':')[0] : 'service')
 // Items that can change things (or reach out with a credential) are tinted on the card.
 const risky = (item: string) => /^(ssh|secret):|\.full$|^folder:.+:rw$/.test(item)
 const empty = (text: string) => html`<p><small>${text}</small></p>`
 
 // A live panel: htmx asks again every 5 seconds with the hash of what it shows; an unchanged panel answers 204.
+// Request cards are hx-preserve: a refresh keeps the cards still pending as they are, so unticked items and a chosen duration stay.
 const digest = (inner: string) => createHash('sha256').update(inner).digest('hex').slice(0, 16)
 export const live = (id: string, inner: string) =>
   `<section id="${id}" hx-get="/admin/panel/${id}?h=${digest(inner)}" hx-trigger="every 5s" hx-swap="outerHTML">${inner}</section>`
@@ -165,7 +197,7 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
     .filter((h) => h.status === 'pending')
     .map(
       (h) =>
-        html`<article id="host-${h.id}"><header><strong>Sandbox host ${h.name}</strong> <small>wants to register</small></header><p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions"><button>Approve</button><button class="secondary" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
+        html`<article id="host-${h.id}"><header><strong>Sandbox host ${h.name}</strong> <small>wants to register</small></header><p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions"><button>Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
     )
   const requestCards = requests
     .filter((r) => r.status === 'pending')
@@ -189,10 +221,10 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
         sent: 'Phone notification sent',
         failed: 'Phone notification failed. Access stays locked.',
       }[r.notification]
-      return html`<article id="request-${r.id}"><header><strong>${label}</strong>${agent ? html` <small>says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''} · from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}</small>${twin(agent)}` : ''}<br><small>asked ${time(r.createdAt)} UTC</small></header><p><small>Reason:</small> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
+      return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map(kindOf))].join(' ')}"><header><strong>${label}</strong>${agent ? html`<small>says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''}</small><small>from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}${twin(agent)}</small>` : ''}<small>asked ${local(r.createdAt)}</small></header><p><small>Reason:</small> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
         (g) =>
           html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item))}</fieldset>`,
-      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item))}</fieldset>` : ''}${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button>Approve</button><button class="secondary" formaction="/admin/requests/${r.id}/deny">Deny</button></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
+      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item))}</fieldset>` : ''}${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button>Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
     })
   const cards = [...hostCards, ...requestCards]
   return String(
@@ -215,14 +247,14 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
   const soonest = (id: string) => Math.min(Number.POSITIVE_INFINITY, ...grants.filter((g) => g.agentId === id).map(end))
   const grantRow = (g: View['grants'][number]) => {
     const detail = details[`${g.agentId} ${g.item}`]
-    return html`<li id="grant-${g.id}"><code>${g.item}</code> ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`expires <time datetime="${g.expiresAt}">${time(Date.parse(g.expiresAt))} UTC</time> (${left(g.expiresAt)} left)`}${chips[g.state] ? html` · <mark data-state="${g.state}">${chips[g.state]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
+    return html`<li id="grant-${g.id}" data-kind="${kindOf(g.item)}"><code>${g.item}</code> ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`expires ${local(Date.parse(g.expiresAt), true)}`}${chips[g.state] ? html` · <mark data-state="${g.state}">${chips[g.state]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
   }
   const blocks = [...agents]
     .sort((a, b) => soonest(a.id) - soonest(b.id))
     .map((a) => {
       const mine = grants.filter((g) => g.agentId === a.id).sort((x, y) => end(x) - end(y))
       const open = sessions.filter((s) => s.agent === a.id)
-      return html`<article id="agent-${a.id}"><header class="actions"><span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? ` · last used ${time(a.lastUsedAt)} UTC` : ''}</small></span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li><code>${s.what}</code> <small>SSH session open since ${time(s.started)} UTC</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
+      return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header class="actions"><span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small></span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li data-kind="ssh"><code>${s.what}</code> <small>SSH session open since ${local(s.started)}</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
     })
   const hostBlocks = hosts
     .filter((h) => h.status === 'approved')
