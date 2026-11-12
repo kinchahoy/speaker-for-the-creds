@@ -74,14 +74,22 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
     reason: "docs",
     duration: "30m",
   });
-  await ownerPost(`/api/requests/${request.id}/approve`, { duration: "1h" });
+  // The owner's card posts the ticked items and the items it showed.
+  await fetch(`${url}/admin/requests/${request.id}/approve`, {
+    method: "POST",
+    headers: { authorization: owner.authorization, origin: owner.origin },
+    body: new URLSearchParams({ duration: "1h", items: "site:example.com", shown: "site:example.com" }),
+    redirect: "manual",
+  });
   await until(() => snapshots.some((s) => s.leases.length === 1));
   const lease = snapshots.findLast((s) => s.leases.length)?.leases[0];
   assert.ok(lease);
   assert.deepEqual([lease.kind, lease.ref, lease.subjectId], ["site", "example.com", subject.id]);
 
   reportApplied([lease.id]);
-  const state = async () =>
-    ((await (await fetch(`${url}/admin/api/grants`, { headers: owner })).json()) as { state: string }[])[0]?.state;
-  await until(async () => (await state()) === "active");
+  const active = async () => {
+    const { grants } = (await (await fetch(`${url}/admin/live`, { headers: owner })).json()) as { grants: string };
+    return grants.includes('<span class="sr">active</span>');
+  };
+  await until(active);
 });
