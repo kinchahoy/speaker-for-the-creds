@@ -44,6 +44,32 @@ The owner can deploy speaker through [Docker](speaker/README.md#docker--home-ser
 
 <!-- author: ai -->
 
+## Run everything on one machine
+
+<sub>AI-written</sub>
+
+One Linux machine can run speaker, bottle-school, and a direct agent together. These steps were run end to end on Linux x86_64 with QEMU; details live in [speaker/README.md](speaker/README.md) and [bottle-school/README.md](bottle-school/README.md).
+{.ai}
+
+1. **Prerequisites.** `mise` (then `mise install && mise run install`), Docker for the guest build, `/dev/kvm` access, and `qemu-system-x86`, `qemu-utils` and `setsid` for the VMs (`mise run doctor` checks them). Optional: `sshd` (an SSH target to test) and `sshfs` (folders for direct agents; without it agents use `sftp` or `scp`).
+2. **Configure speaker.** In `speaker/.env` set `DATA_DIR`, `PORT`, `PUBLIC_URL` (for example `http://127.0.0.1:3000`), `PROXY_PORT` (secrets proxy) and `SSH_PORT` (jump server). Start it with `mise run speaker`.
+3. **Set the owner password.** Open `PUBLIC_URL/admin`; the first visit asks for a password. After every restart speaker is `locked` (agents get `503 locked`) until you sign in at `/admin`, and restarting also forgets all agents and grants.
+4. **Add what agents can use** under Setup (the Services page): a service (the `demo` service works without a key), a secret (name, value, allowed hosts, variable name; the agent only ever sees a placeholder), an SSH target (put the line Setup shows into that account's `authorized_keys` first, then add it), and a share on that target (`VM mount`, `over SSH`, or both).
+5. **Connect a direct agent.** Give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`; its sh steps in `/_speaker/help` enroll it, and each request it makes appears as a card in `/admin`.
+6. **Configure bottle-school.** Copy `bottle-school/.env.example` to `bottle-school/.env` and set `SPEAKER_URL`, `SPEAKER_PROXY_PORT` (speaker's `PROXY_PORT`) and the model (`LLM_UPSTREAM`, `LLM_MODEL`), then `mise run setup`. `SPEAKER_URL` must be an address the VM can reach: use the machine's LAN address (for example `http://192.168.1.10:3000`), not `127.0.0.1`, which inside a VM is the VM itself. To use a different guest image tag or ports, edit `bottle-school/config.json`.
+7. **Build the guest image:** `mise run guest-build pi-v5-guest` (a few GiB and several minutes; the tag must match `guestImage` in `config.json`).
+8. **Register and approve the sandbox host.** `mise run bottle-cli register`, then approve the pending sandbox host in speaker's `/admin`. If you later change `SPEAKER_URL`, remove the old host in `/admin`, delete `speaker.token` from the state directory (under `BOTTLE_HOME`, default `~/.local/share/bottle-school/state`) and register again.
+9. **Start bottle-school:** `mise run bottle`. It prints `speaker connected`.
+10. **Launch a task:** `mise run bottle-cli run --template offline --prompt "..."` (add `--attended` or omit `--prompt` to work at its terminal). A `site:`, `secret:` or `folder:` item shows up in `/admin` as a card; once you approve it the VM can use it, and Revoke stops it within seconds. Model ids carry their provider, as in `local/<id>`.
+11. **Stop everything.** `mise run bottle-cli stop <id>` for each task (the archive lands in the output directory and the agent disappears from speaker), then stop `mise run bottle` and speaker with Ctrl-C. Stop speaker last, since its restart drops every grant.
+
+Pi needs a model endpoint to do any work. Point `LLM_UPSTREAM` at an OpenAI-compatible server (a loopback or LAN address and port) and `LLM_MODEL` at one of its model ids. To use a hosted model instead, add the provider's key as a speaker secret (allowed host: the provider's API host), list the provider under `hostedProviders` in `config.json` with `credential` set to that secret's name, and launch with `--model <provider>/<model>`. The task then asks for that secret in its first card; the key stays in speaker, and the VM only holds a placeholder that speaker's proxy replaces. A task launched with `--prompt` starts Pi once you approve that card.
+
+If a VM hangs right after `Booting from ROM` (seen with Ubuntu's QEMU 10.2), QEMU's default `microvm` BIOS cannot boot the guest kernel; put a `qemu-system-x86_64` wrapper that adds `-bios /usr/share/qemu/qboot.rom` first on `PATH`.
+{.ai}
+
+<!-- author: ai -->
+
 ## Commands
 
 <sub>AI-written</sub>
