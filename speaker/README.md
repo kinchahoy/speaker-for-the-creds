@@ -210,7 +210,7 @@ Agents run commands on your hosts and use your folders through a jump server ins
 
 Give agents the public setup guide at `https://your-speaker-host/skill.md`; it is served without authentication
 so a new agent can bootstrap. It is short: inline sh and PowerShell setup (a token kept in a curl header file,
-nothing to install), the call form, and `/_speaker/help` (one page, served without a token) for the rest. `/` says the same in three lines; services, rules and groups
+nothing to install), the call form, and `/_speaker/help` (one page, served without a token) for the rest. `/` serves the same short skill to agents; services, rules and groups
 stay behind auth. Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
 {.ai}
 

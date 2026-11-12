@@ -1,16 +1,15 @@
 ---
 name: access-and-creds
-version: 3
-description: "Get owner-approved access through speaker: homelab APIs and HTTP MCP servers, plus sites, secrets, folders and MCP servers inside a sandbox. Use when a task needs a credential or API key you lack, or a call returns 401 or 403."
+version: 4
+description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH, folders, secrets and sites. Use when a task needs a credential, API key, token, secret, SSH or `gh` access you lack, or a call returns 401 or 403."
 ---
 
-# Access and credentials
+# Speaker
 
-Speaker holds the real keys and the owner approves each grant. Never ask for or use an upstream key or the admin API, and keep your speaker token out of output, notes and command lines.
+Speaker holds the owner's keys; the owner approves each use from a phone. Never ask for or use an upstream key, and never print your speaker token.
 
-- Full instructions, including setup: `$SPEAKER_URL/_speaker/help`. In a sandbox (`BOTTLE_SCHOOL=1`) you are already enrolled: skip setup.
-- No header file yet, or an `enroll` error: run the setup in the help (copy-paste sh or PowerShell, nothing to install).
-- `GET $SPEAKER_URL/_speaker/me` shows where you stand: what you hold, what you may ask for, your requests.
-- Call `$SPEAKER_URL/<service>/<path>` with `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header"`. Service names come from the owner or `/me`; `GET $SPEAKER_URL/_speaker/help/<service>` has its notes.
-- Without access, add `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`: speaker asks the owner and answers once decided. Without `Speaker-Wait` it answers at once.
-- Every error has a `next` field: do exactly that, and pass on `tell_user`. Stop on `denied`; never reach a denied service another way.
+- Call: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" $SPEAKER_URL/<service>/<path>`
+- No header file, or error `enroll`: follow the setup in `$SPEAKER_URL/_speaker/help`. In a sandbox you are already enrolled.
+- No access yet: repeat the call with `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`.
+- Every error has `next`: do exactly that. Tell the user what `tell_user` says. On `denied`, stop.
+- Everything else (requests, SSH, folders, secrets, `/me`): `$SPEAKER_URL/_speaker/help`.

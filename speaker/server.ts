@@ -314,13 +314,7 @@ const invalid = (message: string, accepted?: string[], status: 400 | 404 = 400) 
 export async function createApp(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
-  const help = (
-    await Promise.all(
-      ['setup', 'requests', 'ssh', 'sandbox'].map((name) =>
-        readFile(new URL(`./skill/help/${name}.md`, import.meta.url), 'utf8'),
-      ),
-    )
-  ).join('\n')
+  const help = await readFile(new URL('./skill/help.md', import.meta.url), 'utf8')
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   const servicesFile = file('services.json')
@@ -1046,18 +1040,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   app.use('/_speaker/help', etag())
   app.get('/skill.md', (c) => c.text(withAddress(c, skill), 200, markdown))
   app.get('/_speaker/help', (c) => c.text(withAddress(c, help), 200, markdown))
-  const intro = [
-    'speaker: owner-approved access to homelab APIs. Agents never get upstream keys.',
-    'agents: read /skill.md. More: /_speaker/help',
-    'humans: /admin',
-    '',
-  ].join('\n')
   app.get('/', (c) =>
     c.req.header('accept')?.includes('text/html')
       ? c.html(
           '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
         )
-      : c.text(intro),
+      : c.text(withAddress(c, skill), 200, markdown),
   )
   app.post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
     const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
