@@ -1,11 +1,13 @@
 import { html, raw } from 'hono/html'
-import type { Bundle, Capability, LogEntry, Provider, View } from './server.ts'
+import type { Group, LogEntry, Service, View } from './server.ts'
 
-const kindNames = ['credential', 'secret', 'site', 'folder', 'mcp', 'extension'] as const
+const kindNames = ['service', 'secret', 'site', 'folder', 'mcp', 'ext'] as const
+// An item string's kind: the part before its colon, or `service` for `<service>.read` and `<service>.full`.
+const itemKind = (item: string) => (item.includes(':') ? item.split(':')[0] : 'service')
 const input = (name: string, label: string, type = 'text', value = '') =>
   html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
-  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', approval: 'Require approval', always: 'Always allow', deny: 'Deny' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
+  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', ask: 'Ask the owner', open: 'Open (any agent may read)', never: 'Never' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
@@ -32,18 +34,18 @@ const extend = (
         `Extend ${name} by ${spanLabel(grantedMs)}`,
       )
     : ''
-const durations = ['15m', '30m', '1h', '1d', '7d', '30d', '90d']
-const permanentOverride = html`<label class="override" title="Creates a permanent lease that stays until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
+const durations = ['30m', '1h', '2h', '1d', '30d']
+const permanentOverride = html`<label class="override" title="Creates grants that stay until revoked"><input type="checkbox" name="permanent"> Allow until revoked</label>`
 
 const sprite = `<svg class="sprite" aria-hidden="true" focusable="false"><defs>
-<symbol id="i-brand" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3.2"/><path d="m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700"/></symbol><symbol id="i-credential" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
+<symbol id="i-brand" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3.2"/><path d="m9.4 11.8 8.100-8.100M14.500 6.700l2.500 2.500M17.200 4l2.500 2.500M3.200 8.500a6 6 0 0 1 3-3M2 4.800a9 9 0 0 1 4-2.700"/></symbol><symbol id="i-service" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.200-9.200M17 6l3 3m-5-1 2 2"/></symbol>
 <symbol id="i-secret" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
 <symbol id="i-site" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.200 3 14.800 0 18M12 3c-3 3.200-3 14.800 0 18"/></symbol>
 <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
 <symbol id="i-mcp" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
-<symbol id="i-extension" viewBox="0 0 24 24"><path d="M4 8h4a2 2 0 1 1 4 0h4v4a2 2 0 1 1 0 4v4H4z"/></symbol>
-<symbol id="i-enforcer" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.500-3.200 8-8 9-4.800-1-8-4.500-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
-<symbol id="i-session" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M4 8h4a2 2 0 1 1 4 0h4v4a2 2 0 1 1 0 4v4H4z"/></symbol>
+<symbol id="i-host" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.500-3.200 8-8 9-4.800-1-8-4.500-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-agent" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
 <symbol id="i-ssh" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13l3 2-3 2"/></symbol>
 </defs></svg>`
 
@@ -52,7 +54,7 @@ const $ = (selector) => document.querySelector(selector);
 const status = $('#live-status'), dialog = $('#confirm'), search = $('#q');
 const choices = new Map(), opened = new Set(), kinds = new Set();
 let target = null;
-const ladder = [900, 1800, 3600, 86400, 604800, 2592000];
+const ladder = [1800, 3600, 7200, 86400, 2592000];
 const short = (seconds) => seconds >= 86400 ? Math.ceil(seconds / 86400) + 'd' : seconds >= 3600 ? Math.ceil(seconds / 3600) + 'h' : seconds >= 60 ? Math.ceil(seconds / 60) + 'm' : seconds + 's';
 function filter() {
   const query = (search ? search.value : '').trim().toLowerCase();
@@ -96,7 +98,7 @@ async function refresh() {
       const response = await fetch('/admin/live', {cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.timeout(10000)});
       if (!response.ok) throw new Error('Refresh failed');
       const panels = await response.json();
-      for (const id of ['approvals', 'leases']) {
+      for (const id of ['approvals', 'grants']) {
         const panel = document.getElementById(id);
         if (!panel) continue;
         // Leave an actively edited form alone; retain choices and open details on later refreshes.
@@ -218,7 +220,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 .inbox .empty{padding:24px 6px}
 .mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}
 .mark.sm{width:24px;height:24px;border-radius:7px}.mark.sm .ic{width:14px;height:14px}
-.k-credential{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-extension{--h:25}.k-enforcer{--h:250}.k-session{--h:180}
+.k-service{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-mcp{--h:295}.k-ext{--h:25}.k-host{--h:250}.k-agent{--h:180}
 .strip{display:inline-flex;gap:3px}
 .ticket{--tp:18px;background:var(--ticket);border-radius:16px;box-shadow:var(--shadow);padding:var(--tp) var(--tp) 0;min-width:0}
 .t-head{display:flex;flex-wrap:wrap;align-items:center;gap:2px 10px}
@@ -284,13 +286,17 @@ const mark = (kind: string, small = false) =>
   html`<span class="mark k-${kind} ${small ? 'sm' : ''}"><svg class="ic" aria-hidden="true"><use href="#i-${kind}"></use></svg></span>`
 const strip = (list: readonly string[]) =>
   html`<span class="strip">${[...new Set(list)].map((kind) => html`${mark(kind, true)}<span class="sr">${kind}</span>`)}</span>`
-const cap = (m: Capability) =>
-  html`<li class="cap">${mark(m.kind)}<div><code>${m.ref}</code><span class="meta">${m.kind}</span></div></li>`
-const caps = (list: Capability[]) => html`<ul class="caps">${list.map(cap)}</ul>`
+const cap = (item: string) =>
+  html`<li class="cap">${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${itemKind(item)}</span></div></li>`
+const caps = (list: string[]) => html`<ul class="caps">${list.map(cap)}</ul>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const activity = ({ uses, lastUsedAt }: { uses: number; lastUsedAt: number | null }, query = '') =>
   html`${query && uses ? html`<a href="/admin/log?${query}" title="Show who used this, when and what for">${plural(uses, 'use', 'uses')}</a>` : plural(uses, 'use', 'uses')} · ${lastUsedAt === null ? 'never used' : html`last used <time datetime="${new Date(lastUsedAt).toISOString()}" data-last-used-at="${lastUsedAt}"></time>`}`
-const chips = { active: ['good', 'active'], granted: ['warn', 'granted'], waiting: ['warn', 'waiting for enforcer'] }
+const chips = {
+  active: ['good', 'active'],
+  granted: ['warn', 'granted'],
+  waiting: ['warn', 'waiting for sandbox host'],
+}
 const notices = {
   disabled: '',
   sending: 'Sending phone notification…',
@@ -298,107 +304,116 @@ const notices = {
   failed: 'Phone notification failed. Access stays locked.',
 }
 const searchable = (...parts: unknown[]) => parts.join(' ').toLowerCase()
-const identity = (
-  type: 'enforcer' | 'session',
-  what: string,
+const row = (
+  type: 'host' | 'agent',
+  title: string,
   meta: unknown,
   kindList: string[],
-  path: string,
-  extension: unknown = '',
+  search: string,
+  actions: unknown,
 ) =>
-  html`<li data-search="${searchable(type, what, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${what}</div><div class="row-sub">${meta}</div></div><div class="row-act">${extension}${form(`/admin/${path}/deny`, '', 'Revoke', 'inline danger', `Revoke ${type} ${what}`, `Revoke ${type} ${what}? It stops working immediately and must be approved again.`)}</div></div></li>`
-const bundleErrors: Record<string, string> = {
-  empty: 'Bundle not saved: list at least one member, one per line as "kind ref".',
-  line: `Bundle not saved: each line must be "kind ref", with kind one of ${kindNames.join(', ')}.`,
-  id: 'Bundle not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
-  description: 'Bundle not saved: keep the description to one line of at most 200 characters.',
+  html`<li data-search="${searchable(type, search, kindList.join(' '))}" data-kinds="${kindList.join(' ')}"><div class="row">${mark(type)}<div class="row-main"><div class="row-title">${title}</div><div class="row-sub">${meta}</div></div><div class="row-act">${actions}</div></div></li>`
+const groupErrors: Record<string, string> = {
+  empty: 'Group not saved: list at least one item, one per line.',
+  line: `Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, folder:<share>[:rw], mcp:<id> or ext:<id>.`,
+  id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
+  description: 'Group not saved: keep the description to one line of at most 200 characters.',
 }
 const empty = (title: string, hint: string) => html`<li class="empty"><strong>${title}</strong>${hint}</li>`
-const bundleBlock = (id: string, name: string, list: Capability[], note: unknown = '') =>
-  list.length > 3
-    ? html`<details class="bundle" id="${id}"><summary><span class="chip solid">Bundle</span><strong>${name}</strong><span class="meta">${plural(list.length, 'capability', 'capabilities')}</span>${strip(list.map((m) => m.kind))}</summary>${caps(list)}</details>${note}`
-    : html`<div><span class="chip solid">Bundle</span> <strong>${name}</strong> <span class="meta">${plural(list.length, 'capability', 'capabilities')}</span></div>${caps(list)}${note}`
 
 export function adminPage(
-  providers: Record<string, Provider>,
+  services: Record<string, Service>,
   secrets: Map<string, string | undefined>,
   view: View,
   selectedId?: string,
   nonce?: string,
   section = 'approvals',
-  bundles: Record<string, Bundle> = {},
+  groups: Record<string, Group> = {},
   error?: string,
   mcpSummary: Record<string, { at: number; read: number; write: number; unannotated: number }> = {},
   log?: { entries: LogEntry[]; filter: string },
 ) {
-  const selected = selectedId && Object.hasOwn(providers, selectedId) ? providers[selectedId] : undefined
+  const selected = selectedId && Object.hasOwn(services, selectedId) ? services[selectedId] : undefined
   const activeSection = selected
-    ? 'providers'
+    ? 'services'
     : log
       ? 'log'
-      : ['access', 'identities', 'providers', 'bundles'].includes(section)
+      : ['grants', 'agents', 'services', 'groups'].includes(section)
         ? section
         : 'approvals'
-  const providerList = Object.entries(providers).map(
-    ([id, provider]) =>
-      html`<li data-search="${searchable(id, provider.baseUrl)}" data-kinds="credential"><div class="row wrap">${mark('credential')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${provider.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${provider.policy.read} · write ${provider.policy.write} · guide ${provider.guide ? 'yes' : 'no'}${provider.mcp ? ' · MCP' : ''}${provider.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=providers&amp;provider=${encodeURIComponent(id)}" aria-label="Edit provider ${id}">Edit</a><a href="/admin/log?provider=${encodeURIComponent(id)}" aria-label="Access log for provider ${id}">Log</a>${form('/admin/providers/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete provider ${id}`, `Delete provider ${id}? Its credential is erased and its leases and pending requests are removed.`)}</div></div></li>`,
+  const serviceList = Object.entries(services).map(
+    ([id, service]) =>
+      html`<li data-search="${searchable(id, service.baseUrl)}" data-kinds="service"><div class="row wrap">${mark('service')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${service.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${service.read} · write ${service.write} · notes ${service.notes ? 'yes' : 'no'}${service.mcp ? ' · MCP' : ''}${service.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}" aria-label="Edit service ${id}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}" aria-label="Log for service ${id}">Log</a>${form('/admin/services/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete service ${id}`, `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></div></li>`,
   )
   const panels = livePanels(view)
-  const identities = [
-    ...view.enforcers
-      .filter((e) => e.status === 'approved')
-      .map((e) =>
-        identity(
-          'enforcer',
-          `Enforcer ${e.name}`,
-          html`${e.kinds.join(', ')} · ${activity(e, `identity=${encodeURIComponent(e.id)}`)}`,
-          [...e.kinds],
-          `enforcers/${e.id}`,
+  const agentRows = [
+    ...view.hosts
+      .filter((h) => h.status === 'approved')
+      .map((h) =>
+        row(
+          'host',
+          `Sandbox host ${h.name}`,
+          h.kinds.join(', ') || 'no item kinds',
+          [...h.kinds],
+          h.name,
+          form(
+            `/admin/hosts/${h.id}/remove`,
+            '',
+            'Remove',
+            'inline danger',
+            `Remove sandbox host ${h.name}`,
+            `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`,
+          ),
         ),
       ),
-    ...view.sessions
-      .filter((s) => s.status === 'approved')
-      .map((s) =>
-        identity(
-          'session',
-          `Session ${s.label}`,
-          html`${who(s)} · ${activity(s, `identity=${encodeURIComponent(s.id)}`)} · ${s.expiresAt ?? 'until revoked'}`,
-          ['credential'],
-          `sessions/${s.id}`,
-          extend(`/admin/sessions/${s.id}/extend`, '', s.expiresAt, s.grantedMs, `session ${s.label}`),
+    ...view.agents.map((a) =>
+      row(
+        'agent',
+        `${a.sandboxHost ? 'Sandboxed' : 'Direct'} agent ${a.label}`,
+        html`${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${plural(a.grants, 'grant', 'grants')} · ${activity(a, `agent=${encodeURIComponent(a.id)}`)}`,
+        ['service'],
+        `${a.label} ${a.agent}`,
+        form(
+          `/admin/agents/${a.id}/revoke`,
+          '',
+          'Revoke agent',
+          'inline danger',
+          `Revoke agent ${a.label}`,
+          `Revoke agent ${a.label}? Its token and all its grants end immediately.`,
         ),
       ),
+    ),
   ]
-  const providerFields = html`${input('id', 'Provider id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read policy (GET / HEAD / OPTIONS)', ['approval', 'always', 'deny'], selected?.policy.read ?? 'approval')}${select('write', 'Write policy (all other methods)', ['approval', 'always', 'deny'], selected?.policy.write ?? 'approval')}<label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Guide (markdown, optional)<textarea name="guide" rows="5">${selected?.guide}</textarea></label>`
-  const providerEditor = selected
-    ? html`<section class="editor"><h3>Edit provider: ${selectedId}</h3>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
+  const serviceFields = html`${input('id', 'Service id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], selected?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], selected?.write ?? 'ask')}<label>POST paths that only read, one per line (for example a search endpoint)<textarea name="readPaths" rows="2" placeholder="/search/simple">${selected?.readPaths?.join('\n')}</textarea></label><label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Notes for agents (markdown, optional)<textarea name="notes" rows="5">${selected?.notes}</textarea></label>`
+  const serviceEditor = selected
+    ? html`<section class="editor"><h3>Edit service: ${selectedId}</h3>${form('/admin/services/save', serviceFields, 'Save service', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
     : ''
   function mcpTools(id: string) {
     const summary = mcpSummary[id]
-    return html`<div class="t-meta">${error === 'tools' ? html`<p class="notice" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<span class="meta">${summary ? `Tools: ${summary.read} read · ${summary.write} write${summary.unannotated ? ` (${summary.unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</span>${form('/admin/providers/tools', input('id', '', 'hidden', id), 'Refresh tools', 'inline')}</div>`
+    return html`<div class="t-meta">${error === 'tools' ? html`<p class="notice" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<span class="meta">${summary ? `Tools: ${summary.read} read · ${summary.write} write${summary.unannotated ? ` (${summary.unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</span>${form('/admin/services/tools', input('id', '', 'hidden', id), 'Refresh tools', 'inline')}</div>`
   }
-  const addProvider = selected
+  const addService = selected
     ? ''
-    : html`<details><summary>Add provider</summary>${form('/admin/providers/save', providerFields, 'Save provider', 'fields')}</details>`
-  const bundleForm = (id: string, bundle: Bundle) =>
+    : html`<details><summary>Add service</summary>${form('/admin/services/save', serviceFields, 'Save service', 'fields')}</details>`
+  const groupForm = (id: string, group: Group) =>
     form(
-      '/admin/bundles/save',
-      html`${input('id', 'Bundle id', 'text', id)}${input('description', 'Description (one line, optional)', 'text', bundle.description)}<label>Members, one per line as "kind ref"<textarea name="members" rows="5" required placeholder="credential notes.read">${bundle.members.map((m) => `${m.kind} ${m.ref}`).join('\n')}</textarea></label>`,
-      'Save bundle',
+      '/admin/groups/save',
+      html`${input('id', 'Group id', 'text', id)}${input('description', 'Description (one line, optional)', 'text', group.description)}<label>Items, one per line<textarea name="items" rows="5" required placeholder="notes.read">${group.items.join('\n')}</textarea></label>`,
+      'Save group',
       'fields',
     )
-  const bundleEditor = (id: string, bundle: Bundle) =>
-    html`<details><summary>${id ? 'Edit members' : 'Add bundle'}</summary>${bundleForm(id, bundle)}</details>`
-  const bundleList = Object.entries(bundles).map(([id, bundle]) => {
-    const list = bundle.members
-    return html`<li data-search="${searchable(id, bundle.description ?? '', list.map((m) => `${m.kind} ${m.ref}`).join(' '))}" data-kinds="${[...new Set(list.map((m) => m.kind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div>${bundle.description ? html`<div class="row-sub">${bundle.description}</div>` : ''}<div class="row-sub">${plural(list.length, 'member', 'members')}, granted together by one approval</div></div><div class="row-act">${form('/admin/bundles/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete bundle ${id}`, `Delete bundle ${id}? Agents can no longer request it. Existing leases stay.`)}</div></div><details id="bundle-${id}"><summary>${strip(list.map((m) => m.kind))}<span class="meta">Members and editing</span></summary>${caps(list)}${bundleForm(id, bundle)}</details></li>`
+  const groupEditor = (id: string, group: Group) =>
+    html`<details><summary>${id ? 'Edit items' : 'Add group'}</summary>${groupForm(id, group)}</details>`
+  const groupList = Object.entries(groups).map(([id, group]) => {
+    const list = group.items
+    return html`<li data-search="${searchable(id, group.description ?? '', list.join(' '))}" data-kinds="${[...new Set(list.map(itemKind))].join(' ')}"><div class="row"><div class="row-main"><div class="row-title">${id}</div>${group.description ? html`<div class="row-sub">${group.description}</div>` : ''}<div class="row-sub">${plural(list.length, 'item', 'items')}, granted together by one approval</div></div><div class="row-act">${form('/admin/groups/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete group ${id}`, `Delete group ${id}? Agents can no longer request it. Existing grants stay.`)}</div></div><details id="group-${id}"><summary>${strip(list.map(itemKind))}<span class="meta">Items and editing</span></summary>${caps(list)}${groupForm(id, group)}</details></li>`
   })
   const sections: [string, string, string][] = [
-    ['approvals', 'Approvals', 'Sessions, sandboxes and access requests waiting for your yes or no.'],
-    ['access', 'Leases', "Access you've granted that is active right now, until it expires or you revoke it."],
-    ['identities', 'Identities', 'Agent sessions and sandboxes you have approved; revoke one to cut it off.'],
-    ['providers', 'Providers', 'Upstream APIs Speaker proxies, with their stored credentials and read/write rules.'],
-    ['bundles', 'Bundles', 'Named sets of capabilities an agent can request with a single approval.'],
+    ['approvals', 'Approvals', 'Sandbox hosts and access requests waiting for your yes or no.'],
+    ['grants', 'Grants', "Access you've granted that is active right now, until it expires or you revoke it."],
+    ['agents', 'Agents', 'Agents and sandbox hosts; revoke one to cut it off.'],
+    ['services', 'Services', 'Upstream APIs Speaker proxies, with their stored credentials and read/write rules.'],
+    ['groups', 'Groups', 'Named sets of items an agent can request with a single approval.'],
     ['log', 'Log', 'Log: recent calls and decisions, newest first.'],
   ]
   const nav = html`<nav class="nav" aria-label="Admin sections">${sections.map(
@@ -407,18 +422,18 @@ export function adminPage(
   )}</nav>`
   const intro = html`<p class="muted intro">${sections.find(([id]) => id === activeSection)?.[2]}</p>`
   const tools = (withKinds: boolean) =>
-    html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, ref or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
+    html`<div class="tools"><label><span class="sr">Filter this page</span><input id="q" type="search" placeholder="Filter by name, item or kind" autocomplete="off"></label>${withKinds ? html`<div class="chips" role="group" aria-label="Filter by kind">${kindNames.map((kind) => html`<button type="button" data-kind="${kind}" aria-pressed="false">${mark(kind, true)}${kind}</button>`)}</div>` : ''}</div>`
   const content = log
     ? logPanel(log.entries, log.filter)
-    : activeSection === 'access'
-      ? html`${tools(true)}<section class="panel wide"><div id="leases">${raw(panels.leases)}</div></section>`
-      : activeSection === 'identities'
-        ? html`${tools(false)}<section class="panel"><h2>Approved identities</h2><ul class="rows">${identities.length ? identities : empty('No approved identities', 'Enforcers and sessions appear here after you approve them, and can be revoked.')}</ul></section>`
-        : activeSection === 'providers'
-          ? html`${tools(false)}<section class="panel"><h2>Providers</h2>${providerEditor}<ul class="rows">${providerList.length ? providerList : empty('No providers configured', 'Add a provider to let agents request access to an upstream API.')}</ul>${addProvider}</section><p class="muted">Credentials stay on this server.</p>`
-          : activeSection === 'bundles'
-            ? html`${tools(false)}<section class="panel"><h2>Bundles</h2>${bundleErrors[error ?? ''] ? html`<p class="notice" role="alert">${bundleErrors[error ?? '']}</p>` : ''}<ul class="rows">${bundleList.length ? bundleList : empty('No bundles', 'A bundle groups capabilities so an agent can request them with one approval.')}</ul>${bundleEditor('', { members: [] })}</section><p class="muted">A bundle is what an agent may use; a bottle-school template sets the VM size and attended mode and names the bundle to request at launch. Changes apply to new requests; requests already pending keep their members.</p>`
-            : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="leases">${raw(panels.leases)}</div></section></div><p class="muted">Expiry and revocation block new requests; a response already streaming may finish.</p>`
+    : activeSection === 'grants'
+      ? html`${tools(true)}<section class="panel wide"><div id="grants">${raw(panels.grants)}</div></section>`
+      : activeSection === 'agents'
+        ? html`${tools(false)}<section class="panel"><h2>Agents</h2><ul class="rows">${agentRows.length ? agentRows : empty('No agents', 'Agents appear here once they enroll, and can be revoked.')}</ul></section>`
+        : activeSection === 'services'
+          ? html`${tools(false)}<section class="panel"><h2>Services</h2>${serviceEditor}<ul class="rows">${serviceList.length ? serviceList : empty('No services configured', 'Add a service to let agents request access to an upstream API.')}</ul>${addService}</section><p class="muted">Credentials stay on this server.</p>`
+          : activeSection === 'groups'
+            ? html`${tools(false)}<section class="panel"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="notice" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupList.length ? groupList : empty('No groups', 'A group collects items so an agent can request them with one approval.')}</ul>${groupEditor('', { items: [] })}</section><p class="muted">A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</p>`
+            : html`${tools(true)}<div class="layout"><section class="inbox" id="approvals">${raw(panels.approvals)}</section><section class="panel"><div id="grants">${raw(panels.grants)}</div></section></div><p class="muted">Expiry and revocation block new calls; a response already streaming may finish.</p>`
   return page(nav, html`${intro}${content}`, nonce ?? '')
 }
 
@@ -434,15 +449,15 @@ const ago = (iso: string) => {
 }
 const logWhat = (e: LogEntry) => {
   if (e.event === 'proxy')
-    return html`<code>${e.method} ${e.path}</code> <span class="meta">${e.provider}${e.mcp ? ` · ${e.mcp}` : ''}</span>`
-  const list = Array.isArray(e.capability)
-    ? (e.capability as Capability[]).map((m) => `${m.kind} ${m.ref}`).join(', ')
-    : String(e.capability ?? '')
+    return html`<code>${e.method} ${e.path}</code> <span class="meta">${e.service}${e.mcp ? ` · ${e.mcp}` : ''}</span>`
+  const list = [e.item, ...(Array.isArray(e.items) ? e.items : []), ...(Array.isArray(e.granted) ? e.granted : [])]
+    .filter(Boolean)
+    .join(', ')
   return html`<code>${list}</code>${e.reason ? html` <span class="meta">${String(e.reason)}</span>` : ''}`
 }
 const logResult = (e: LogEntry) =>
   e.event === 'proxy'
-    ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.leaseId ? 'lease' : String(e.rule)}</span>`
+    ? html`${String(e.status)} <span class="meta">${String(e.latencyMs)}ms · ${e.grant ? 'grant' : String(e.rule)}</span>`
     : e.expiresAt === undefined
       ? ''
       : html`expires ${e.expiresAt === null ? 'never' : String(e.expiresAt)}`
@@ -451,42 +466,32 @@ const logPanel = (entries: LogEntry[], filter: string) =>
     entries.length
       ? html`<table class="log"><thead><tr><th>Time</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
           (e) =>
-            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.llmName, e.harness].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
+            html`<tr><td><time datetime="${e.time}" title="${e.time}">${ago(e.time)}</time></td><td>${[e.label, e.agentName].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${String(e.event).replace('_', ' ')}: `}${logWhat(e)}</td><td>${logResult(e)}</td></tr>`,
         )}</tbody></table>`
       : html`<ul class="rows">${empty('No log entries', 'Calls and decisions appear here as they happen.')}</ul>`
   }</section>`
 
-// One compact line naming who is asking: model, then harness, both as the agent reported them.
-const who = (s: { llmName?: string; harness?: string }) =>
-  [s.llmName ?? 'LLM not supplied', s.harness].filter(Boolean).join(' · ')
+// One compact line naming who is asking, as the agent reported itself.
+const who = (a: { agent: string }) => a.agent
 
-export function livePanels({ enforcers, sessions, requests, leases, always }: View) {
-  // Flags a session whose agent (same label, model and harness) already enrolled in the 30 minutes before it.
-  const twin = (s: View['sessions'][number]) => {
-    const at = Date.parse(s.enrolledAt ?? '')
-    const earlier = sessions.filter(
+export function livePanels({ hosts, agents, requests, grants }: View) {
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  // Flags an agent whose identity (same label and agent string) enrolled in the 30 minutes before it.
+  const twin = (a: View['agents'][number]) => {
+    const earlier = agents.filter(
       (o) =>
-        o.id !== s.id &&
-        o.label === s.label &&
-        o.llmName === s.llmName &&
-        o.harness === s.harness &&
-        at - Date.parse(o.enrolledAt ?? '') > 0 &&
-        at - Date.parse(o.enrolledAt ?? '') < 1_800_000,
+        o.id !== a.id &&
+        o.label === a.label &&
+        o.agent === a.agent &&
+        a.createdAt - o.createdAt > 0 &&
+        a.createdAt - o.createdAt < 1_800_000,
     )
     if (!earlier.length) return ''
-    const minutes = Math.round((at - Math.max(...earlier.map((o) => Date.parse(o.enrolledAt ?? '')))) / 60_000)
+    const minutes = Math.round((a.createdAt - Math.max(...earlier.map((o) => o.createdAt))) / 60_000)
     return html` <span class="chip warn">same agent enrolled ${minutes} min earlier</span>`
   }
-  // A request filed with a still-pending session is shown on that session's card and approved with it.
-  const pendingSessions = new Set(sessions.filter((s) => s.status === 'pending').map((s) => s.id))
-  const firstAsk = (sessionId: string) => {
-    const r = requests.find((q) => q.subjectId === sessionId && q.atEnrollment && q.status === 'pending')
-    return r
-      ? html`<div class="meta">Also asks for ${r.bundle ? `bundle ${r.bundle}` : r.members.map((m) => `${m.kind} ${m.ref}`).join(', ')} for ${r.duration}: ${r.reason}</div>`
-      : ''
-  }
-  const decide = (path: string, picker: unknown, subject: string, approve = 'Approve') =>
-    html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/deny" aria-label="Deny: ${subject}">Deny</button></div></form>`
+  const decide = (path: string, picker: unknown, subject: string, approve = 'Approve', deny = 'deny') =>
+    html`<form class="decision" method="post" action="/admin/${path}/approve"><div class="pick">${picker}</div><div class="go"><button class="approve" aria-label="${approve}: ${subject}">${approve}</button><button class="deny" formaction="/admin/${path}/${deny}" aria-label="Deny: ${subject}">Deny</button></div></form>`
   const ticket = (
     id: string,
     search: string,
@@ -497,55 +502,42 @@ export function livePanels({ enforcers, sessions, requests, leases, always }: Vi
   ) =>
     html`<li class="ticket" id="${id}" data-search="${search.toLowerCase()}" data-kinds="${kindList.join(' ')}"><div class="t-head">${head}</div>${body}<div class="stub">${stub}</div></li>`
   const items = [
-    ...enforcers
-      .filter((e) => e.status === 'pending')
-      .map((e) =>
+    ...hosts
+      .filter((h) => h.status === 'pending')
+      .map((h) =>
         ticket(
-          `enforcer-${e.id}`,
-          `enforcer ${e.name} ${e.kinds.join(' ')}`,
-          e.kinds,
-          html`${mark('enforcer')}<strong>Enforcer ${e.name}</strong><span class="chip">wants to enforce</span>`,
-          html`<div class="t-grant"><div class="meta">Approving lets this enforcer apply leases for ${e.kinds.join(', ') || 'no kinds'} ${strip(e.kinds)}</div></div>`,
-          decide(`enforcers/${e.id}`, '', `enforcer ${e.name}`),
-        ),
-      ),
-    ...sessions
-      .filter((s) => s.status === 'pending')
-      .map((s) =>
-        ticket(
-          `session-${s.id}`,
-          `session ${s.label} ${s.llmName ?? ''}`,
-          ['credential'],
-          html`${mark('session')}<strong>Session ${s.label}</strong><span class="chip">wants to connect</span>`,
-          html`<div class="t-grant"><div class="meta">${who(s)}</div><div class="meta">from ${s.source ?? 'unknown address'} · key ${s.tokenHash.slice(0, 8)}${twin(s)}</div>${firstAsk(s.id)}${always.length ? html`<div class="meta">Reads without asking for up to 90 days: ${always.join(', ')}</div>` : ''}</div>`,
-          decide(
-            `sessions/${s.id}`,
-            html`${select('duration', 'Session lasts', durations, s.duration)}${permanentOverride}`,
-            `session ${s.label}`,
-          ),
+          `host-${h.id}`,
+          `sandbox host ${h.name} ${h.kinds.join(' ')}`,
+          h.kinds,
+          html`${mark('host')}<strong>Sandbox host ${h.name}</strong><span class="chip">wants to register</span>`,
+          html`<div class="t-grant"><div class="meta">Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'} ${strip(h.kinds)}</div></div>`,
+          decide(`hosts/${h.id}`, '', `sandbox host ${h.name}`, 'Approve', 'remove'),
         ),
       ),
     ...requests
-      .filter((r) => r.status === 'pending' && !(r.atEnrollment && pendingSessions.has(r.subjectId)))
+      .filter((r) => r.status === 'pending')
       .sort((a, b) => a.createdAt - b.createdAt)
       .map((r) => {
+        const agent = byId.get(r.agentId)
         const ssh = r.ssh
           ? html`<div class="meta">SSH certificate for <code>${r.ssh.user}@${r.ssh.hostname}:${r.ssh.port}</code> · key <code>${r.ssh.fingerprint}</code> · ${[r.ssh.agentForwarding && 'agent forwarding', r.ssh.portForwarding && 'port forwarding'].filter(Boolean).join(', ') || 'no forwarding'}${r.ssh.sourceAddress ? html` · only from <code>${r.ssh.sourceAddress}</code>` : ''} · cannot be revoked before it expires</div>`
           : ''
         const sshMax = r.ssh?.maxDuration
-        const note = r.bundle
-          ? html`<div class="meta">One approval grants all ${r.members.length} for the chosen time.</div>`
+        const groupNames = r.want.filter((w) => w.startsWith('group:'))
+        const note = groupNames.length
+          ? html`<div class="meta">From ${groupNames.join(', ')}; one approval grants every ticked item for the chosen time.</div>`
           : ''
+        const label = agent?.label ?? 'Unknown agent'
         return ticket(
           `request-${r.id}`,
-          `${r.label} ${r.llmName ?? ''} ${r.enforcer ?? ''} ${r.bundle ?? ''} ${r.reason} ${r.members.map((m) => `${m.kind} ${m.ref}`).join(' ')}`,
-          r.members.map((m) => m.kind),
-          html`<strong>${r.label}</strong>${r.llmName ? html`<span class="meta">${who(r)}</span>` : ''}${r.enforcer ? html`<span class="meta">via ${r.enforcer}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
-          html`<div class="t-grant">${r.bundle ? bundleBlock(`req-${r.id}`, r.bundle, r.members, note) : html`<div class="meta">Requests access to</div>${caps(r.members)}${ssh}`}</div>${
+          `${label} ${agent?.agent ?? ''} ${agent?.sandboxHost ?? ''} ${r.reason} ${r.items.join(' ')}`,
+          r.items.map(itemKind),
+          html`<strong>${label}</strong>${agent ? html`<span class="meta">${who(agent)}</span>` : ''}${agent?.sandboxHost ? html`<span class="meta">via ${agent.sandboxHost}</span>` : ''}<span class="t-age">asked <time datetime="${new Date(r.createdAt).toISOString()}" data-last-used-at="${r.createdAt}"></time></span>`,
+          html`<div class="t-grant"><div class="meta">Requests access to</div>${caps(r.items)}${note}${ssh}${agent ? html`<div class="meta">from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}${twin(agent)}</div>` : ''}</div>${
             r.reason.length > 120
               ? html`<details class="why" id="why-${r.id}"><summary><span>Reason:</span> ${r.reason.slice(0, 110)}…</summary>${r.reason}</details>`
               : html`<p class="why"><span class="meta">Reason:</span> ${r.reason || html`<span class="meta">none supplied yet</span>`}</p>`
-          }${r.method || notices[r.notification] ? html`<div class="t-meta">${r.method ? html`<span class="meta">Triggered by <code>${r.method} ${r.path}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
+          }${r.trigger || notices[r.notification] ? html`<div class="t-meta">${r.trigger ? html`<span class="meta">Triggered by <code>${r.trigger}</code></span>` : ''}${notices[r.notification] ? html`<span class="${r.notification === 'failed' ? 'chip warn' : 'meta'}">${notices[r.notification]}</span>` : ''}</div>` : ''}`,
           decide(
             `requests/${r.id}`,
             sshMax
@@ -556,27 +548,27 @@ export function livePanels({ enforcers, sessions, requests, leases, always }: Vi
                   r.duration,
                 )
               : html`${select('duration', 'Allow access for', durations, r.duration)}${permanentOverride}`,
-            r.bundle ? `bundle ${r.bundle}` : r.label,
-            r.members.length > 1 ? `Approve all ${r.members.length}` : 'Approve',
+            label,
+            r.items.length > 1 ? `Approve all ${r.items.length}` : 'Approve',
           ),
         )
       }),
   ]
-  // Soonest expiry first so what is about to lapse is on top; "until revoked" leases last.
-  const ordered = [...leases].sort(
+  // Soonest expiry first so what is about to lapse is on top; "until revoked" grants last.
+  const ordered = [...grants].sort(
     (a, b) => (a.expiresAt ? Date.parse(a.expiresAt) : Infinity) - (b.expiresAt ? Date.parse(b.expiresAt) : Infinity),
   )
-  const leaseList = ordered.map((l) => {
-    const [tone, state] = chips[l.state]
-    return html`<li id="lease-${l.id}" data-search="${searchable(l.label, l.llmName, l.kind, l.ref)}" data-kinds="${l.kind}"><div class="row">${mark(l.kind)}<div class="row-main"><div class="row-title"><code>${l.ref}</code></div><div class="row-sub">${l.kind} · ${l.label}${l.llmName ? ` · LLM: ${l.llmName}` : ''}${l.kind === 'credential' ? html` · ${l.uses ? activity(l, `lease=${encodeURIComponent(l.id)}`) : 'unused'}` : ''}</div><div class="expiry">${l.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(l.expiresAt)}"><i></i></span><time class="left" datetime="${l.expiresAt}" data-expires-at="${Date.parse(l.expiresAt)}">expires ${l.expiresAt}</time>`}${l.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${extend('/admin/leases/extend', input('id', '', 'hidden', l.id), l.expiresAt, l.grantedMs, `lease ${l.label} ${l.ref}`)}${form('/admin/leases/revoke', input('id', '', 'hidden', l.id), 'Revoke', 'inline danger', `Revoke lease: ${l.label} ${l.ref}`, `Revoke ${l.ref} for ${l.label}? Requests using it are blocked immediately.`)}</div></div></li>`
+  const grantList = ordered.map((g) => {
+    const [tone, state] = chips[g.state]
+    return html`<li id="grant-${g.id}" data-search="${searchable(g.label, g.agent, g.item)}" data-kinds="${itemKind(g.item)}"><div class="row">${mark(itemKind(g.item))}<div class="row-main"><div class="row-title"><code>${g.item}</code></div><div class="row-sub">${g.label}${g.agent ? ` · ${g.agent}` : ''}${itemKind(g.item) === 'service' ? html` · ${g.uses ? activity(g, `grant=${encodeURIComponent(g.id)}`) : 'unused'}` : ''}</div><div class="expiry">${g.expiresAt === null ? html`<span class="chip warn">Until revoked</span>` : html`<span class="meter" data-end="${Date.parse(g.expiresAt)}"><i></i></span><time class="left" datetime="${g.expiresAt}" data-expires-at="${Date.parse(g.expiresAt)}">expires ${g.expiresAt}</time>`}${g.state === 'active' ? html`<span class="sr">active</span>` : html`<span class="chip ${tone}">${state}</span>`}</div></div><div class="row-act">${extend('/admin/grants/extend', input('id', '', 'hidden', g.id), g.expiresAt, g.grantedMs, `grant ${g.label} ${g.item}`)}${form('/admin/grants/revoke', input('id', '', 'hidden', g.id), 'Revoke', 'inline danger', `Revoke grant: ${g.label} ${g.item}`, `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></div></li>`
   })
   return {
     pending: items.length,
     approvals: String(
       html`<h2>Approvals ${items.length ? html`<span class="chip warn">${items.length} pending</span>` : ''}</h2><ul class="rows">${items.length ? items : empty('Nothing to approve', 'New requests appear here as soon as an agent asks for access. This page updates by itself.')}</ul>`,
     ),
-    leases: String(
-      html`<h2>Leases ${leaseList.length ? html`<span class="meta">${leaseList.length} active</span>` : ''}</h2><ul class="rows">${leaseList.length ? leaseList : empty('No active leases', 'Approved access is listed here until it expires or you revoke it.')}</ul>`,
+    grants: String(
+      html`<h2>Grants ${grantList.length ? html`<span class="meta">${grantList.length} active</span>` : ''}</h2><ul class="rows">${grantList.length ? grantList : empty('No active grants', 'Granted access is listed here until it expires or you revoke it.')}</ul>`,
     ),
   }
 }

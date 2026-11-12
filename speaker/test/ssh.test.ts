@@ -37,18 +37,12 @@ test('an approved SSH request returns a certificate limited to its principal, wi
       body: JSON.stringify(body),
     })
 
-  const enrolled = await post('/_speaker/sessions', {
+  const enrolled = await post('/_speaker/agents', {
     label: 'ops',
-    llmName: 'Test LLM',
+    agent: 'Test LLM · Test app',
     tokenHash: sha('agent-token'),
-    duration: '1h',
   })
-  const { id: session } = (await enrolled.json()) as { id: string }
-  await call(`/admin/sessions/${session}/approve`, {
-    method: 'POST',
-    headers: owner,
-    body: new URLSearchParams({ duration: '1h' }),
-  })
+  const { id: agentId } = (await enrolled.json()) as { id: string }
 
   const keyOnly = (line: string) => line.split(' ').slice(0, 2).join(' ')
   const served = await (await call('/_speaker/ssh/ca.pub')).text()
@@ -67,19 +61,26 @@ test('an approved SSH request returns a certificate limited to its principal, wi
 
   const made = await ask({ sourceAddress: '10.0.0.0/24' })
   assert.equal(made.status, 201)
-  const { id } = (await made.json()) as { id: string }
+  const { id } = (await made.json()) as { id: string; status: string }
   const page = await (await call('/admin', { headers: owner })).text()
   assert.ok(page.includes('raist@nas.lan:22') && page.includes('SHA256:'))
 
   assert.equal((await post(`/admin/api/requests/${id}/approve`, { duration: '1d' }, owner)).status, 400)
   assert.equal((await post(`/admin/api/requests/${id}/approve`, { duration: '30m' }, owner)).status, 200)
-  const issued = (await (await call(`/_speaker/requests/${id}`, { headers: agent })).json()) as {
-    status: string
-    certificate: string
-    expiresAt: string
-    ssh: { hostname: string; port: number; user: string }
-  }
-  assert.equal(issued.status, 'approved')
+  const issued = (
+    (await (await call('/_speaker/me', { headers: agent })).json()) as {
+      requests: {
+        id: string
+        status: string
+        granted: string[]
+        certificate: string
+        expiresAt: string
+        ssh: { hostname: string; port: number; user: string }
+      }[]
+    }
+  ).requests.find((request) => request.id === id)
+  assert.ok(issued)
+  assert.deepEqual([issued.status, issued.granted], ['decided', ['ssh-cert:raist@nas']])
   assert.deepEqual(issued.ssh, { hostname: 'nas.lan', port: 22, user: 'raist' })
   const remaining = Date.parse(issued.expiresAt) - Date.now()
   assert.ok(remaining > 29 * 60_000 && remaining <= 30 * 60_000)
@@ -87,7 +88,7 @@ test('an approved SSH request returns a certificate limited to its principal, wi
   await writeFile(join(dir, 'agent-cert.pub'), `${issued.certificate}\n`)
   const { stdout } = await run('ssh-keygen', ['-L', '-f', join(dir, 'agent-cert.pub')])
   assert.match(stdout, /Type: ssh-ed25519-cert-v01@openssh.com user certificate/)
-  assert.match(stdout, new RegExp(`Key ID: "speaker:${id}:${session}"`))
+  assert.match(stdout, new RegExp(`Key ID: "speaker:${id}:${agentId}"`))
   assert.match(stdout, /Principals: \n\s+raist@nas\n/)
   assert.match(stdout, /source-address 10\.0\.0\.0\/24/)
   assert.match(stdout, /permit-pty/)

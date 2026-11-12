@@ -1,0 +1,41 @@
+{
+  "packages": {
+    "description": "Install Python and npm packages from PyPI and the npm registry.",
+    "items": ["site:pypi.org", "site:files.pythonhosted.org", "site:registry.npmjs.org"]
+  },
+  "github-read": {
+    "description": "Clone and read GitHub repositories, with a read-only GitHub API token.",
+    "items": [
+      "site:github.com",
+      "site:codeload.github.com",
+      "site:raw.githubusercontent.com",
+      "secret:GITHUB_READ@api.github.com"
+    ]
+  },
+  "developer": {
+    "description": "Everyday coding: package registries, GitHub downloads and releases, and Context7 library docs.",
+    "items": [
+      "site:pypi.org",
+      "site:files.pythonhosted.org",
+      "site:registry.npmjs.org",
+      "site:github.com",
+      "site:codeload.github.com",
+      "site:raw.githubusercontent.com",
+      "site:release-assets.githubusercontent.com",
+      "site:objects.githubusercontent.com",
+      "mcp:context7"
+    ]
+  },
+  "research": {
+    "description": "Public web research: keyless Exa search through the pi-web-access extension, plus Wikipedia and arXiv pages.",
+    "items": ["ext:pi-web-access", "site:mcp.exa.ai", "site:*.wikipedia.org", "site:arxiv.org", "site:export.arxiv.org"]
+  },
+  "loop": {
+    "description": "Scheduled and self-paced wake-ups (/loop, cron jobs) and background process monitors, with no network access.",
+    "items": ["ext:pi-cc-loop", "ext:pi-cc-monitor"]
+  },
+  "notes-read": {
+    "description": "Read the owner's Obsidian notes and Karakeep bookmarks through speaker's proxy.",
+    "items": ["obsidian.read", "karakeep.read"]
+  }
+}

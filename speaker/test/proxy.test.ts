@@ -20,15 +20,16 @@ const ownerHeaders = {
   'content-type': 'application/json',
 }
 const bearer = (token: string) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' })
-type Lease = { id: string; kind: string; ref: string; expiresAt: string | null; state: string }
+type Grant = { id: string; item: string; expiresAt: string | null; state: string }
 type Snapshot = {
   type: string
-  leases: Lease[]
+  grants: { id: string; agentId: string; item: string }[]
   requests: { id: string; status: string; what: string; reason: string }[]
 }
+type Outcome = { id: string; status: string; granted: string[]; denied: string[]; expiresAt?: string | null }
 const port = (server: { address(): string | AddressInfo | null }) => (server.address() as AddressInfo).port
 
-async function setup(t: TestContext, bundles: object = {}, env: Record<string, string> = {}) {
+async function setup(t: TestContext, groups: object = {}, env: Record<string, string> = {}) {
   const calls: { url?: string; headers: IncomingHttpHeaders }[] = []
   const upstream = createServer(async (req, res) => {
     calls.push({ url: req.url, headers: req.headers })
@@ -58,7 +59,7 @@ async function setup(t: TestContext, bundles: object = {}, env: Record<string, s
   }).listen(0, '127.0.0.1')
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
-  await writeFile(join(dataDir, 'bundles.json'), JSON.stringify(bundles))
+  await writeFile(join(dataDir, 'groups.json'), JSON.stringify(groups))
   const app = await createApp(
     readConfig({ ADMIN_PASSWORD: 'pw', DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }),
   )
@@ -86,107 +87,159 @@ async function setup(t: TestContext, bundles: object = {}, env: Record<string, s
       headers: { authorization: ownerHeaders.authorization, origin: ownerHeaders.origin },
       body: new URLSearchParams(body),
     })
-  const leases = async () => (await call('/admin/api/leases', { headers: ownerHeaders })).json() as Promise<Lease[]>
-  const saved = await ownerForm('/providers/save', {
+  const grants = async () => (await call('/admin/api/grants', { headers: ownerHeaders })).json() as Promise<Grant[]>
+  const saved = await ownerForm('/services/save', {
     id: 'notes',
     baseUrl: `http://127.0.0.1:${port(upstream)}/base`,
     authType: 'bearer',
     secret: upstreamSecret,
-    read: 'approval',
-    write: 'approval',
+    read: 'ask',
+    write: 'ask',
   })
   assert.equal(saved.status, 303)
-  return { url, call, owner, ownerForm, leases, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
+  return { url, call, owner, ownerForm, grants, calls, upstreamOrigin: `http://127.0.0.1:${port(upstream)}` }
 }
 type Fixture = Awaited<ReturnType<typeof setup>>
 
-async function approvedEnforcer(f: Fixture, kinds = ['site']) {
-  const tokenHash = sha('enforcer-token')
-  const created = await f.call('/_speaker/enforcers', {
+async function approvedHost(f: Fixture, kinds = ['site']) {
+  const tokenHash = sha('host-token')
+  const created = await f.call('/_speaker/hosts', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'test', kinds, tokenHash }),
   })
   const { id } = (await created.json()) as { id: string }
-  assert.equal((await f.ownerForm(`/enforcers/${id}/approve`, {})).status, 303)
-  const subject = await f.call('/_speaker/subjects', {
+  assert.equal((await f.ownerForm(`/hosts/${id}/approve`, {})).status, 303)
+  const agent = await f.call('/_speaker/hosts/agents', {
     method: 'POST',
-    headers: bearer('enforcer-token'),
-    body: JSON.stringify({ label: 'pi' }),
+    headers: bearer('host-token'),
+    body: JSON.stringify({ label: 'pi', agent: 'Test LLM · Pi on test' }),
   })
-  return { id, subject: (await subject.json()) as { id: string; token: string } }
+  return { id, agent: (await agent.json()) as { id: string; token: string } }
 }
 
-const requestSite = (f: Fixture, token: string, body: object) =>
-  f.call('/_speaker/requests', { method: 'POST', headers: bearer(token), body: JSON.stringify(body) })
-
-test('session enroll, approval, request approval, then the proxy injects the credential', async (t) => {
-  const f = await setup(t)
-  const enrolled = await f.call('/_speaker/sessions', {
+const hostRequest = (f: Fixture, agentId: string, body: object) =>
+  f.call('/_speaker/requests', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label: 'big agent', llmName: 'Test LLM', tokenHash: sha('session-token'), duration: '1h' }),
+    headers: bearer('host-token'),
+    body: JSON.stringify({ agentId, ...body }),
   })
-  const { id } = (await enrolled.json()) as { id: string }
-  const call = () => f.call('/notes/things?q=1', { headers: bearer('session-token') })
-  assert.equal((await call()).status, 401)
-  assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
+const askFor = (f: Fixture, token: string, body: object, headers: Record<string, string> = {}) =>
+  f.call('/_speaker/requests', {
+    method: 'POST',
+    headers: { ...bearer(token), ...headers },
+    body: JSON.stringify(body),
+  })
+const enroll = (f: Fixture, token: string, body: object = {}, headers: Record<string, string> = {}) =>
+  f.call('/_speaker/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify({ label: token, agent: 'Test LLM · Test app on test', tokenHash: sha(token), ...body }),
+  })
+const enrolled = async (f: Fixture, token: string, headers: Record<string, string> = {}) =>
+  ((await (await enroll(f, token, {}, headers)).json()) as { id: string }).id
+const me = async (f: Fixture, token: string) =>
+  (await f.call('/_speaker/me', { headers: bearer(token) })).json() as Promise<{
+    agent: { status: string; kind: string }
+    services: Record<string, { read: { state: string; until?: string | null }; full: { state: string } }>
+    grants: { item: string; expiresAt: string | null }[]
+    groups: Record<string, { description?: string; items: string[] }>
+    requests: (Outcome & { want: string[] })[]
+  }>
+// A call that files a request and returns its id.
+const firstRequest = async (f: Fixture, token: string, path = '/notes/x') =>
+  ((await (await f.call(path, { headers: bearer(token) })).json()) as { request: string }).request
+
+test('enroll with a first request, approval, then the proxy injects the credential', async (t) => {
+  const f = await setup(t)
+  const first = await enroll(f, 'agent-token', { want: ['notes.read'], reason: 'read one note', duration: '1h' })
+  assert.equal(first.status, 201)
+  const { request } = (await first.json()) as { request: Outcome & { next: string } }
+  assert.equal(request.status, 'pending')
+  assert.match(request.next, /Speaker-Wait/)
+  assert.equal(
+    ((await (await f.call('/notes/things', { headers: bearer('nope') })).json()) as { error: string }).error,
+    'enroll',
+  )
+  const call = () => f.call('/notes/things?q=1', { headers: bearer('agent-token') })
+  // The call joins the pending request instead of filing a second one.
   const blocked = await call()
   assert.equal(blocked.status, 403)
-  const body = (await blocked.json()) as { error: string; requestId: string }
-  assert.equal(body.error, 'approval_required')
+  assert.equal(((await blocked.json()) as { error: string }).error, 'approval_required')
+  assert.equal((await me(f, 'agent-token')).requests.length, 1)
   assert.equal(f.calls.length, 0)
-  const guide = async () =>
-    (await f.call('/_speaker/providers/notes/guide', { headers: bearer('session-token') })).text()
-  assert.match(await guide(), /Read \(GET, HEAD, OPTIONS\): needs `credential notes\.read`; not approved yet\./)
-  assert.equal((await f.owner(`/api/requests/${body.requestId}/approve`, { duration: '30m' })).status, 200)
-  const status = (await (
-    await f.call(`/_speaker/requests/${body.requestId}`, { headers: bearer('session-token') })
-  ).json()) as { status: string; expiresAt: string }
-  assert.equal(status.status, 'approved')
-  assert.ok(Date.parse(status.expiresAt) > Date.now())
-  const approved = await guide()
-  assert.ok(approved.includes(`Read (GET, HEAD, OPTIONS): approved until ${status.expiresAt} (UTC).`))
-  assert.match(approved, /Your session is approved until .+ \(UTC\)\./)
+  const help = async () => (await f.call('/_speaker/help/notes', { headers: bearer('agent-token') })).text()
+  assert.match(await help(), /needs `notes\.read`; not granted yet\./)
+  assert.equal((await f.owner(`/api/requests/${request.id}/approve`, { duration: '30m' })).status, 200)
+  const decided = (await me(f, 'agent-token')).requests[0]
+  assert.deepEqual([decided.status, decided.granted, decided.denied], ['decided', ['notes.read'], []])
+  assert.ok(Date.parse(decided.expiresAt ?? '') > Date.now())
+  assert.ok((await help()).includes(`granted until ${decided.expiresAt} (UTC).`))
   assert.equal((await call()).status, 200)
   assert.equal(f.calls[0].url, '/base/things?q=1')
   assert.equal(f.calls[0].headers.authorization, `Bearer ${upstreamSecret}`)
 })
 
-test('a session cannot request a site capability', async (t) => {
+test('the owner decides per item: unticked items are denied, and .full covers reads', async (t) => {
   const f = await setup(t)
-  const { id } = (await (
-    await f.call('/_speaker/sessions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
-    })
-  ).json()) as { id: string }
-  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  const response = await requestSite(f, 'st', { capability: { kind: 'site', ref: 'example.com' }, reason: 'x' })
-  assert.equal(response.status, 400)
-  assert.deepEqual(await response.json(), { error: 'unsupported_kind', kind: 'site' })
+  await enroll(f, 'tok')
+  const made = (await (
+    await askFor(f, 'tok', { want: ['notes.read', 'notes.full'], reason: 'edit' })
+  ).json()) as Outcome
+  assert.equal(made.status, 'pending')
+  assert.equal(
+    (await f.owner(`/api/requests/${made.id}/approve`, { duration: '1h', items: ['notes.full'] })).status,
+    200,
+  )
+  const [request] = (await me(f, 'tok')).requests
+  assert.deepEqual([request.granted, request.denied], [['notes.full'], ['notes.read']])
+  assert.deepEqual(
+    (await f.grants()).map((g) => g.item),
+    ['notes.full'],
+  )
+  // The full grant answers a read and a write without further requests.
+  assert.equal((await f.call('/notes/x', { headers: bearer('tok') })).status, 200)
+  assert.equal((await f.call('/notes/x', { method: 'PUT', headers: bearer('tok'), body: '{}' })).status, 200)
+  assert.equal((await me(f, 'tok')).services.notes.read.state, 'granted')
 })
 
-test('enforcer channel: snapshot, subject request, approval, applied, revoke', async (t) => {
+test('a direct agent cannot request sandbox-only items, and invalid input lists what is accepted', async (t) => {
   const f = await setup(t)
-  const tokenHash = sha('enforcer-token')
+  await enroll(f, 'st')
+  const site = await askFor(f, 'st', { want: ['site:example.com'], reason: 'x' })
+  assert.equal(site.status, 400)
+  assert.equal(((await site.json()) as { error: string }).error, 'invalid')
+  const malformed = (await (await askFor(f, 'st', { want: ['ssh:nas'], reason: 'x' })).json()) as {
+    fields: { message: string }[]
+  }
+  assert.match(malformed.fields[0].message, /group:<name>/)
+  const duration = (await (await askFor(f, 'st', { want: ['notes.read'], reason: 'x', duration: '15m' })).json()) as {
+    fields: { accepted: string[] }[]
+  }
+  assert.deepEqual(duration.fields[0].accepted, ['30m', '1h', '2h', '1d', '30d'])
+  const unknown = await askFor(f, 'st', { want: ['group:nothing'], reason: 'x' })
+  assert.equal(unknown.status, 400)
+})
+
+test('sandbox host channel: snapshot, agent request, approval, applied, revoke', async (t) => {
+  const f = await setup(t)
+  const tokenHash = sha('host-token')
   const { id } = (await (
-    await f.call('/_speaker/enforcers', {
+    await f.call('/_speaker/hosts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'test', kinds: ['site'], tokenHash }),
     })
   ).json()) as { id: string }
-  const wsUrl = `${f.url.replace('http', 'ws')}/_speaker/enforcers/ws`
-  const rejected = new WebSocket(wsUrl, { headers: { authorization: 'Bearer enforcer-token' } })
+  const wsUrl = `${f.url.replace('http', 'ws')}/_speaker/hosts/ws`
+  const rejected = new WebSocket(wsUrl, { headers: { authorization: 'Bearer host-token' } })
   const [, response] = await once(rejected, 'unexpected-response')
   assert.equal(response.statusCode, 401)
   rejected.on('error', () => {})
   rejected.terminate()
 
-  await f.ownerForm(`/enforcers/${id}/approve`, {})
-  const ws = new WebSocket(wsUrl, { headers: { authorization: 'Bearer enforcer-token' } })
+  await f.ownerForm(`/hosts/${id}/approve`, {})
+  const ws = new WebSocket(wsUrl, { headers: { authorization: 'Bearer host-token' } })
   t.after(() => ws.terminate())
   let inbox: Snapshot[] = []
   ws.on('message', (data) => inbox.push(JSON.parse(String(data))))
@@ -200,165 +253,123 @@ test('enforcer channel: snapshot, subject request, approval, applied, revoke', a
   }
   assert.equal((await until(() => true)).type, 'snapshot')
 
-  const subject = (await (
-    await f.call('/_speaker/subjects', {
+  const agent = (await (
+    await f.call('/_speaker/hosts/agents', {
       method: 'POST',
-      headers: bearer('enforcer-token'),
-      body: JSON.stringify({ label: 'pi' }),
+      headers: bearer('host-token'),
+      body: JSON.stringify({ label: 'pi', agent: 'Test LLM · Pi on test' }),
     })
-  ).json()) as { token: string }
-  const made = await requestSite(f, subject.token, {
-    capability: { kind: 'site', ref: 'example.com' },
-    reason: 'docs',
-    duration: '15m',
-  })
-  assert.equal(made.status, 201)
+  ).json()) as { id: string; token: string }
+  // The agent's token is bound to the host's address; the agent needs no card of its own.
+  assert.equal((await me(f, agent.token)).agent.kind, 'sandboxed')
+  const made = await hostRequest(f, agent.id, { want: ['site:example.com'], reason: 'docs', duration: '30m' })
+  assert.equal(made.status, 202)
   const pending = (await until((s) => s.requests.length)).requests[0]
-  assert.deepEqual([pending.status, pending.what, pending.reason], ['pending', 'site example.com', 'docs'])
+  assert.deepEqual([pending.status, pending.what, pending.reason], ['pending', 'site:example.com', 'docs'])
 
   inbox = []
   await f.owner(`/api/requests/${pending.id}/approve`, { duration: '1h' })
-  const lease = (await until((s) => s.leases.length)).leases[0]
-  assert.deepEqual([lease.kind, lease.ref], ['site', 'example.com'])
-  assert.equal((await f.leases())[0].state, 'granted')
+  const grant = (await until((s) => s.grants.length)).grants[0]
+  assert.deepEqual([grant.item, grant.agentId], ['site:example.com', agent.id])
+  assert.equal((await f.grants())[0].state, 'granted')
 
-  ws.send(JSON.stringify({ type: 'applied', leaseIds: [lease.id] }))
-  for (let i = 0; i < 100 && (await f.leases())[0].state !== 'active'; i++) await sleep(20)
-  assert.equal((await f.leases())[0].state, 'active')
+  ws.send(JSON.stringify({ type: 'applied', grantIds: [grant.id] }))
+  for (let i = 0; i < 100 && (await f.grants())[0].state !== 'active'; i++) await sleep(20)
+  assert.equal((await f.grants())[0].state, 'active')
 
   inbox = []
-  await f.owner(`/api/leases/${lease.id}/revoke`)
-  await until((s) => s.leases.length === 0)
-  assert.deepEqual(await f.leases(), [])
+  await f.owner(`/api/grants/${grant.id}/revoke`)
+  await until((s) => s.grants.length === 0)
+  assert.deepEqual(await f.grants(), [])
+
+  // The host ends its agent: the token answers `denied` afterwards, not `enroll`.
+  const gone = await f.call(`/_speaker/hosts/agents/${agent.id}`, { method: 'DELETE', headers: bearer('host-token') })
+  assert.equal(gone.status, 200)
+  assert.equal((await f.call('/_speaker/me', { headers: bearer(agent.token) })).status, 403)
 })
 
-test('a bundle request creates one lease per member with the same expiry', async (t) => {
-  const bundle = [
-    { kind: 'site', ref: 'a.example' },
-    { kind: 'site', ref: 'b.example' },
-  ]
-  const f = await setup(t, { pack: bundle })
-  const { subject } = await approvedEnforcer(f)
-  const made = await requestSite(f, subject.token, { bundle: 'pack', reason: 'both', duration: '1d' })
-  const { id } = (await made.json()) as { id: string }
-  await f.owner(`/api/requests/${id}/approve`, { duration: '1d' })
-  const leases = await f.leases()
-  assert.deepEqual(leases.map((l) => l.ref).sort(), ['a.example', 'b.example'])
-  assert.equal(new Set(leases.map((l) => l.expiresAt)).size, 1)
+test('a group request creates one grant per item with the same expiry', async (t) => {
+  const f = await setup(t, { pack: { items: ['site:a.example', 'site:b.example'] } })
+  const { agent } = await approvedHost(f)
+  const made = (await (
+    await hostRequest(f, agent.id, { want: ['group:pack'], reason: 'both', duration: '1d' })
+  ).json()) as Outcome
+  await f.owner(`/api/requests/${made.id}/approve`, { duration: '1d' })
+  const grants = await f.grants()
+  assert.deepEqual(grants.map((g) => g.item).sort(), ['site:a.example', 'site:b.example'])
+  assert.equal(new Set(grants.map((g) => g.expiresAt)).size, 1)
 })
 
-test('bundle listing shows a caller only bundles it may request in full', async (t) => {
+test('groups are offered only when every item suits the agent, and groups may mix kinds', async (t) => {
   const f = await setup(t, {
-    pack: [{ kind: 'site', ref: 'a.example' }],
-    notes: [{ kind: 'credential', ref: 'notes.read' }],
+    pack: { items: ['site:a.example'] },
+    notes: { description: 'Read notes', items: ['notes.read'] },
+    mixed: { items: ['notes.read', 'site:a.example', 'mcp:context7'] },
   })
-  const { subject } = await approvedEnforcer(f)
-  const listed = async (token: string) =>
-    Object.keys(await (await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${token}` } })).json())
-  assert.deepEqual((await listed(subject.token)).sort(), ['notes', 'pack'])
-  const { id } = (await (
-    await f.call('/_speaker/sessions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
-    })
-  ).json()) as { id: string }
-  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  assert.deepEqual(await listed('st'), ['notes'])
+  const { agent } = await approvedHost(f, ['site', 'mcp'])
+  assert.deepEqual(Object.keys((await me(f, agent.token)).groups).sort(), ['mixed', 'notes', 'pack'])
+  await enroll(f, 'st')
+  const direct = await me(f, 'st')
+  assert.deepEqual(direct.groups, { notes: { description: 'Read notes', items: ['notes.read'] } })
+  assert.equal((await askFor(f, 'st', { want: ['group:pack'], reason: 'x' })).status, 400)
 })
 
-test('bundles.json accepts the bare member array and the described form, and lists extension bundles to enforcers that declare the kind', async (t) => {
-  const f = await setup(t, {
-    pack: [{ kind: 'site', ref: 'a.example' }],
-    loop: {
-      description: 'Scheduled wake-ups',
-      members: [
-        { kind: 'extension', ref: 'pi-cc-loop' },
-        { kind: 'site', ref: 'b.example' },
-      ],
-    },
-  })
-  const { subject } = await approvedEnforcer(f, ['site', 'extension'])
-  const listed = await (
-    await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${subject.token}` } })
-  ).json()
-  assert.deepEqual(listed, {
-    pack: { members: [{ kind: 'site', ref: 'a.example' }] },
-    loop: {
-      description: 'Scheduled wake-ups',
-      members: [
-        { kind: 'extension', ref: 'pi-cc-loop' },
-        { kind: 'site', ref: 'b.example' },
-      ],
-    },
-  })
-  const made = await requestSite(f, subject.token, { bundle: 'loop', reason: 'schedule', duration: '1d' })
-  assert.equal(made.status, 201)
-})
-
-test('the admin saves and deletes bundles without a restart', async (t) => {
+test('the admin saves and deletes groups without a restart, and refuses malformed input with a readable redirect', async (t) => {
   const f = await setup(t)
-  const { subject } = await approvedEnforcer(f)
-  const listed = async () =>
-    (await (
-      await f.call('/_speaker/bundles', { headers: { authorization: `Bearer ${subject.token}` } })
-    ).json()) as Record<string, { description?: string; members: { kind: string; ref: string }[] }>
-  const saved = await f.ownerForm('/bundles/save', {
-    id: 'pack',
-    description: ' Two example sites ',
-    members: 'site a.example\nsite b.example',
+  await enroll(f, 'st')
+  const listed = async () => (await me(f, 'st')).groups
+  const saved = await f.ownerForm('/groups/save', {
+    id: 'pair',
+    description: ' Two services ',
+    items: 'notes.read\nnotes.full',
   })
   assert.equal(saved.status, 303)
-  assert.deepEqual((await listed()).pack, {
-    description: 'Two example sites',
-    members: [
-      { kind: 'site', ref: 'a.example' },
-      { kind: 'site', ref: 'b.example' },
-    ],
-  })
-  const page = await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()
-  assert.ok(page.includes('Two example sites'))
+  assert.deepEqual((await listed()).pair, { description: 'Two services', items: ['notes.read', 'notes.full'] })
+  const page = await (await f.call('/admin?section=groups', { headers: ownerHeaders })).text()
+  assert.ok(page.includes('Two services') && page.includes('2 items'))
   // A blank description is dropped rather than stored.
-  await f.ownerForm('/bundles/save', { id: 'pack', description: '', members: 'site a.example' })
-  assert.deepEqual((await listed()).pack, { members: [{ kind: 'site', ref: 'a.example' }] })
-  // Refused input redirects back to the editor with an error code, and saves nothing.
-  const refused = await f.ownerForm('/bundles/save', { id: 'bad', members: 'nonsense x' })
-  assert.equal(refused.headers.get('location'), '/admin?section=bundles&error=line')
+  await f.ownerForm('/groups/save', { id: 'pair', description: '', items: 'notes.read' })
+  assert.deepEqual((await listed()).pair, { items: ['notes.read'] })
+  for (const [body, code] of [
+    [{ id: 'bad', items: '  \n' }, 'empty'],
+    [{ id: 'bad', items: 'nonsense x' }, 'line'],
+    [{ id: 'bad', items: 'group:other' }, 'line'],
+    [{ id: 'bad id!', items: 'notes.read' }, 'id'],
+  ] as const) {
+    const response = await f.ownerForm('/groups/save', body)
+    assert.equal(response.status, 303)
+    assert.equal(response.headers.get('location'), `/admin?section=groups&error=${code}`)
+  }
   assert.equal((await listed()).bad, undefined)
-  assert.equal((await f.ownerForm('/bundles/delete', { id: 'pack' })).status, 303)
+  const failed = await (await f.call('/admin?section=groups&error=empty', { headers: ownerHeaders })).text()
+  assert.ok(failed.includes('list at least one item'))
+  assert.equal((await f.ownerForm('/groups/delete', { id: 'pair' })).status, 303)
   assert.deepEqual(await listed(), {})
 })
 
 test('the proxy returns redirects without following them', async (t) => {
   const f = await setup(t)
-  const { id } = (await (
-    await f.call('/_speaker/sessions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 's', llmName: 'Test LLM', tokenHash: sha('st'), duration: '1h' }),
-    })
-  ).json()) as { id: string }
-  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  const blocked = (await (await f.call('/notes/redirect', { headers: bearer('st') })).json()) as { requestId: string }
-  await f.owner(`/api/requests/${blocked.requestId}/approve`, { duration: '15m' })
+  await enroll(f, 'st')
+  const request = await firstRequest(f, 'st', '/notes/redirect')
+  await f.owner(`/api/requests/${request}/approve`, { duration: '30m' })
   const response = await f.call('/notes/redirect', { headers: bearer('st') })
   assert.equal(response.status, 302)
   assert.equal(response.headers.get('location'), '/must-not-follow')
   assert.equal(f.calls.length, 1)
 })
 
-test('admin provider saves accept a proxied same-origin browser and reject foreign form and JSON writes', async (t) => {
+test('admin service saves accept a proxied same-origin browser and reject foreign form and JSON writes', async (t) => {
   const f = await setup(t)
   const input = {
     id: 'obsidian',
     baseUrl: 'https://notes.example.com/api',
     authType: 'bearer',
     secret: 'work-vault-test-key',
-    read: 'approval',
-    write: 'deny',
+    read: 'ask',
+    write: 'never',
   }
   // The browser sees HTTPS while the fixture server and configured PUBLIC_URL use HTTP.
-  const saved = await f.call('/admin/providers/save', {
+  const saved = await f.call('/admin/services/save', {
     method: 'POST',
     headers: {
       authorization: ownerHeaders.authorization,
@@ -369,15 +380,15 @@ test('admin provider saves accept a proxied same-origin browser and reject forei
     body: new URLSearchParams(input),
   })
   assert.equal(saved.status, 303)
-  const page = await (await f.call('/admin?provider=obsidian', { headers: ownerHeaders })).text()
-  assert.ok(page.includes('Read policy (GET / HEAD / OPTIONS)'))
-  assert.ok(page.includes('Write policy (all other methods)'))
-  assert.ok(page.includes('read approval · write deny'))
+  const page = await (await f.call('/admin?service=obsidian', { headers: ownerHeaders })).text()
+  assert.ok(page.includes('Read rule (GET / HEAD / OPTIONS)'))
+  assert.ok(page.includes('Write rule (all other methods)'))
+  assert.ok(page.includes('read ask · write never'))
   assert.ok(!page.includes(input.secret))
 
   for (const site of ['cross-site', 'same-site', 'none', '']) {
     for (const json of [false, true]) {
-      const response = await f.call('/admin/providers/save', {
+      const response = await f.call('/admin/services/save', {
         method: 'POST',
         headers: {
           authorization: ownerHeaders.authorization,
@@ -388,128 +399,127 @@ test('admin provider saves accept a proxied same-origin browser and reject forei
           'x-forwarded-host': 'untrusted.example.com',
           'x-forwarded-proto': 'https',
         },
-        body: json ? JSON.stringify(input) : new URLSearchParams({ ...input, write: 'always' }),
+        body: json ? JSON.stringify(input) : new URLSearchParams({ ...input, write: 'ask' }),
       })
       assert.equal(response.status, 403, `${site || 'no metadata'} ${json ? 'JSON' : 'form'}`)
     }
   }
-  const after = await (await f.call('/admin?provider=obsidian', { headers: ownerHeaders })).text()
-  assert.ok(after.includes('read approval · write deny'))
+  const after = await (await f.call('/admin?service=obsidian', { headers: ownerHeaders })).text()
+  assert.ok(after.includes('read ask · write never'))
   // Older clients still work with an explicitly configured Origin and no Fetch Metadata.
-  assert.equal((await f.ownerForm('/providers/save', input)).status, 303)
+  assert.equal((await f.ownerForm('/services/save', input)).status, 303)
 })
 
-test('admin bundle saves list members, refuse empty or malformed input with a readable redirect, and delete', async (t) => {
+test('enrollment with Speaker-Wait holds until the owner decides and answers per item', async (t) => {
   const f = await setup(t)
-  const members = 'credential notes.read\nfolder ~/vault'
-  assert.equal((await f.ownerForm('/bundles/save', { id: 'kit', members })).status, 303)
-  const page = await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()
-  assert.ok(page.includes('~/vault') && page.includes('2 members'))
-  for (const [body, code] of [
-    [{ id: 'kit', members: '  \n' }, 'empty'],
-    [{ id: 'kit', members: 'bogus x' }, 'line'],
-    [{ id: 'bad id!', members }, 'id'],
-  ] as const) {
-    const response = await f.ownerForm('/bundles/save', body)
-    assert.equal(response.status, 303)
-    assert.equal(response.headers.get('location'), `/admin?section=bundles&error=${code}`)
+  const held = enroll(
+    f,
+    'quick-token',
+    { want: ['notes.read'], reason: 'read one note', duration: '30m' },
+    { 'speaker-wait': '5' },
+  )
+  let pending: { id: string }[] = []
+  while (!pending.length) {
+    await sleep(50)
+    pending = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as { id: string }[]
   }
-  const failed = await (await f.call('/admin?section=bundles&error=empty', { headers: ownerHeaders })).text()
-  assert.ok(failed.includes('list at least one member'))
-  assert.equal((await f.ownerForm('/bundles/delete', { id: 'kit' })).status, 303)
-  assert.ok(!(await (await f.call('/admin?section=bundles', { headers: ownerHeaders })).text()).includes('~/vault'))
-})
-
-test('one enrollment call files the first request; approving the session grants it, and status long-polls', async (t) => {
-  const f = await setup(t)
-  const enrolled = await f.call('/_speaker/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      label: 'quick agent',
-      llmName: 'Test LLM',
-      harness: 'Test Harness',
-      tokenHash: sha('quick-token'),
-      duration: '1h',
-      request: { capability: { kind: 'credential', ref: 'notes.read' }, reason: 'read one note', duration: '30m' },
-    }),
-  })
-  assert.equal(enrolled.status, 201)
-  const { id, requestId } = (await enrolled.json()) as { id: string; requestId: string }
-  assert.ok(requestId)
-  const waited = f.call(`/_speaker/sessions/${id}?wait=5`)
-  await sleep(100)
-  assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
-  assert.equal(((await (await waited).json()) as { status: string }).status, 'approved')
-  const mine = (await (await f.call('/_speaker/requests', { headers: bearer('quick-token') })).json()) as {
-    id: string
-    status: string
-    expiresAt: string
-  }[]
-  assert.equal(mine[0].id, requestId)
-  assert.equal(mine[0].status, 'approved')
-  assert.ok(Date.parse(mine[0].expiresAt) > Date.now())
+  assert.equal((await f.owner(`/api/requests/${pending[0].id}/approve`, { duration: '1h' })).status, 200)
+  const response = await held
+  const { id, request } = (await response.json()) as { id: string; request: Outcome }
+  assert.deepEqual([request.status, request.granted, request.denied], ['decided', ['notes.read'], []])
+  assert.ok(Date.parse(request.expiresAt ?? '') > Date.now())
+  // The same token enrolled again returns the same agent.
+  const again = await enroll(f, 'quick-token')
+  assert.equal(again.status, 200)
+  assert.equal(((await again.json()) as { id: string }).id, id)
   assert.equal((await f.call('/notes/things', { headers: bearer('quick-token') })).status, 200)
-  assert.equal((await f.call('/SKILL.md')).status, 200)
+  assert.equal((await f.call('/skill.md')).status, 200)
 })
 
-async function approvedSession(f: Fixture, token: string) {
-  const enrolled = await f.call('/_speaker/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label: token, llmName: 'Test LLM', tokenHash: sha(token), duration: '1h' }),
-  })
-  const { id } = (await enrolled.json()) as { id: string }
-  assert.equal((await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })).status, 303)
-  return id
-}
-
-test('an always read needs no lease, counts as a use, and the guide says until when', async (t) => {
+test('enrollment may carry an empty want, and /me then shows where the agent stands', async (t) => {
   const f = await setup(t)
-  await f.ownerForm('/providers/save', {
-    id: 'notes',
+  assert.equal((await enroll(f, 'tok')).status, 201)
+  const view = await me(f, 'tok')
+  assert.deepEqual([view.agent.status, view.agent.kind, view.grants, view.requests], ['idle', 'direct', [], []])
+  assert.deepEqual(view.services.notes.read, { state: 'ask' })
+  assert.equal(((await (await f.call('/_speaker/me')).json()) as { error: string }).error, 'enroll')
+})
+
+test('an open read needs no grant or card, is never listed in /me, and counts as a use', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/services/save', {
+    id: 'lights',
     baseUrl: `${f.upstreamOrigin}/base`,
     authType: 'bearer',
-    read: 'always',
-    write: 'approval',
+    secret: 's',
+    read: 'open',
+    write: 'ask',
   })
-  await approvedSession(f, 'always-token')
-  assert.equal((await f.call('/notes/x', { headers: bearer('always-token') })).status, 200)
-  const page = await (await f.call('/admin?section=identities', { headers: ownerHeaders })).text()
-  assert.match(page, /1 use/)
-  const guide = await (await f.call('/_speaker/providers/notes/guide', { headers: bearer('always-token') })).text()
-  assert.match(guide, /Read \(GET, HEAD, OPTIONS\): allowed without a request until .+ \(UTC\)\./)
+  await enrolled(f, 'open-token')
+  assert.equal((await f.call('/lights/x', { headers: bearer('open-token') })).status, 200)
+  assert.ok(!('lights' in (await me(f, 'open-token')).services))
+  assert.deepEqual(await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json(), [])
+  assert.match(await (await f.call(`/admin?section=agents`, { headers: ownerHeaders })).text(), /1 use/)
+  // Asking for the open read is answered at once without a card; writes still need a grant.
+  const asked = (await (await askFor(f, 'open-token', { want: ['lights.read'], reason: 'x' })).json()) as Outcome
+  assert.deepEqual([asked.status, asked.granted], ['decided', ['lights.read']])
+  assert.equal((await f.call('/lights/x', { method: 'POST', headers: bearer('open-token'), body: '{}' })).status, 403)
+})
+
+test('a service set to never answers denied at once, and a POST read path counts as a read', async (t) => {
+  const f = await setup(t)
+  await f.ownerForm('/services/save', {
+    id: 'vault',
+    baseUrl: `${f.upstreamOrigin}/base`,
+    authType: 'bearer',
+    secret: 's',
+    read: 'ask',
+    write: 'never',
+    readPaths: '/search\n',
+  })
+  await enroll(f, 'tok')
+  const blocked = await f.call('/vault/x', { method: 'PUT', headers: bearer('tok'), body: '{}' })
+  assert.equal(blocked.status, 403)
+  assert.equal(((await blocked.json()) as { error: string }).error, 'denied')
+  const full = (await (await askFor(f, 'tok', { want: ['vault.full'], reason: 'x' })).json()) as Outcome
+  assert.deepEqual([full.status, full.denied], ['decided', ['vault.full']])
+  // POST to a listed read path files a read request, not a full one.
+  const search = await f.call('/vault/search', { method: 'POST', headers: bearer('tok'), body: '{}' })
+  assert.equal(((await search.json()) as { item: string }).item, 'vault.read')
+  const other = await f.call('/vault/other', { method: 'POST', headers: bearer('tok'), body: '{}' })
+  assert.equal(other.status, 403)
+  assert.equal(((await other.json()) as { error: string }).error, 'denied')
 })
 
 test('path auth splices the stored secret into the upstream path and keeps it from the agent', async (t) => {
   const f = await setup(t)
-  await f.ownerForm('/providers/save', {
+  await f.ownerForm('/services/save', {
     id: 'hook',
     baseUrl: `${f.upstreamOrigin}/api/webhook`,
     authType: 'path',
     secret: 'mcp_secret123',
-    read: 'always',
-    write: 'always',
+    read: 'open',
+    write: 'ask',
   })
-  await approvedSession(f, 'hook-token')
-  assert.equal((await f.call('/hook', { method: 'POST', headers: bearer('hook-token'), body: '{}' })).status, 200)
+  await enrolled(f, 'hook-token')
+  assert.equal((await f.call('/hook', { headers: bearer('hook-token') })).status, 200)
   const last = f.calls.at(-1)
   assert.equal(last?.url, '/api/webhook/mcp_secret123')
   assert.equal(last?.headers.authorization, undefined)
 })
 
-test('an MCP provider classifies tool calls by their read-only hints', async (t) => {
+test('an MCP service classifies tool calls by their read-only hints', async (t) => {
   const f = await setup(t)
-  await f.ownerForm('/providers/save', {
+  await f.ownerForm('/services/save', {
     id: 'ha',
     baseUrl: `${f.upstreamOrigin}/mcp`,
     authType: 'bearer',
     secret: 'ha-secret',
-    read: 'always',
-    write: 'approval',
+    read: 'open',
+    write: 'ask',
     mcp: 'on',
   })
-  await approvedSession(f, 'mcp-token')
+  await enrolled(f, 'mcp-token')
   const rpc = (method: string, params: object = {}) =>
     f.call('/ha', {
       method: 'POST',
@@ -520,70 +530,61 @@ test('an MCP provider classifies tool calls by their read-only hints', async (t)
   assert.equal((await rpc('tools/call', { name: 'get_state', arguments: {} })).status, 200)
   const blocked = await rpc('tools/call', { name: 'delete_automation', arguments: {} })
   assert.equal(blocked.status, 403)
-  assert.equal(((await blocked.json()) as { capability: string }).capability, 'ha.write')
+  assert.equal(((await blocked.json()) as { item: string }).item, 'ha.full')
   const requests = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as {
-    path: string
+    trigger: string
   }[]
-  assert.match(requests[0].path, /delete_automation \(destructive\)/)
+  assert.match(requests[0].trigger, /delete_automation \(destructive\)/)
 })
 
-test('the access log lists proxied calls per identity, with no lease for an always call', async (t) => {
+test('the log lists proxied calls per agent, with no grant for an open call', async (t) => {
   const f = await setup(t)
-  await f.ownerForm('/providers/save', {
+  await f.ownerForm('/services/save', {
     id: 'open',
     baseUrl: `${f.upstreamOrigin}/base`,
     authType: 'bearer',
     secret: 's',
-    read: 'always',
-    write: 'approval',
+    read: 'open',
+    write: 'ask',
   })
-  const id = await approvedSession(f, 'log-token')
+  const id = await enrolled(f, 'log-token')
   for (const path of ['/open/first', '/open/second'])
     assert.equal((await f.call(`${path}?k=hidden`, { headers: bearer('log-token') })).status, 200)
-  const page = await (await f.call(`/admin/log?identity=${id}`, { headers: ownerHeaders })).text()
+  const page = await (await f.call(`/admin/log?agent=${id}`, { headers: ownerHeaders })).text()
   assert.match(page, /GET \/first/)
   assert.match(page, /GET \/second/)
-  assert.match(page, /always/)
+  assert.match(page, /open/)
   assert.doesNotMatch(page, /k=hidden|127\.0\.0\.1:\d+\/base/)
 })
 
-const enroll = (f: Fixture, token: string, headers: Record<string, string> = {}) =>
-  f.call('/_speaker/sessions', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify({ label: 'agent', llmName: 'Test LLM', tokenHash: sha(token), duration: '1h' }),
-  })
-const firstRequest = async (f: Fixture, token: string) =>
-  (await (await f.call('/notes/x', { headers: bearer(token) })).json()) as { requestId: string }
-
-test('enrollment refuses the empty-token hash and a reused token, and 401s say what to do next', async (t) => {
+test('enrollment refuses the empty-token hash, and 401s say what to do next', async (t) => {
   const f = await setup(t)
   assert.equal((await enroll(f, '')).status, 400)
-  const first = (await (await enroll(f, 'tok')).json()) as { id: string; next: string; tell_user: string }
-  assert.equal(first.next, `GET /_speaker/sessions/${first.id}?wait=60`)
-  assert.match(first.tell_user, new RegExp(`/admin#session-${first.id}$`))
-  assert.equal((await enroll(f, 'tok')).status, 409)
-  const pending = await f.call('/notes/x', { headers: bearer('tok') })
-  assert.equal(pending.status, 401)
-  assert.equal(pending.headers.get('www-authenticate'), 'Bearer realm="speaker"')
-  assert.equal(pending.headers.get('link'), '</skill.md>; rel="help"')
-  assert.equal(((await pending.json()) as { error: string }).error, 'session_pending')
-  const unknown = (await (await f.call('/notes/x', { headers: bearer('nope') })).json()) as { error: string }
-  assert.equal(unknown.error, 'unknown_token')
+  const first = (await (await enroll(f, 'tok')).json()) as { id: string; next: string }
+  assert.equal(first.next, 'GET /_speaker/me')
+  const unknown = await f.call('/notes/x', { headers: bearer('nope') })
+  assert.equal(unknown.status, 401)
+  assert.equal(unknown.headers.get('www-authenticate'), 'Bearer realm="speaker"')
+  assert.equal(unknown.headers.get('link'), '</skill.md>; rel="help"')
+  assert.equal(((await unknown.json()) as { error: string }).error, 'enroll')
 })
 
-test('Speaker-Wait holds a call until approval and then returns the upstream response', async (t) => {
+test('Speaker-Wait holds a call until approval; without it the call answers at once', async (t) => {
   const f = await setup(t)
-  await approvedSession(f, 'tok')
+  await enrolled(f, 'tok')
+  const immediate = Date.now()
+  assert.equal((await f.call('/notes/doc', { headers: bearer('tok') })).status, 403)
+  assert.ok(Date.now() - immediate < 400)
   const held = f.call('/notes/doc', {
     headers: { ...bearer('tok'), 'speaker-wait': '10', 'speaker-reason': 'read doc' },
   })
-  let listed: { id: string }[] = []
-  while (!listed.length) {
+  let listed: { id: string; reason: string }[] = []
+  while (!listed.some((r) => r.reason === 'read doc')) {
     await sleep(100)
-    listed = (await (await f.call('/_speaker/requests', { headers: bearer('tok') })).json()) as { id: string }[]
+    listed = (await (await f.call('/admin/api/requests', { headers: ownerHeaders })).json()) as typeof listed
   }
-  assert.equal((await f.owner(`/api/requests/${listed[0].id}/approve`, { duration: '15m' })).status, 200)
+  assert.equal(listed.length, 1)
+  assert.equal((await f.owner(`/api/requests/${listed[0].id}/approve`, { duration: '30m' })).status, 200)
   const response = await held
   assert.equal(response.status, 200)
   assert.deepEqual(await response.json(), { ok: true })
@@ -591,94 +592,97 @@ test('Speaker-Wait holds a call until approval and then returns the upstream res
   assert.equal(f.calls.at(-1)?.headers['speaker-reason'], undefined)
 })
 
-test('the third denial of an identical request locks it with retry_after; earlier denials ask the owner again', async (t) => {
+test('the third denial of an item locks it with an ISO retry_after; other items and earlier denials still ask', async (t) => {
   const f = await setup(t)
-  await approvedSession(f, 'tok')
+  await enrolled(f, 'tok')
   for (const strike of [1, 2, 3]) {
     const asked = await f.call('/notes/x', { headers: bearer('tok') })
-    const { requestId, error } = (await asked.json()) as { requestId: string; error: string }
+    const { request, error } = (await asked.json()) as { request: string; error: string }
     assert.equal(error, 'approval_required', `denial ${strike} was still asked`)
-    assert.equal((await f.owner(`/api/requests/${requestId}/deny`)).status, 200)
+    assert.equal((await f.owner(`/api/requests/${request}/deny`)).status, 200)
   }
   const locked = await f.call('/notes/x', { headers: bearer('tok') })
   const body = (await locked.json()) as { error: string; next: string; retry_after: string }
   assert.equal(locked.status, 403)
   assert.equal(body.error, 'denied')
   assert.equal(body.next, 'Stop: the owner denied this request.')
+  assert.equal(new Date(body.retry_after).toISOString(), body.retry_after)
   const wait = Date.parse(body.retry_after) - Date.now()
   assert.ok(wait > 14 * 60_000 && wait <= 15 * 60_000)
-  const direct = await f.call('/_speaker/requests', {
-    method: 'POST',
-    headers: bearer('tok'),
-    body: JSON.stringify({ capability: { kind: 'credential', ref: 'notes.read' }, reason: 'r' }),
-  })
-  assert.equal(direct.status, 403)
-  assert.equal(((await direct.json()) as { retry_after: string }).retry_after, body.retry_after)
+  const direct = (await (await askFor(f, 'tok', { want: ['notes.read'], reason: 'r' })).json()) as Outcome & {
+    retry_after: string
+  }
+  assert.deepEqual([direct.status, direct.denied, direct.retry_after], ['decided', ['notes.read'], body.retry_after])
+  // The lock is per item: a write is still asked, even in the same request as the locked read.
+  const mixed = (await (await askFor(f, 'tok', { want: ['notes.read', 'notes.full'], reason: 'r' })).json()) as Outcome
+  assert.deepEqual([mixed.status, mixed.denied], ['pending', ['notes.read']])
 })
 
-test('providers without a key are hidden from agents and cannot be requested', async (t) => {
+test('services without a key are hidden from agents and cannot be requested', async (t) => {
   const f = await setup(t)
-  await approvedSession(f, 'tok')
-  const list = (await (await f.call('/_speaker/providers', { headers: bearer('tok') })).json()) as object
-  assert.ok('notes' in list)
-  assert.ok(!('karakeep' in list))
-  const refused = await f.call('/_speaker/requests', {
-    method: 'POST',
-    headers: bearer('tok'),
-    body: JSON.stringify({ capability: { kind: 'credential', ref: 'karakeep.read' }, reason: 'r' }),
-  })
+  await enroll(f, 'tok')
+  assert.ok(!('karakeep' in (await me(f, 'tok')).services))
+  const refused = await askFor(f, 'tok', { want: ['karakeep.read'], reason: 'r' })
   assert.equal(refused.status, 400)
-  assert.equal(((await refused.json()) as { error: string }).error, 'provider_not_configured')
+  assert.equal(((await refused.json()) as { error: string }).error, 'invalid')
 })
 
-test('agents cannot extend; the owner extends a lease by its granted span', async (t) => {
+test('agents cannot extend; the owner extends a grant by its granted span', async (t) => {
   const f = await setup(t)
-  await approvedSession(f, 'tok')
-  const { requestId } = await firstRequest(f, 'tok')
-  await f.owner(`/api/requests/${requestId}/approve`, { duration: '30m' })
-  for (const path of [`/_speaker/requests/${requestId}/extend`, `/_speaker/sessions/${requestId}/extend`]) {
-    const gone = await f.call(path, { method: 'POST', headers: bearer('tok'), body: '{"duration":"15m"}' })
+  await enrolled(f, 'tok')
+  const request = await firstRequest(f, 'tok')
+  await f.owner(`/api/requests/${request}/approve`, { duration: '30m' })
+  for (const path of [`/_speaker/requests/${request}/extend`, '/_speaker/grants/extend']) {
+    const gone = await f.call(path, { method: 'POST', headers: bearer('tok'), body: '{"duration":"30m"}' })
     assert.equal(gone.status, 404)
   }
-  const [before] = await f.leases()
-  assert.equal((await f.ownerForm('/leases/extend', { id: before.id })).status, 303)
-  const [after] = await f.leases()
+  const [before] = await f.grants()
+  assert.equal((await f.ownerForm('/grants/extend', { id: before.id })).status, 303)
+  const [after] = await f.grants()
   assert.equal(Date.parse(after.expiresAt ?? '') - Date.parse(before.expiresAt ?? ''), 1_800_000)
-  const request = (await (await f.call(`/_speaker/requests/${requestId}`, { headers: bearer('tok') })).json()) as {
-    status: string
-    expiresAt: string
-  }
-  assert.equal(request.status, 'approved')
-  assert.equal(request.expiresAt, after.expiresAt)
+  const outcome = (await me(f, 'tok')).requests[0]
+  assert.equal(outcome.expiresAt, after.expiresAt)
 })
 
-test('a session token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {
+test('revoking an agent ends its grants, and its token then answers denied rather than enroll', async (t) => {
   const f = await setup(t)
-  const { id } = (await (await enroll(f, 'tok', { 'x-forwarded-for': '100.64.0.7' })).json()) as { id: string }
-  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
+  const id = await enrolled(f, 'tok')
+  await f.owner(`/api/requests/${await firstRequest(f, 'tok')}/approve`, { duration: '1h' })
+  assert.equal((await f.call('/notes/x', { headers: bearer('tok') })).status, 200)
+  assert.equal((await f.ownerForm(`/agents/${id}/revoke`, {})).status, 303)
+  assert.deepEqual(await f.grants(), [])
+  const after = await f.call('/notes/x', { headers: bearer('tok') })
+  assert.equal(after.status, 403)
+  const body = (await after.json()) as { error: string; next: string }
+  assert.deepEqual([body.error, body.next], ['denied', 'Stop: the owner revoked this agent. Tell the user.'])
+})
+
+test('an agent token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {
+  const f = await setup(t)
+  await enrolled(f, 'tok', { 'x-forwarded-for': '100.64.0.7' })
   // Bound to the socket address (127.0.0.1); a spoofed header changes nothing.
-  const spoofed = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  const spoofed = await f.call('/_speaker/me', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
   assert.equal(spoofed.status, 200)
 })
 
 test('a trusted proxy names the caller with the last X-Forwarded-For entry', async (t) => {
   const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
   const from = (chain: string) => ({ 'x-forwarded-for': chain })
-  const { id } = (await (await enroll(f, 'tok', from('6.6.6.6, 100.64.0.7'))).json()) as { id: string }
-  await f.ownerForm(`/sessions/${id}/approve`, { duration: '1h' })
-  const home = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
+  await enrolled(f, 'tok', from('6.6.6.6, 100.64.0.7'))
+  const home = await f.call('/_speaker/me', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
   assert.equal(home.status, 200)
-  const away = await f.call('/_speaker/providers', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
+  const away = await f.call('/_speaker/me', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
   assert.equal(away.status, 401)
-  assert.equal(((await away.json()) as { error: string }).error, 'source_mismatch')
+  assert.equal(((await away.json()) as { error: string }).error, 'enroll')
 })
 
-test('public discovery answers without a token and keeps providers private', async (t) => {
-  const f = await setup(t)
+test('public discovery answers without a token, uses the caller address, and names no service or group', async (t) => {
+  const f = await setup(t, { secretgroup: { items: ['notes.read'] } })
   assert.match(await (await f.call('/')).text(), /read \/skill\.md/)
-  assert.match(await (await f.call('/llms.txt')).text(), /humans: \/admin/)
-  const known = (await (await f.call('/.well-known/speaker.json')).json()) as Record<string, unknown>
-  assert.equal(known.skill, '/skill.md')
-  assert.ok(!('providers' in known))
   assert.ok((await f.call('/skill.md')).headers.get('etag'))
+  const help = await (await f.call('/_speaker/help')).text()
+  assert.ok(help.includes(`${f.url}/_speaker/agents`))
+  assert.ok(!help.includes('$SPEAKER_URL') && !help.includes('secretgroup') && !help.includes('notes'))
+  // Removed discovery routes are not served: unknown paths fall through to authentication.
+  assert.equal((await f.call('/llms.txt')).status, 401)
 })
