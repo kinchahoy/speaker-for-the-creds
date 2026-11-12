@@ -82,7 +82,7 @@ export default function (pi: ExtensionAPI) {
       parameters: Type.Object({
         want: Type.Array(Type.String(), {
           description:
-            "Items. <service>.read or <service>.full. site:<host> or site:*.<domain>. secret:<NAME>@<host>[,<host>]. folder:<share> or folder:<share>:rw. mcp:<catalog id>. ext:<extension catalog id>. group:<name>.",
+            "Items. <service>.read or <service>.full (homelab APIs and remote MCP servers). site:<host> or site:*.<domain>. secret:<NAME>. folder:<share> or folder:<share>:rw. mcp:<catalog id> (in-VM servers only). ext:<extension catalog id>. group:<name>.",
         }),
         reason: Type.String({ description: "One sentence on what this unblocks" }),
         duration: Type.Union(["30m", "1h", "2h", "1d", "30d"].map((v) => Type.Literal(v))),
@@ -93,15 +93,19 @@ export default function (pi: ExtensionAPI) {
         let result = await call(speaker, "POST", "requests", params, signal, 60);
         while (result.status === "pending" && Date.now() < deadline)
           result = await call(speaker, "POST", "requests", params, signal, 60);
-        const { granted = [], denied = [], status, id } = result;
+        const { granted = [], denied = [], applying = [], status, id } = result;
         const text =
           status === "pending"
             ? "The owner has not decided yet; continue other work."
             : status === "expired"
               ? `The request for ${params.want.join(", ")} expired undecided; continue other work.`
               : `Granted: ${granted.join(", ") || "nothing"}. Denied: ${denied.join(", ") || "nothing"}.` +
-                (granted.length ? " Retry now." : " Continue without it or explain what is blocked.");
-        return { content: [{ type: "text", text }], details: { id, status, granted, denied } };
+                (applying.length
+                  ? ` Granted but not in force yet: ${applying.join(", ")}; the sandbox is applying it (mcp: and ext: items appear after Pi restarts when idle). Retry what was blocked shortly.`
+                  : granted.length
+                    ? " Retry now."
+                    : " Continue without it or explain what is blocked.");
+        return { content: [{ type: "text", text }], details: { id, status, granted, denied, applying } };
       },
     }),
   );

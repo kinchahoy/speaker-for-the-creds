@@ -6,8 +6,7 @@ import { html } from "hono/html";
 import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
-import { loadConfig, type Config } from "./config.ts";
-import { loadSecrets, secretNames } from "./credentials.ts";
+import { assertNoHostSecrets, loadConfig, type Config } from "./config.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
@@ -167,7 +166,7 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
   console.log(`guest    127.0.0.1:${config.guestPort}`);
 };
 
-/** Starts the trusted service: catalog, host secrets, launch templates, task manager, and both listeners. */
+/** Starts the trusted service: catalog, launch templates, task manager, and both listeners. */
 export const startBroker = (config: Config) => {
   if ("archive" in config.shareRoots) throw new Error("archive is a reserved share root name");
   // A closed task's artifacts can become a read-only input of the next task.
@@ -176,13 +175,12 @@ export const startBroker = (config: Config) => {
   const readJson = (path: string): unknown =>
     JSON.parse(readFileSync(`${config.configRoot}/${path}`, "utf8"));
   const catalog = Catalog.parse(readJson("catalog.json"));
-  const secrets = loadSecrets(`${config.configRoot}/secrets.env`);
+  assertNoHostSecrets(config);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
-  const tasks = new Tasks(config, templates, catalog, secrets, readHostToken(config));
+  const tasks = new Tasks(config, templates, catalog, readHostToken(config));
   startControl(config, tasks);
   startGuestListener(config, tasks);
   console.log(`templates ${[...templates.keys()].join(" ")}`);
-  console.log(`secrets  ${secretNames(secrets).join(" ") || "none"}`);
   return { tasks };
 };
 

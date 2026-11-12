@@ -5,7 +5,8 @@
   "maxTasks": 3,
   "guestImage": "pi-v5-guest",
   "speaker": {
-    "url": "http://100.64.0.10:7000"
+    "url": "http://100.64.0.10:7000",
+    "proxyPort": 7003
   },
   "configRoot": "/srv/pi-v2/config",
   "stateRoot": "/srv/pi-v2/state",

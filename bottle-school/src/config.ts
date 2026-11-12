@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { BlockList, isIPv4 } from "node:net";
 import { networkInterfaces } from "node:os";
 import { isAbsolute } from "node:path";
@@ -31,7 +31,8 @@ const ConfigFile = z
     guestPort: port,
     maxTasks: z.number().int().min(1).max(3),
     guestImage: z.string().min(1),
-    speaker: z.object({ url: z.url() }),
+    // proxyPort is speaker's PROXY_PORT: where requests to a granted secret's hosts go so speaker can insert the secret.
+    speaker: z.object({ url: z.url(), proxyPort: port.optional() }),
     configRoot: z.string(),
     stateRoot: z.string(),
     outputRoot: z.string(),
@@ -112,3 +113,16 @@ export const validateConfig = (data: unknown): Config => {
 export const loadConfig = (path: string): Config => validateConfig(JSON.parse(readFileSync(path, "utf8")));
 
 export const controlOrigin = (config: Config) => `http://${config.bindHost}:${config.controlPort}`;
+
+/**
+ * Secrets live in speaker; bottle-school never holds one. A leftover secrets.env or BROKER_SECRET_* variable would be a
+ * real secret on this host that nothing uses, so startup stops until it is moved into speaker's Setup and removed.
+ */
+export const assertNoHostSecrets = (config: Pick<Config, "configRoot">, env: NodeJS.ProcessEnv = process.env) => {
+  const file = `${config.configRoot}/secrets.env`;
+  const variables = Object.keys(env).filter((name) => name.startsWith("BROKER_SECRET_"));
+  if (existsSync(file) || variables.length)
+    throw new Error(
+      `bottle-school no longer holds secrets: add ${existsSync(file) ? file : variables.join(", ")} to speaker's Setup as a secret (with its allowed hosts), then delete it here`,
+    );
+};

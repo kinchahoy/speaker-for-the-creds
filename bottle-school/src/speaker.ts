@@ -1,15 +1,24 @@
-import { existsSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { ProxyAgent } from "undici";
 import { z } from "zod";
 import type { Config } from "./config.ts";
 
 /** Speaker's items are strings (`site:x`, `folder:s:rw`, `ext:id`, `obsidian.read`); the rest of bottle-school speaks kind and ref. */
 const itemKinds: Record<string, string> = { site: "site", secret: "secret", folder: "folder", mcp: "mcp", ext: "extension" };
 const Grant = z
-  .object({ id: z.string(), agentId: z.string(), item: z.string(), expiresAt: z.string().nullable() })
-  .transform(({ agentId, item, ...grant }) => {
+  .object({
+    id: z.string(),
+    agentId: z.string(),
+    item: z.string(),
+    expiresAt: z.string().nullable(),
+    /** A secret grant names the hosts the owner bound it to (never the value). */
+    hosts: z.array(z.string()).optional(),
+  })
+  .transform(({ agentId, item, hosts, ...grant }) => {
     const [prefix, ...rest] = item.split(":");
     return {
       ...grant,
+      ...(hosts ? { hosts: hosts.map((host) => host.toLowerCase()) } : {}),
       subjectId: agentId,
       ...(rest.length ? { kind: itemKinds[prefix!] ?? prefix!, ref: rest.join(":") } : { kind: "credential", ref: item }),
     };
@@ -17,9 +26,13 @@ const Grant = z
 export type Lease = z.infer<typeof Grant>;
 
 const RequestStatus = z.object({ id: z.string(), status: z.enum(["pending", "decided", "expired"]) });
+/** A secret the owner set up in speaker: its name, the hosts it may go to, and the variable the agent sets. */
+const SecretInfo = z.object({ name: z.string(), hosts: z.array(z.string()), env: z.string() });
+export type SecretInfo = z.infer<typeof SecretInfo>;
 const Snapshot = z.object({
   type: z.literal("snapshot"),
   grants: z.array(Grant),
+  secrets: z.array(SecretInfo).default([]),
   requests: z.array(
     RequestStatus.extend({ agentId: z.string(), what: z.string(), reason: z.string() }).transform(({ agentId, ...request }) => ({
       ...request,
@@ -27,7 +40,12 @@ const Snapshot = z.object({
     })),
   ),
 });
-export type Snapshot = { leases: Lease[]; requests: z.infer<typeof Snapshot>["requests"] };
+export type Snapshot = {
+  leases: Lease[];
+  requests: z.infer<typeof Snapshot>["requests"];
+  /** The secrets a task may ask for; unchanged by a dropped connection. */
+  secrets?: SecretInfo[];
+};
 const Agent = z.object({ id: z.string(), token: z.string() });
 export type RequestBody = { agentId: string; want: string[]; reason: string; duration: string };
 
@@ -54,12 +72,58 @@ export const speakerClient = (config: Config, token: string) => {
     createAgent: async (label: string, agent: string) => Agent.parse(await call("POST", "hosts/agents", { label, agent })),
     deleteAgent: (id: string) => call("DELETE", `hosts/agents/${id}`),
     request: async (body: RequestBody) => RequestStatus.parse(await call("POST", "requests", body)),
+    /** The placeholder speaker issued this agent for a secret it holds (what `/me` shows); only the agent's own token can ask. */
+    placeholder: async (agentToken: string, secret: string) => {
+      const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+        headers: { authorization: `Bearer ${agentToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`speaker GET me returned ${response.status}: ${await response.text()}`);
+      const { secrets = {} } = Me.parse(await response.json());
+      const placeholder = secrets[secret]?.placeholder;
+      if (!placeholder) throw new Error(`speaker shows no active grant of secret ${secret} for this task`);
+      return placeholder;
+    },
   };
 };
+const Me = z.object({ secrets: z.record(z.string(), z.object({ placeholder: z.string() })).optional() });
 export type Speaker = ReturnType<typeof speakerClient>;
 
-/** How long the service may run without reaching speaker before it gives up: at startup, and after losing it. */
-export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, maxBackoffMs: 30_000 };
+/**
+ * The route for requests to a secret's hosts: speaker's HTTPS proxy, which swaps the agent's placeholder for the real
+ * value. bottle-school authenticates as the task's agent (its token is bound to this host's address) and trusts speaker's
+ * proxy certificate authority for the tunnel only; the secret itself never reaches bottle-school.
+ */
+export const speakerProxy = async (config: Config, agentToken: string) => {
+  const { proxyPort } = config.speaker;
+  if (!proxyPort)
+    throw new Error('speaker.proxyPort is not set in config.json: set it to speaker\'s PROXY_PORT to use secrets');
+  const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok)
+    throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
+  return new ProxyAgent({
+    uri: `http://${new URL(config.speaker.url).hostname}:${proxyPort}`,
+    token: `Basic ${Buffer.from(`agent:${agentToken}`).toString("base64")}`,
+    requestTls: { ca: await response.text() },
+  });
+};
+
+/** The shares this host holds and whether the VM can mount each (its directory is readable), for speaker's choice of delivery. */
+export const shareReport = (config: Config) =>
+  Object.entries(config.shareRoots).map(([name, root]) => {
+    try {
+      accessSync(root, constants.R_OK | constants.X_OK);
+      return { name, mount: true };
+    } catch {
+      return { name, mount: false };
+    }
+  });
+
+/**
+ * How long the service may run without reaching speaker: at startup, and after losing it. After `dropMs` without
+ * speaker's snapshots the agents' grants are dropped until it is back.
+ */
+export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, retryMs: 5_000, maxBackoffMs: 30_000, dropMs: 30_000 };
 
 /**
  * Classifies why speaker can't be used: an auth answer (401/403) is fatal — the token is unknown (speaker data reset or a
@@ -89,25 +153,28 @@ const probeSpeaker = async (config: Config, token: string) => {
 };
 
 /**
- * Holds the sandbox host WebSocket. Each snapshot replaces the lease set and request statuses; a closed socket or 30 s without
- * a snapshot clears it. Reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker
- * rejects the token, after SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs
- * of continuous outage. Returns the function that reports the in-effect lease ids.
+ * Holds the sandbox host WebSocket. Each snapshot replaces the lease set and request statuses. When speaker has not been
+ * heard for `dropMs` (30 s: connection lost, or snapshots stopped) every lease is dropped until the next snapshot. It
+ * reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker rejects the token, after
+ * SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs of continuous outage. On
+ * every connection it reports the shares it holds. Returns the function that reports the in-effect lease ids.
  */
 export const watchLeases = (
   config: Config,
   token: string,
   onSnapshot: (snapshot: Snapshot) => void,
   onFatal: (message: string) => void,
+  limits = SPEAKER_LIMITS,
 ) => {
   const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   let socket: WebSocket | undefined;
-  let lastSnapshot = Date.now();
+  let lastHeard = Date.now();
+  let dropped = false;
   let applied = "[]";
   let connected = false;
   let downSince = Date.now();
-  let backoff = 5_000;
+  let backoff = limits.retryMs;
   let stopped = false;
   const fail = (message: string) => {
     if (stopped) return;
@@ -117,20 +184,19 @@ export const watchLeases = (
   const retry = async () => {
     const probe = await probeSpeaker(config, token);
     if (probe.fatal) return fail(probe.message);
-    const limit = connected ? SPEAKER_LIMITS.outageMs : SPEAKER_LIMITS.firstConnectMs;
+    const limit = connected ? limits.outageMs : limits.firstConnectMs;
     const down = Date.now() - downSince;
     if (down >= limit)
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
           `Check that speaker is running and that speaker.url is right in the bottle-school config.json.`,
       );
-    console.error(`${probe.message}; all leases cleared; retrying in ${backoff / 1000} s`);
+    console.error(`${probe.message}; grants are dropped after ${limits.dropMs / 1000} s without speaker; retrying in ${backoff / 1000} s`);
     setTimeout(open, backoff);
-    backoff = Math.min(backoff * 2, SPEAKER_LIMITS.maxBackoffMs);
+    backoff = Math.min(backoff * 2, limits.maxBackoffMs);
   };
-  const send = () => {
-    if (socket?.readyState === WebSocket.OPEN)
-      socket.send(`{"type":"applied","grantIds":${applied}}`);
+  const send = (message: object) => {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
   const open = () => {
     if (stopped) return;
@@ -140,32 +206,33 @@ export const watchLeases = (
       opened = true;
       if (!connected) console.log(`speaker connected at ${config.speaker.url}`);
       connected = true;
-      backoff = 5_000;
-      lastSnapshot = Date.now();
-      send();
+      backoff = limits.retryMs;
+      lastHeard = Date.now();
+      send({ type: "shares", shares: shareReport(config) });
+      send({ type: "applied", grantIds: JSON.parse(applied) });
     };
     socket.onmessage = (event) => {
-      lastSnapshot = Date.now();
-      const { grants, requests } = Snapshot.parse(JSON.parse(String(event.data)));
-      onSnapshot({ leases: grants, requests });
+      lastHeard = Date.now();
+      dropped = false;
+      const { grants, requests, secrets } = Snapshot.parse(JSON.parse(String(event.data)));
+      onSnapshot({ leases: grants, requests, secrets });
     };
     socket.onclose = () => {
       if (opened) downSince = Date.now();
-      onSnapshot({ leases: [], requests: [] });
       void retry();
     };
   };
   setInterval(() => {
-    if (Date.now() - lastSnapshot < 30_000) return;
-    lastSnapshot = Date.now();
-    console.error("no speaker snapshot for 30 s; all leases cleared");
+    if (dropped || Date.now() - lastHeard < limits.dropMs) return;
+    dropped = true;
+    console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
     onSnapshot({ leases: [], requests: [] });
-  }, 5_000).unref();
+  }, Math.min(1_000, limits.dropMs / 4)).unref();
   open();
   return (leaseIds: string[]) => {
     const next = JSON.stringify([...leaseIds].sort());
     if (next === applied) return;
     applied = next;
-    send();
+    send({ type: "applied", grantIds: leaseIds });
   };
 };

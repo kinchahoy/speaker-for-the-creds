@@ -38,7 +38,7 @@ then start the service.`,
     help: `usage: ${SELF} run [--template T] [--name NAME] [--model M] [--prompt TEXT] [--hours H]
                      [--attended | --unattended]
 
-Starts a task. --template defaults to offline, which needs no speaker bundle approval. With --prompt the
+Starts a task. --template defaults to offline, which asks speaker for nothing at launch. With --prompt the
 task runs once and archives when Pi writes /output/DONE. --hours sets the calendar deadline.
 An attended task expects you at its terminal: Pi may ask you questions there. An unattended task is told
 nobody is watching, so it records assumptions instead of asking. The default is attended without --prompt

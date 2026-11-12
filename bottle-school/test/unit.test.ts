@@ -3,9 +3,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { Catalog, writeGuestConfig } from "../src/pi.ts";
-import { loadConfig } from "../src/config.ts";
-import { attendedFor, folderRef, ipv4Destination, loadTemplates, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
+import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
+import { assertNoHostSecrets, loadConfig } from "../src/config.ts";
+import { attendedFor, folderRef, ipv4Destination, launchRequest, loadTemplates, secretHosts, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
+import { inForce } from "../src/tasks.ts";
+import type { Lease } from "../src/speaker.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace-runs.ts";
 
 const roots: string[] = [];
@@ -88,9 +90,13 @@ test("speaker exception permits agent routes only at the configured origin", () 
 });
 
 test("enforcer parses refs and rejects malformed secrets and folder modes", () => {
-  assert.deepEqual(secretRef.parse("KEY@example.com,*.example.org"), { name: "KEY", hosts: ["example.com", "*.example.org"] });
-  for (const ref of ["KEY", "KEY@", "KEY@a@b", "KEY@https://example.com", "KEY@example.com,"])
+  // A secret grant names a secret in speaker and arrives with the hosts speaker bound it to.
+  assert.ok(secretRef.safeParse("GITHUB_TOKEN").success);
+  assert.ok(secretHosts.safeParse(["api.github.com", "*.example.org"]).success);
+  for (const ref of ["", "KEY@example.com", "KEY@", "KEY.x", "two words"])
     assert.equal(secretRef.safeParse(ref).success, false, ref);
+  for (const hosts of [[], undefined, ["https://example.com"], ["Example.com"], [""]])
+    assert.equal(secretHosts.safeParse(hosts).success, false, JSON.stringify(hosts));
   assert.ok(folderRef.safeParse("documents:rw").success);
   assert.equal(folderRef.safeParse("documents:unknown").success, false);
 });
@@ -261,15 +267,19 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.deepEqual([...loadTemplates(path).keys()], ["developer", "github-read", "loop", "offline", "packages", "research"]);
   writeFileSync(path, JSON.stringify([templates[0], templates[0]]));
   assert.throws(() => loadTemplates(path), /repeat an id/);
-  writeFileSync(path, JSON.stringify([{ ...templates[0], bundleDuration: "1h" }]));
-  assert.equal(loadTemplates(path).get(templates[0].id)?.bundleDuration, "1h");
-  writeFileSync(path, JSON.stringify([{ ...templates[0], bundleDuration: "forever" }]));
+  writeFileSync(path, JSON.stringify([{ ...templates[0], duration: "1h" }]));
+  assert.equal(loadTemplates(path).get(templates[0].id)?.duration, "1h");
+  writeFileSync(path, JSON.stringify([{ ...templates[0], duration: "forever" }]));
   assert.throws(() => loadTemplates(path));
 });
 
 test("guest configuration loads the access-and-creds skill alone and the curated MCP tools", () => {
   const config = loadConfig(writeConfig());
-  const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
+  // An MCP server that runs inside the VM; remote ones are speaker services and not catalog entries.
+  const catalog = Catalog.parse({
+    mcps: { context7: { label: "Docs", transport: "stdio", command: "/opt/mcp/context7", args: [], tools: ["resolve-library-id", "query-docs"], write: false } },
+    extensions: {},
+  });
   const directory = join(config.configRoot, "guest");
   writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, new Map(), [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
@@ -325,4 +335,100 @@ test("attended mode loads ask-user-question; extension leases load catalog exten
   assert.ok(loop.tools.includes("schedule_wakeup") && loop.tools.includes("Monitor"));
   assert.match(loop.system, /## Extension pi-cc-loop[\s\S]*maxFires[\s\S]*durable: true/);
   assert.throws(() => write(false, ["nope"]), /unknown extension nope/);
+});
+
+const limits = { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 };
+
+test("a template's want, label and duration become the task's first request", () => {
+  const dev = Template.parse({ id: "dev", label: "Develop things", limits, want: ["group:developer", "site:pypi.org"], duration: "1d" });
+  assert.deepEqual(launchRequest(dev, "agent-1"), {
+    agentId: "agent-1",
+    want: ["group:developer", "site:pypi.org"],
+    reason: "launch template dev: Develop things",
+    duration: "1d",
+  });
+  // A hosted model's key is a speaker secret and joins the same request, without repeating an item.
+  assert.deepEqual(launchRequest(dev, "agent-1", ["secret:OPENROUTER", "site:pypi.org"])?.want, [
+    "group:developer",
+    "site:pypi.org",
+    "secret:OPENROUTER",
+  ]);
+  // No want, no request; the default duration is speaker's default.
+  const bare = Template.parse({ id: "bare", label: "Bare", limits });
+  assert.equal(launchRequest(bare, "agent-1"), undefined);
+  assert.equal(bare.duration, "2h");
+  // The old single `bundle` is gone: an old templates.json fails loudly instead of asking for nothing.
+  assert.throws(() => Template.parse({ id: "old", label: "Old", limits, bundle: "developer" }), /bundle/);
+
+  const shipped = loadTemplates(new URL("../templates.json", import.meta.url).pathname);
+  assert.deepEqual(shipped.get("developer")?.want, ["group:developer"]);
+  assert.deepEqual(shipped.get("offline")?.want, []);
+});
+
+test("grants count as in force when installed, MCP and extension ones once Pi runs them, expired ones never", () => {
+  const lease = (id: string, kind: string, ref: string, expiresAt: string | null = null): Lease => ({ id, kind, ref, expiresAt, subjectId: "s" });
+  const leases = [
+    lease("site", "site", "example.com"),
+    lease("secret", "secret", "GITHUB_TOKEN"),
+    lease("folder", "folder", "documents"),
+    lease("mcp", "mcp", "docs"),
+    lease("ext", "extension", "pi-web-access"),
+    lease("gone", "site", "old.example", "2000-01-01T00:00:00Z"),
+  ];
+  assert.deepEqual(inForce(leases, { mcp: [], extensions: [] }), ["site", "secret", "folder"]);
+  assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: [] }), ["site", "secret", "folder", "mcp"]);
+  assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: ["pi-web-access"] }), ["site", "secret", "folder", "mcp", "ext"]);
+});
+
+test("bottle-school refuses to start while a secrets file or BROKER_SECRET variable is left on the host", () => {
+  const root = mkdtempSync(join(tmpdir(), "bottle-secrets-"));
+  roots.push(root);
+  assertNoHostSecrets({ configRoot: root }, {});
+  assert.throws(() => assertNoHostSecrets({ configRoot: root }, { BROKER_SECRET_OPENROUTER: "x" }), /add BROKER_SECRET_OPENROUTER to speaker's Setup/);
+  writeFileSync(join(root, "secrets.env"), "BROKER_SECRET_X=y\n");
+  assert.throws(() => assertNoHostSecrets({ configRoot: root }, {}), /secrets\.env/);
+});
+
+test("remote MCP servers are not catalog entries; the shipped catalog keeps only in-VM servers and extensions", () => {
+  const shipped = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
+  assert.deepEqual(shipped.mcps, {});
+  assert.ok(shipped.extensions["pi-web-access"]);
+  const remote = { label: "Docs", transport: "streamable-http", url: "https://mcp.example.com/mcp", tools: ["query"], write: false };
+  assert.throws(() => Catalog.parse({ mcps: { docs: remote }, extensions: {} }), /only MCP servers that run inside the VM/);
+});
+
+test("Pi's instructions name the mcp and ext entries and the secrets, and say how to use a secret", () => {
+  const catalog = Catalog.parse({
+    mcps: { filesystem: { label: "Files", transport: "stdio", command: "/opt/mcp/fs", args: [], tools: ["read_file"], write: false } },
+    extensions: JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")).extensions,
+  });
+  const secrets = [{ name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], env: "GH_TOKEN" }];
+  const note = systemNote({ name: "t", attended: false }, [], catalog, [], secrets);
+  assert.match(note, /- mcp:filesystem: Files; tools: read_file/);
+  assert.match(note, /- ext:pi-web-access: /);
+  assert.match(note, /- secret:GITHUB_TOKEN: set GH_TOKEN to its placeholder; used for api\.github\.com, github\.com/);
+  assert.match(note, /## Using a secret[\s\S]*secrets\.<NAME>[\s\S]*placeholder[\s\S]*GH_TOKEN=<placeholder> gh pr list[\s\S]*proxy/);
+  // Remote MCP servers are speaker services.
+  assert.match(note, /`<service>\.read` or `<service>\.full`[\s\S]*\$SPEAKER_URL\/<service>[\s\S]*never `mcp:` items/);
+  // With nothing set up the lists say so.
+  assert.match(systemNote({ name: "t", attended: false }, [], { mcps: {}, extensions: {} }, []), /## Secrets you can ask for\n\n- none/);
+});
+
+test("a hosted model's key in models.json is the placeholder speaker issued, never a secret", () => {
+  const base = loadConfig(writeConfig());
+  const config = {
+    ...base,
+    hostedProviders: [
+      { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1", host: "openrouter.ai", credential: "OPENROUTER", models: [{ id: "m", label: "M" }] },
+    ],
+  };
+  const catalog = { mcps: {}, extensions: {} };
+  const task = { name: "t", model: "openrouter/m", attended: false };
+  const apiKey = (keys: Map<string, string>, name: string) => {
+    const directory = join(base.configRoot, name);
+    writeGuestConfig(directory, config, catalog, task, keys, [], [], []);
+    return JSON.parse(readFileSync(join(directory, "models.json"), "utf8")).providers.openrouter.apiKey;
+  };
+  assert.equal(apiKey(new Map([["OPENROUTER", "speaker-placeholder-abc"]]), "granted"), "speaker-placeholder-abc");
+  assert.match(apiKey(new Map(), "waiting"), /not-granted-yet/);
 });

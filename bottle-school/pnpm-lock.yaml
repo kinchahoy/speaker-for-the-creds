@@ -163,7 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@earendil-works/gondolin@0.14.0': 10d47ef0b77f0789bd0ed20ded78e4752b4d9dc2bb800b2714a7ade329743d39
+  '@earendil-works/gondolin@0.14.0': 3eb397d054cce55b6f1a463f32ae3bb4f135df416aa53d201aca3f81b42e199b
 
 importers:
 
@@ -171,13 +171,16 @@ importers:
     dependencies:
       '@earendil-works/gondolin':
         specifier: 0.14.0
-        version: 0.14.0(patch_hash=10d47ef0b77f0789bd0ed20ded78e4752b4d9dc2bb800b2714a7ade329743d39)
+        version: 0.14.0(patch_hash=3eb397d054cce55b6f1a463f32ae3bb4f135df416aa53d201aca3f81b42e199b)
       '@hono/node-server':
         specifier: ^2.1.5
         version: 2.1.5(hono@4.13.16)
       hono:
         specifier: ^4.13.16
         version: 4.13.16
+      undici:
+        specifier: 6.29.1
+        version: 6.29.1
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -401,7 +404,7 @@ snapshots:
   '@earendil-works/gondolin-krun-runner-linux-x64@0.14.0':
     optional: true
 
-  '@earendil-works/gondolin@0.14.0(patch_hash=10d47ef0b77f0789bd0ed20ded78e4752b4d9dc2bb800b2714a7ade329743d39)':
+  '@earendil-works/gondolin@0.14.0(patch_hash=3eb397d054cce55b6f1a463f32ae3bb4f135df416aa53d201aca3f81b42e199b)':
     dependencies:
       cbor2: 2.4.1
       ssh2: 1.17.0

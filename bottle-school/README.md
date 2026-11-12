@@ -29,14 +29,15 @@ mise run doctor
 Host-specific values (model endpoint, speaker URL, VM backend) live only in the gitignored `bottle-school/.env` and `bottle-school/config.json`. mise loads `.env` for every task. `mise run setup` writes `config.json` and its directories under `BOTTLE_HOME` (default `~/.local/share/bottle-school`).
 {.ai}
 
-To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json`, `bottle-school/catalog.json`, and `bottle-school/secrets.env.example` into `configRoot` as `templates.json`, `catalog.json`, and `secrets.env`. Protect secrets with mode 600. The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
+To configure by hand instead, copy `config.example.json` to `config.json`. Choose existing absolute directories for `configRoot`, `stateRoot`, and `outputRoot`; make them writable by the service account. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`. bottle-school holds no secrets: see "Secrets and speaker's proxy". The owner must migrate older `templates/` and `catalog/` configurations to these files before starting this version.
 {.ai}
 
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
 - `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability.
+- `speaker.proxyPort` is speaker's `PROXY_PORT`, on the same host as `speaker.url`. Set it to use `secret:` items; without it a task that is granted a secret cannot reach the secret's hosts (the request is refused with that message).
 - `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.
-- `shareRoots` defines the host folders a lease may expose. Begin with no sensitive shares and one task.
+- `shareRoots` defines the host folders a grant may expose. Begin with no sensitive shares and one task.
 - `PI_V2_CONFIG` selects the service configuration; `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
 
 <!-- author: ai -->
@@ -109,7 +110,7 @@ mise run bottle-cli help run         # per-command usage (mise intercepts --help
 Ctrl-\ detaches from dtach; Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when complete. The owner must verify herdr and terminal behavior in a real guest.
 {.ai}
 
-A task is attended (the owner is at its terminal) or unattended (nobody is). Without `--prompt` a task defaults to attended; with one, to unattended. `--attended` or `--unattended` overrides that, and a template's `"attended"` fixes it; a flag that contradicts the template is refused. An attended task loads the ask-user-question extension (`ask_user_question` tool) regardless of its bundle, because it adds presence rather than access. An unattended task does not load it, and its system prompt says that nobody is watching: the agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which the owner answers in speaker. Mode does not change archival: a task with a prompt archives when Pi writes `/output/DONE`, and every task archives at its deadline.
+A task is attended (the owner is at its terminal) or unattended (nobody is). Without `--prompt` a task defaults to attended; with one, to unattended. `--attended` or `--unattended` overrides that, and a template's `"attended"` fixes it; a flag that contradicts the template is refused. An attended task loads the ask-user-question extension (`ask_user_question` tool) regardless of its template, because it adds presence rather than access. An unattended task does not load it, and its system prompt says that nobody is watching: the agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which the owner answers in speaker. Mode does not change archival: a task with a prompt archives when Pi writes `/output/DONE`, and every task archives at its deadline.
 {.ai}
 
 <!-- author: ai -->
@@ -118,24 +119,42 @@ A task is attended (the owner is at its terminal) or unattended (nobody is). Wit
 
 <sub>AI-written</sub>
 
-`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, an optional `attended` that fixes the launch mode, and an optional speaker group (`bundle`) with an optional `bundleDuration` (`30m`, `1h`, `2h`, `1d` or `30d`; default `1d`) for the launch request. The file holds the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` contains an array of named templates. Each entry has `id`, `label`, `limits`, an optional `attended` that fixes the launch mode, a `want` list and a `duration`. The `want` list holds items and groups (`group:developer`, `site:pypi.org`, `notes.read`); `label` and `duration` are the task's label and the length it asks for (`30m`, `1h`, `2h`, `1d` or `30d`; default `2h`). Together they become the task's first request to speaker: one card, labelled with the template's `label` (or the `--name` given at launch) and the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing (the `offline` preset). The file holds the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation, and the old single `bundle` and `bundleDuration` keys fail it too: replace them with `want: ["group:<name>"]` and `duration`.
 {.ai}
 
-**Templates vs bundles.** A template is the runtime profile bottle-school owns: VM size, deadline, model-request cap, attended mode, and which bundle to ask for at launch. A bundle is defined in speaker and is everything the agent may use: sites, secrets, folders, MCP servers, and Pi extensions, approved together by one owner decision. To give agents a new ability, add it to a bundle (or let the agent request it); to change how big or how long a task is, edit the template.
+**Templates vs groups.** A template is the runtime profile bottle-school owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items the owner approves together. To change what tasks start with, edit a template's `want` or the group in speaker; to change how big or how long a task is, edit the template's limits.
 {.ai}
 
-Pi starts before the owner decides on the launch bundle. When an `mcp` or `extension` lease arrives, Pi restarts at its next idle boundary, resumes the same session, and gains the new tools; it does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the bundle's extensions, and if it settles before approval it waits idle until the owner attaches or the deadline passes. Approve the launch bundle promptly for unattended templates such as `loop`.
+The task starts at once; it does not wait for the first request. When an `mcp` or `extension` grant arrives, Pi restarts at its next idle boundary, resumes the same session, and gains the new tools; it does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions, and if it settles before approval it waits idle until the owner attaches or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline; optional `maxModelRequests` caps model request count.
 - `workGiB` is a launch-time free-space check. The owner must enforce work/output quotas through the host filesystem before unattended tasks share a disk with other services.
-- `catalog.json` contains `mcps` and `extensions`. Remote MCP entries name an HTTPS endpoint, advertised tools, write authority, and optional credential. Extension entries name a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), and an optional system-prompt note. An `extension <id>` lease loads one; unknown ids are skipped like other unsupported leases. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
-- The guest image loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions` in every task. Every other Pi package is pinned in `guest/mise-config.toml` and loads only through a lease or, for ask-user-question, attended mode.
-- The shipped MCP entries are Parallel Search (`web_search`, `web_fetch`) and Context7 (`resolve-library-id`, `query-docs`). The owner must review server authority and verify tool names before use. These are whole-server grants; the broker does not filter individual tool arguments.
-- Secrets use `BROKER_SECRET_<NAME>` in `configRoot/secrets.env` or the environment. The guest receives placeholders; a secret lease binds substitution to approved hosts.
-- The guest calls speaker with its subject-token placeholder. Credential-backed homelab APIs pass through speaker's proxy.
-- Each snapshot replaces live leases. The broker checks expiry at use and clears leases when the channel closes or snapshots stop. It skips unsupported refs.
-- Sites, secrets, and folders apply live. MCP and extension changes take effect after Pi restarts at idle. A folder lease exposes a whole configured share, read-only unless its ref ends in `:rw`.
+- `catalog.json` contains `mcps` and `extensions`. An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command (`transport: "stdio"`, an absolute `command`, `args`, the advertised `tools` and whether it can write). **Remote and hosted MCP servers are not catalog entries:** they are speaker services. The owner adds one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search), and a task asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. The shipped catalog therefore has no `mcps` entries; a remote entry fails validation with that explanation. Extension entries name a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), and an optional system-prompt note. An `ext:<id>` grant loads one; unknown ids are skipped like other unsupported grants. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
+- The guest image loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions` in every task. Every other Pi package is pinned in `guest/mise-config.toml` and loads only through a grant or, for ask-user-question, attended mode.
+- Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets the owner set up in speaker (names, hosts and the variable each one uses; speaker sends this list with its grant snapshots), the `<service>.read` / `.full` form for homelab APIs and remote MCP servers, and how to use a secret.
+- The guest calls speaker with its agent-token placeholder; Gondolin substitutes the token only for speaker's host. Credential-backed homelab APIs pass through speaker's service proxy.
+- Each snapshot from speaker replaces the live grants. A grant counts as in force for the agent once bottle-school reports it: sites, secrets and folders apply the moment they are installed; an MCP server or extension only after Pi has restarted with it. If bottle-school hears nothing from speaker for 30 seconds (connection lost, or snapshots stopped) it drops all of its tasks' grants until the connection is back. A task's grants therefore end within 30 seconds of losing speaker; a brief blip changes nothing. It skips unsupported refs.
+- Sites, secrets, and folders apply live. MCP and extension changes take effect after Pi restarts at idle. A folder grant exposes a whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
+- On every connection bottle-school tells speaker which shares it holds (`shareRoots`, plus `archive`) and whether the VM can mount each one (its directory is readable). Speaker records this so it can choose between a VM mount and delivery over SSH for `folder:` items.
+
+<!-- author: ai -->
+
+## Secrets and speaker's proxy
+
+<sub>AI-written</sub>
+
+bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` variables are retired (startup stops with a message while either is present), and Gondolin's own placeholder substitution is used for one thing only: the task's speaker token. The owner adds each secret once in speaker's Setup with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`); a task asks for `secret:<NAME>`, and the card shows the hosts.
+{.ai}
+
+**The route.** When speaker's grant snapshot names a secret grant it carries the secret's hosts, not its value. bottle-school opens those hosts for the VM and sends every request the VM makes to them through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README): the guest's TLS is still terminated by Gondolin's certificate authority, which the VM already trusts, and Gondolin's upstream connection for that request is an HTTP CONNECT tunnel to the proxy, authenticated as the task's agent (bottle-school holds that token; the guest has only a placeholder) and trusting speaker's proxy CA for the tunnel only. Speaker checks the grant on every request, swaps the agent's placeholder for the value in the `Authorization` header (also inside Basic credentials, as `git` sends them), and forwards to the real host. Revoke or expiry makes speaker answer 403 at once; bottle-school also drops the route when its grant goes. The guest needs no proxy settings and no extra certificate: Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it.
+{.ai}
+
+**Why this route.** Gondolin supports it with a small patch: a hook (`httpHooks.upstreamDispatcher`, about ten lines in `patches/`) that lets bottle-school choose the upstream dispatcher per request. The alternatives were worse: pointing `HTTPS_PROXY` in the guest at speaker needs a raw TCP route from the VM to speaker's proxy port (Gondolin's `tcp.hosts`), puts the real agent token inside the VM because the CONNECT line is not HTTP that Gondolin can rewrite, and needs speaker's CA in the guest; and Gondolin's `fetch` option replaces its IP-checked upstream dispatcher for all traffic, not only for secret hosts. The cost, as in speaker's design, is that all traffic to a secret's hosts (including large `git clone`s) passes through speaker. If speaker's proxy is unreachable the request is refused, never sent directly.
+{.ai}
+
+**Hosted model providers.** A hosted provider's key is a speaker secret like any other: set `hostedProviders[].credential` to the speaker secret's name. A task using a hosted model adds `secret:<credential>` to its first request; once granted, bottle-school asks speaker for the task's placeholder, writes it into `models.json` and restarts Pi at idle. The model host must be one of the secret's allowed hosts in speaker's Setup. Until then Pi's key reads `speaker-secret-<NAME>-not-granted-yet`, so a hosted model's first turn can fail before the owner approves.
+{.ai}
 
 <!-- author: ai -->
 
@@ -143,13 +162,13 @@ Pi starts before the owner decides on the launch bundle. When an `mcp` or `exten
 
 <sub>AI-written</sub>
 
-The `research` bundle grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle-school writes the extension's `~/.pi/agent/web-search.json` (copied by `pi-launch` like `settings.json`): search uses only keyless Exa through its hosted MCP endpoint, pages are fetched directly over HTTP, and hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site` lease for its host, so the agent requests hosts beyond Wikipedia and arXiv. The bundle no longer includes `mcp parallel-search`: it duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site lease. The catalog entry remains for explicit requests.
+The `research` group (the `research` template asks for it) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle-school writes the extension's `~/.pi/agent/web-search.json` (copied by `pi-launch` like `settings.json`): search uses only keyless Exa through its hosted MCP endpoint, pages are fetched directly over HTTP, and hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv. The group does not include Parallel Search: it duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site grant. It is a speaker service (`parallel-search.read`) the agent can request explicitly.
 {.ai}
 
-No search API keys are configured. A keyed provider would use a bottle-school sandbox secret: put `BROKER_SECRET_<NAME>` in `secrets.env`, have `writeGuestConfig` set the provider's key field (for example `exaApiKey`) to that secret's guest placeholder and allow the provider, and approve `secret <NAME>@<provider host>` in speaker. The guest only ever sees the placeholder; Gondolin substitutes the real key for requests to the approved host.
+No search API keys are configured. A keyed provider would use a speaker secret: add it in speaker's Setup with the provider's host, have `writeGuestConfig` set the provider's key field (for example `exaApiKey`) to the task's placeholder for that secret (see `GET /_speaker/me`), and approve `secret:<NAME>`. The guest only ever sees the placeholder; speaker's proxy substitutes the real key for requests to the provider's host.
 {.ai}
 
-The `loop` template is unattended, runs at most 24 hours and 300 model requests, and requests the `loop` bundle (pi-cc-loop and pi-cc-monitor) for one day. Pi then wakes itself with `/loop`, cron jobs, `schedule_wakeup`, or `Monitor`. bottle-school never archives a task for being idle, so a self-waking Pi keeps running between wakes; `/output/DONE` or the deadline still ends it. Durable jobs live in `/work/.pi/scheduled_tasks.json`: they survive Pi restarts within the task and disappear with the work directory at archival. Persisting jobs across tasks through a folder lease is future work.
+The `loop` template is unattended, runs at most 24 hours and 300 model requests, and asks for `group:loop` (pi-cc-loop and pi-cc-monitor) for one day. Pi then wakes itself with `/loop`, cron jobs, `schedule_wakeup`, or `Monitor`. bottle-school never archives a task for being idle, so a self-waking Pi keeps running between wakes; `/output/DONE` or the deadline still ends it. Durable jobs live in `/work/.pi/scheduled_tasks.json`: they survive Pi restarts within the task and disappear with the work directory at archival. Persisting jobs across tasks through a folder grant is future work.
 {.ai}
 
 <!-- author: ai -->
@@ -158,30 +177,26 @@ The `loop` template is unattended, runs at most 24 hours and 300 model requests,
 
 <sub>AI-written</sub>
 
-- Templates no longer have `plugins`, and the catalog's `plugins` became `extensions`. Rerun `mise run setup`, or copy `templates.json` and `catalog.json` into `configRoot` again; the old files fail validation at startup.
-- The sandbox host must declare the `ext` kind. Speaker fixes a sandbox host's kinds at registration, so run `mise run bottle-cli register`, approve the new sandbox host in speaker `/admin`, restart bottle-school, and remove the old sandbox host.
-- Rebuild the guest image so `/opt/pi-plugins` exists, and update speaker's `bundles.json` from `speaker/bundles.example.json`.
+- **Secrets move to speaker.** Add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees), delete `secrets.env` and the `BROKER_SECRET_*` variables (startup refuses to run while they exist), set `speaker.proxyPort` in `config.json` to speaker's `PROXY_PORT`, and publish that port. A grant for `secret:<NAME>@host` in old groups becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now be a speaker secret.
+- **Templates.** `bundle` becomes `want: ["group:<name>"]` and `bundleDuration` becomes `duration`; copy the new `templates.json` into `configRoot` or edit yours (the old keys fail validation).
+- **Catalog.** Remove remote MCP entries from `catalog.json` (`mcps` keeps only servers that run inside the VM) and add them in speaker's Setup as services (tick "MCP server"); replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
+- **Gondolin patch.** `pnpm install` applies the updated `patches/@earendil-works__gondolin@0.14.0.patch` (it adds `httpHooks.upstreamDispatcher`). The sandbox host's registered item kinds are unchanged.
 
 <!-- author: ai -->
 
-## Who receives bottle-school credentials
+## Who receives credentials
 
 <sub>AI-written</sub>
 
-| Credential path | What the guest sees | Who receives the real value |
+| Credential path | What the guest sees | Who holds the real value |
 | --- | --- | --- |
-| Hosted model provider | A per-task placeholder in Pi's model config | The configured model API, after Gondolin substitutes it for requests to the approved provider host |
-| Remote HTTP MCP with `credential` | A per-task placeholder in the MCP request header | The configured MCP server, after Gondolin substitutes it for requests to the approved MCP host |
-| Speaker agent token | A per-task placeholder used for Speaker API calls | Speaker, and only on the configured agent-facing routes |
+| A speaker secret (`secret:<NAME>`, including a hosted model provider's key) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle-school never has it |
+| Remote MCP server | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
+| Speaker agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle-school, which created the agent; Gondolin substitutes it only for speaker's host. It is bound to this host's address |
 | Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
 | stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
 
-For hosted models and credentialed HTTP MCPs, the host keeps the real values from `secrets.env` or its process
-environment. Gondolin replaces placeholders only after the live lease policy permits the destination. The
-remote model API or MCP server receives the real credential and request content. An MCP server also receives
-the tool arguments and results sent to it. Stdio MCPs and guest plugins run inside the VM with access to guest
-data; do not put raw secrets in their command, arguments, or configuration. Placeholder substitution keeps
-the real value off the guest, but it does not prevent an approved destination from using the granted access.
+The destination of a secret's requests receives the real credential and the request content; speaker's proxy logs agent, host, method, path and status, never the value or bodies. Stdio MCPs and guest plugins run inside the VM with access to guest data; do not put raw secrets in their command, arguments, or configuration. Placeholder substitution keeps the real value off the guest and off bottle-school, but it does not prevent an approved destination from using the granted access. If bottle-school were taken over it could make requests through speaker only while the grant is active, only to the secret's hosts, and every request is logged; it cannot copy the secret.
 {.ai}
 
 <!-- author: ai -->
@@ -208,13 +223,13 @@ The owner deletes archives manually. An archival failure preserves the work tree
 
 <sub>AI-written</sub>
 
-Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates, trace reconstruction, and the speaker channel. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. Check placeholder substitution and certificate inheritance through dtach.
+Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network/ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop) and the secret route against a real speaker proxy. They do not boot a guest. Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. In particular check, with `PROXY_PORT` set in speaker and `speaker.proxyPort` here: `gh` and `git` with a granted secret through Gondolin's patched upstream hook (placeholder in, real value only at the real host, a `git clone` through speaker), a revoke ending it, the model-request capture for routed requests, and certificate inheritance through dtach.
 {.ai}
 
 - A missing `qemu-img` or `setsid` stops startup with a clear error.
 - With `PI_V2_VMM=krun`, a missing kernel or incompatible Krun runner prevents guest creation.
 - `speaker.token is missing` means the owner must register the sandbox host first.
-- A blocked guest request returns 403; the agent requests the required capability. An expired or revoked grant also blocks subsequent use.
+- A blocked guest request returns 403; the agent requests the required capability. An expired or revoked grant also blocks subsequent use. A secret host blocked with "speaker.proxyPort is not set" or "speaker's proxy certificate is unavailable" in the policy events means speaker's proxy is not configured, not enabled (`PROXY_PORT`) or locked.
 - The service archives open tasks on SIGINT or SIGTERM. The owner must inspect the archive outcome before discarding recovery files.
 
 <!-- author: ai -->
@@ -227,8 +242,8 @@ The owner trusts the host, broker, sandbox runtime, pinned image, and peers that
 {.ai}
 
 - The host enforces lease expiry, revocation, network access, and shared-folder permissions independently of Pi. The owner must validate those boundaries in a real guest before deployment.
-- Every approved destination can receive anything the guest can read. Placeholder substitution protects secret values; it does not prevent misuse of granted authority.
+- Every approved destination can receive anything the guest can read. Placeholder substitution in speaker's proxy protects secret values; it does not prevent misuse of granted authority.
 - The speaker exception permits the configured origin and subject-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
-- Speaker keeps temporary leases in memory; a restart ends them. Bottle-school clears leases when its channel closes or snapshots stop.
+- Speaker keeps temporary grants in memory; a restart ends them. Bottle-school drops its tasks' grants after 30 seconds without word from speaker.
 - The owner must provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or individual generation duration.
 - The owner must review artifacts before executing or promoting them onto the host. Archives may contain private task content.

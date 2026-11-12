@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { BlockList } from "node:net";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import type { Config } from "./config.ts";
-import type { Credential } from "./credentials.ts";
+import type { Dispatcher } from "undici";
 import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./leases.ts";
 
 export type HttpResponseRecord = {
@@ -46,6 +46,7 @@ export type CapturedBody = {
 /** The live lease view every Gondolin hook reads. Each speaker snapshot replaces these entries; every use checks expiry. */
 export type Live = {
   hosts: (Timed & { host: string })[];
+  /** Granted `secret:` items and the hosts speaker bound them to. Requests to these hosts go through speaker's proxy. */
   secretHosts: (Timed & { name: string; hosts: string[] })[];
   shares: Map<string, Timed & { provider: VirtualProvider }>;
   events: { at: string; text: string }[];
@@ -86,7 +87,7 @@ const capturedHeaders = new Set([
 const safeHeaders = (headers: Headers) =>
   Object.fromEntries([...headers].filter(([name]) => capturedHeaders.has(name)));
 
-export const note = (live: Live, text: string) => {
+export const note = (live: Pick<Live, "events">, text: string) => {
   live.events.push({ at: new Date().toISOString(), text });
   if (live.events.length > 2_000) live.events.splice(0, live.events.length - 2_000);
 };
@@ -197,17 +198,48 @@ internal.addAddress("::1", "ipv6");
 const isInternalIp = (ip: string) => internal.check(ip, ip.includes(":") ? "ipv6" : "ipv4");
 
 /**
- * Boots the one pinned guest image for a task. Every destination is denied until the live policy view
- * allows it, and each credential reaches the guest as a placeholder Gondolin substitutes host-side.
+ * Where requests to a granted secret's hosts go: through speaker's proxy, which holds the value and swaps the agent's
+ * placeholder in. `allow` answers for those hosts (undefined for every other host, which the rest of the policy decides);
+ * `dispatcher` is the upstream route Gondolin must use for them. The proxy connection is made at first use.
+ */
+export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: () => Promise<Dispatcher>) => {
+  let viaSpeaker: Dispatcher | undefined;
+  const covered = (host: string) =>
+    hostMatches(unexpired(live.secretHosts).flatMap((entry) => entry.hosts), host);
+  return {
+    allow: async (host: string) => {
+      if (!covered(host)) return undefined;
+      try {
+        viaSpeaker ??= await proxy();
+        return true;
+      } catch (error) {
+        // Never fall back to a direct request: the placeholder would reach the real host instead of the secret.
+        note(live, `blocked a request to ${host}: ${(error as Error).message}`);
+        return false;
+      }
+    },
+    dispatcher: (host: string) => {
+      if (!covered(host)) return undefined;
+      if (!viaSpeaker) throw new Error(`speaker's proxy is not connected; refusing a direct request to ${host}`);
+      return viaSpeaker;
+    },
+    close: async () => void (await viaSpeaker?.close()),
+  };
+};
+
+/**
+ * Boots the one pinned guest image for a task. Every destination is denied until the live policy view allows it. The
+ * agent's speaker token reaches the guest as a placeholder Gondolin substitutes for speaker's host only. Secrets are not
+ * handled here at all: requests to a granted secret's hosts go through speaker's proxy (`proxy`), which holds the value.
  */
 export const bootGuest = async (
   config: Config,
   live: Live,
   limits: { cpus: number; memoryMiB: number; rootfsGiB: number },
   paths: { work: string; artifacts: string; guestConfig: string; capture: string },
-  credentials: Map<string, Credential>,
   env: Record<string, string>,
   speaker: { url: string; token: string },
+  proxy: () => Promise<Dispatcher>,
 ): Promise<Guest> => {
   const speakerUrl = new URL(speaker.url);
   const speakerHost = speakerUrl.hostname;
@@ -220,26 +252,14 @@ export const bootGuest = async (
     ]);
   const captureDir = paths.capture;
   mkdirSync(captureDir, { recursive: true });
-  const {
-    httpHooks,
-    secretManager,
-    env: secretPlaceholders,
-  } = createHttpHooks({
+  const route = secretRoute(live, proxy);
+  const { httpHooks, env: secretPlaceholders } = createHttpHooks({
     // Request policy supplies the live domain allow-set. This wildcard keeps Gondolin's IP guard
     // active after that policy permits a host; an empty host list would deny every DNS result.
     allowedHosts: ["*"],
     allowedInternalHosts: ["*"],
     blockInternalRanges: true,
-    // Leases bind each secret to hosts; isRequestAllowed refreshes them before Gondolin swaps a value in.
-    secrets: {
-      ...Object.fromEntries(
-        [...credentials.values()].map((credential) => [
-          credential.name,
-          { hosts: [], value: credential.value, placeholder: credential.placeholder },
-        ]),
-      ),
-      SPEAKER_TOKEN: { hosts: [speakerHost], value: speaker.token },
-    },
+    secrets: { SPEAKER_TOKEN: { hosts: [speakerHost], value: speaker.token } },
     isIpAllowed: (info) => {
       // Deny every IPv6 destination until we implement and test its private-range policy.
       if (!ipv4Destination(info.ip)) return false;
@@ -249,13 +269,12 @@ export const bootGuest = async (
       }
       return true;
     },
-    isRequestAllowed: (request) => {
+    isRequestAllowed: async (request) => {
       const url = new URL(request.url);
       if (url.hostname === speakerHost) return speakerRequestAllowed(speakerUrl, url, request.method);
-      for (const name of credentials.keys())
-        secretManager.updateSecret(name, {
-          hosts: unexpired(live.secretHosts).filter((entry) => entry.name === name).flatMap((entry) => entry.hosts),
-        });
+      // A secret's hosts are also in the live host list; this only makes the proxy route fail closed. A hosted model
+      // provider is both, so the model request cap below still counts it.
+      if ((await route.allow(url.hostname)) === false) return false;
       const localOrigin = getLocalOrigin();
       const guestOrigin = `http://${config.localModel.guestHost}`;
       if (getModelOrigins().has(url.origin) && !countModelRequest(live)) return false;
@@ -272,6 +291,8 @@ export const bootGuest = async (
       return new Request(url, request);
     },
   });
+  // A request to a granted secret's hosts goes through speaker's proxy, which swaps the placeholder for the value.
+  httpHooks.upstreamDispatcher = (request) => route.dispatcher(new URL(request.url).hostname);
   httpHooks.captureBodyLimit = (request, direction) =>
     getModelOrigins().has(new URL(request.url).origin)
       ? (direction === "request" ? 8 : 32) * 1024 * 1024
@@ -383,11 +404,6 @@ export const bootGuest = async (
     memory: `${limits.memoryMiB}M`,
     httpHooks,
     env: {
-      ...Object.fromEntries(
-        Object.entries(secretPlaceholders)
-          .filter(([name]) => name !== "SPEAKER_TOKEN")
-          .map(([name, value]) => [`PI_V2_SECRET_${name}`, value]),
-      ),
       BOTTLE_SCHOOL: "1",
       SPEAKER_URL: speaker.url,
       SPEAKER_TOKEN: secretPlaceholders.SPEAKER_TOKEN!,
@@ -415,6 +431,9 @@ export const bootGuest = async (
       const { exitCode, stdout, stderr } = await vm.exec(command);
       return { exitCode, stdout, stderr };
     },
-    close: () => vm.close(),
+    close: async () => {
+      await vm.close();
+      await route.close();
+    },
   };
 };
