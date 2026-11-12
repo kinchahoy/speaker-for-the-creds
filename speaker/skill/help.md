@@ -2,6 +2,10 @@
 
 Use only names the user gave you, or ones `GET $SPEAKER_URL/_speaker/me` shows. Never ask for upstream keys.
 
+## In a sandbox (read this, then only the item list in section 3)
+
+You are already enrolled: `SPEAKER_URL` and `SPEAKER_TOKEN` are set; send `Authorization: Bearer $SPEAKER_TOKEN`. Use the `request_capability` tool to ask for items; it waits and returns the decision. The sandbox applies a granted item: retry what was blocked (`applying` in `/me` means not yet). For a secret, set only the placeholder variable from `/me` on the command; no proxy or certificate setup is needed. `mcp:<id>` and `ext:<id>` start inside the sandbox from its host's list.
+
 ## 1. Set up (once per user and machine; skip if the header file works; in a sandbox you are already enrolled)
 
 Fill in `label` (the task in at most 8 words, as the user would say it) and `agent` (`<model> · <app> on <machine>`, for example `Opus 5.5 · Claude Code on PrimeX`; write `unknown` for any part you do not know). Both are shown to the owner as your claims. `want` may be empty.
@@ -43,7 +47,7 @@ To use a service, call it with `Speaker-Wait: 60` (see the core skill); speaker 
 
 ## 4. SSH and folders
 
-Target and share names come only from the user. Once, make a throwaway key with `ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"` and send `"sshKey":"<contents of ssh_key.pub>"` with your first request. Then ask for `ssh:<target>` or `folder:<share>`.
+Target and share names come only from the user or your task. Once, make a throwaway key with `ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"` and send `"sshKey":"<contents of ssh_key.pub>"` with your first request. Then ask for `ssh:<target>` or `folder:<share>`.
 
 After approval, `/me` lists complete command lines under `ssh`. Once, run its `knownHosts.save` command with `<known_hosts>` replaced by `"$d/known_hosts"`. Then copy the command lines and fill in `<key>` (the path of `ssh_key`), `<known_hosts>` (`"$d/known_hosts"`), `<command>`, `<file>`, `<path>`, `<mountpoint>`.
 
@@ -62,10 +66,6 @@ In `HTTPS_PROXY`, replace `<token>` with the part after `Bearer ` in your header
 ## 6. Remote MCP servers
 
 A service in `/me` with `mcp: true` is a remote MCP server. Ask for `<service>.read`, then point your MCP client at `$SPEAKER_URL/<service>` with the `Authorization` header from your header file.
-
-## 7. In a sandbox
-
-You are already enrolled: `SPEAKER_URL` and `SPEAKER_TOKEN` are set; send `Authorization: Bearer $SPEAKER_TOKEN`. Use the `request_capability` tool to ask for items; it waits and returns the decision. The sandbox applies a granted item: retry what was blocked (`applying` in `/me` means not yet). For a secret, set only the placeholder variable from `/me` on the command; no proxy or certificate setup is needed. `mcp:<id>` and `ext:<id>` start inside the sandbox from its host's list.
 
 ## Errors
 

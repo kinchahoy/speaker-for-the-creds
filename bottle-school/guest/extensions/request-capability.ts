@@ -103,7 +103,7 @@ export default function (pi: ExtensionAPI) {
                 (applying.length
                   ? ` Granted but not in force yet: ${applying.join(", ")}; the sandbox is applying it (mcp: and ext: items appear after Pi restarts when idle). Retry what was blocked shortly.`
                   : granted.length
-                    ? " Retry now."
+                    ? " Use it now: folders are at /input/<share>, websites work directly."
                     : " Continue without it or explain what is blocked.");
         return { content: [{ type: "text", text }], details: { id, status, granted, denied, applying } };
       },
