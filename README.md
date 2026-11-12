@@ -65,7 +65,6 @@ One Linux machine can run speaker, bottle-school, and a direct agent together. T
 
 Pi needs a model endpoint to do any work. Point `LLM_UPSTREAM` at an OpenAI-compatible server (a loopback or LAN address and port) and `LLM_MODEL` at one of its model ids. To use a hosted model instead, add the provider's key as a speaker secret (allowed host: the provider's API host), list the provider under `hostedProviders` in `config.json` with `credential` set to that secret's name, and launch with `--model <provider>/<model>`. The task then asks for that secret in its first card; the key stays in speaker, and the VM only holds a placeholder that speaker's proxy replaces. A task launched with `--prompt` starts Pi once you approve that card.
 
-If a VM hangs right after `Booting from ROM` (seen with Ubuntu's QEMU 10.2), QEMU's default `microvm` BIOS cannot boot the guest kernel; put a `qemu-system-x86_64` wrapper that adds `-bios /usr/share/qemu/qboot.rom` first on `PATH`.
 {.ai}
 
 <!-- author: ai -->
