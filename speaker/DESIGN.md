@@ -293,6 +293,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/me` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/me` gives the path.
+- A sandbox host that does not declare the `folder` kind has its agents' folders delivered over SSH and mounts them itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
 - After a speaker restart, the sandbox host re-creates the agents of its running tasks and files each task's template request again; the owner sees one card per task.
 
 **Deployment**

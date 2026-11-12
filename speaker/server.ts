@@ -576,11 +576,20 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const hostOf = (agent: { host?: string }) => (agent.host ? hosts.get(agent.host) : undefined)
   const secretHosts = (name: string) =>
     store && Object.hasOwn(store.vault.secrets, name) ? store.vault.secrets[name].hosts : []
+  // A sandbox host that does not mount folders itself (no `folder` kind) mounts its agents' over-SSH folders with
+  // `sshfs`, so it hears those grants; every other over-SSH grant is between the agent and the relay alone.
+  const hostMountsOverSsh = (grant: { item: string }, hostId: string) =>
+    grant.item.startsWith('folder:') && !hosts.get(hostId)?.kinds.includes('folder')
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
     version,
     grants: [...grants.values()]
-      .filter((grant) => live(grant) && agents.get(grant.agentId)?.host === hostId && !jump.overSsh(grant))
+      .filter(
+        (grant) =>
+          live(grant) &&
+          agents.get(grant.agentId)?.host === hostId &&
+          (!jump.overSsh(grant) || hostMountsOverSsh(grant, hostId)),
+      )
       .map(({ id, agentId, item, expiresAt }) => ({
         id,
         agentId,
