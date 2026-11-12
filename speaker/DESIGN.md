@@ -6,6 +6,20 @@
 
 Speaker lets AI agents use the owner's homelab services, folders, network access and hosts without ever holding the owner's keys. Agents ask; the owner approves from a phone, for a chosen time; speaker makes the call, relays the session, or tells a sandbox what to allow, and can cut any of it off.
 
+## In plain words
+
+| Item | Means | Example |
+| --- | --- | --- |
+| `<service>.read` | read from one of your APIs through speaker; speaker adds the key | `obsidian.read`: read notes |
+| `<service>.full` | read and change things in that API | `obsidian.full`: write notes |
+| `ssh:<target>` | run commands on one of your hosts, as the account you chose for it | `ssh:nas`: `df -h` on the NAS |
+| `folder:<share>` | read files in one of your folders (`:rw` to also change them) | `folder:photos` |
+| `site:<host>` | let a sandbox reach a website | `site:pypi.org` |
+| `secret:<NAME>` | let a sandbox use one of your tokens on the sites you allowed for it, without seeing the token | `secret:GITHUB_TOKEN` |
+| `mcp:<id>` | switch on an MCP server from the sandbox host's list | `mcp:context7`: library docs |
+| `ext:<id>` | switch on a Pi plugin from the sandbox host's list | `ext:pi-web-access`: web search |
+| `group:<name>` | a set of the above you defined, approved as one | `group:developer` |
+
 ## Principles
 
 1. **The owner grants everything.** No agent, rule or timer creates or lengthens access on its own. Only the owner approves, extends and revokes. The one exception the owner chooses deliberately: services whose reads are marked open.
@@ -37,7 +51,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 
 | Item | Grants | Who may ask |
 | --- | --- | --- |
-| `<service>.read` | GET, HEAD, OPTIONS to a service (for MCP services: listing and read-only tools) | any agent |
+| `<service>.read` | GET, HEAD, OPTIONS to a service, plus POST to paths the owner marks as reads in Setup (such as a search endpoint); for MCP services, listing and read-only tools | any agent |
 | `<service>.full` | read plus every other method or tool call | any agent |
 | `ssh:<target>` | running commands on that target as its agent account | any agent |
 | `folder:<share>` / `folder:<share>:rw` | the share, read-only unless the agent asks for `:rw`; delivered as a VM mount or over SSH (see below) | any agent |
@@ -65,7 +79,7 @@ Each service has a rule for read and one for write:
 
 **Grant:** `active` → `expired` at its end time, or `revoked` by the owner. The owner can extend an active grant by one more span of its original length. A later approval of the same item for the same agent replaces the earlier grant. Ending a grant immediately ends any session or mount it allowed.
 
-**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. **Revoke agent** ends its token and all its grants at once.
+**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once.
 
 **Sandbox host:** registers once, the owner approves it, and it stays until removed.
 
@@ -99,7 +113,7 @@ There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on 
 
 ### Requesting access
 
-`POST /_speaker/requests` with `{"want":["group:developer","site:example.org"],"reason":"…","duration":"2h"}`. SSH and folder requests also carry one throwaway public key per such item (`"sshKeys":{"ssh:nas":"ssh-ed25519 …"}`). Target and share names come only from the owner's instructions (the task prompt or the conversation); speaker never lists them. The agent is told:
+`POST /_speaker/requests` with `{"want":["group:developer","site:example.org"],"reason":"…","duration":"2h"}`. An agent that will use SSH or folders sends one throwaway public key, once (`"sshKey":"ssh-ed25519 …"` on enrollment or with its first request). Groups may contain any items, including `ssh:` and `folder:`. Target and share names come only from the owner's instructions (the task prompt or the conversation); speaker never lists them. The agent is told:
 
 > Ask for the minimum the task needs. If you need three or more items from one group, ask for the group: it is one decision for the owner. Otherwise ask for exactly those items (`site:google.com`), even when a larger group contains them.
 
@@ -107,10 +121,10 @@ The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"
 
 ### Using SSH and folders over SSH
 
-Speaker runs an SSH jump server (stock OpenSSH, in speaker's container). It listens only while at least one SSH or folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. Each grant has its own throwaway key, so the key alone identifies agent, grant and target.
+Speaker runs an SSH jump server (stock OpenSSH, in speaker's container). It listens only while at least one SSH or folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
 
-- **Commands** (`ssh:<target>`): `ssh … s@<speaker> '<command>'`; for anything multi-line, `ssh … s@<speaker> 'sh -s' <<'EOF'`. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
-- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> s@<speaker>:<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> s@<speaker>: <mountpoint>`. Paths are relative to the share. Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
+- **Commands** (`ssh:<target>`): `ssh … s@<speaker> <target> '<command>'`; for anything multi-line, `ssh … s@<speaker> <target> 'sh -s' <<'EOF'`. The grant also allows `scp` and `sftp` as that account. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
+- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> s@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> s@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `scp` and `sftp` first; `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
 
 ### Knowing where it stands
 
@@ -144,8 +158,8 @@ Speaker generates one SSH key for all targets. It is stored encrypted with the o
 
 ### The jump server and relay
 
-- Speaker writes, in memory-backed storage, one `authorized_keys` line per active grant: `restrict,from="<agent's address>",command="relay <grant>",expiry-time="<end>" <agent's throwaway key>`. The agent never gets a shell on speaker. The jump server's own host key is generated at each start.
-- `relay` runs the system `ssh` client to the target with the agent's exact command, without a local shell, authenticating through a stock `ssh-agent` that holds speaker's key in memory. It keeps a connection open to speaker for the session.
+- Speaker writes, in memory-backed storage, one `authorized_keys` line per agent with an active SSH or folder grant: `restrict,from="<agent's address>",command="relay <agent>",expiry-time="<last grant's end>" <agent's throwaway key>`. The agent never gets a shell on speaker. The jump server's own host key is generated at each start.
+- `relay` reads the target (first word of the command) or share (first part of each path), checks the agent's grant for it with speaker, and runs the system `ssh` client to the target with the agent's exact command, without a local shell, authenticating through a stock `ssh-agent` that holds speaker's key in memory. It keeps a connection open to speaker for the session.
 - At the grant's end, on revoke, or when speaker restarts, speaker closes that connection, `relay` ends the session, and the grant's line is removed. `expiry-time` stops new logins even if speaker stalls.
 
 ### Folder limits over SSH
@@ -175,7 +189,7 @@ For every SSH session: grant, agent, key fingerprint, source address, target, th
 
 ## Keys and unlocking
 
-All secrets (service keys, secrets for sandboxes, and speaker's SSH key) are encrypted with one random data key (AES-256-GCM). The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
+All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in speaker and are encrypted with one random data key (AES-256-GCM). When the owner grants a `secret:` item, speaker hands its value and allowed hosts to the sandbox host, which swaps it in for the placeholder the sandbox sees. The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
 
 - Speaker starts **locked**. It sends a push "speaker restarted: sign in to unlock"; signing in to `/admin` unwraps the data key, and secrets exist in clear only in memory. While locked, agents get `locked` with a `tell_user` line.
 - Changing the password re-wraps the data key. A forgotten password means re-entering the service keys and re-adding speaker's key on targets; nothing else is lost.
@@ -276,3 +290,7 @@ Against:
 - reverse proxies need WebSocket upgrades enabled, and debugging by hand gets harder.
 
 Where it fits best: sandboxes, where the sandbox host already holds a WebSocket to speaker and can carry its agents' traffic. A likely path is WebSocket through the sandbox host first, HTTP for direct agents, and revisiting direct agents once the sandbox path proves out.
+
+## Next step after the core: speaker inserts secrets itself
+
+To trust the sandbox host less, the sandbox host would pass each intercepted request to a secret-bearing host (such as `api.github.com`) to speaker with the placeholder still in it; speaker swaps in the real token, forwards the request, and returns the response. `gh` and `git` in the sandbox work unchanged, and the sandbox host never holds the token. Cost: traffic to those hosts, including large `git clone`s, flows through speaker, and the sandbox host's interception needs this hand-off.
