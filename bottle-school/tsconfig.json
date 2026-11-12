@@ -17,6 +17,7 @@
     ]
   },
   "include": [
+    "init.ts",
     "src",
     "test",
     "scripts"

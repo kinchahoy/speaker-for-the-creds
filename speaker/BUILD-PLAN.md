@@ -43,7 +43,7 @@ Both must move at once; the API, admin sign-in and secret handling changed.
 1. **speaker settings** (`speaker/.env`): remove `ADMIN_USER` and `ADMIN_PASSWORD`; set `TRUSTED_PROXY` to the reverse proxy's address; set `PROXY_PORT` (secrets proxy) and `SSH_PORT` (jump server) and publish both (they do not go through the web proxy).
 2. **Start speaker and open `/admin`:** set the owner password. Existing plaintext key files are imported into the encrypted store and deleted. From then on, after every restart, sign in to unlock.
 3. **Secrets:** re-enter each secret from bottle-school's old `secrets.env` in speaker's Setup (name, value, allowed hosts, variable name), then delete `secrets.env`; bottle-school refuses to start while it exists.
-4. **bottle-school:** set `speaker.proxyPort` in `config.json` to speaker's `PROXY_PORT`; rerun `mise run setup` (templates and catalog changed format); register it again (`mise run bottle-cli register`), approve it in `/admin`, and remove the old one.
+4. **bottle-school:** rerun `mise run init bottle-school --force` (templates and catalog changed format; it registers the host again and learns speaker's `PROXY_PORT`), approve it in `/admin`, and remove the old one.
 5. **SSH targets:** in Setup, add each target and put the shown line into the chosen account's `authorized_keys`.
 6. **Guest image:** rebuild `pi-v5-guest`, then restart bottle-school.
 7. **Agents:** direct agents enroll again by following `$SPEAKER_URL/_speaker/help`.

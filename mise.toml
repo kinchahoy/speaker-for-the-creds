@@ -2,17 +2,19 @@
 node = "26.13.0"
 pnpm = "12.16.1"
 
-
-# Host-specific bottle-school settings (model endpoint, speaker URL). Gitignored; see bottle-school/.env.example.
-[env]
-_.file = "bottle-school/.env"
-
 [tasks.install]
 description = "Install both packages' dependencies"
 run = ["pnpm -C speaker install", "pnpm -C bottle-school install"]
 
+[tasks.init]
+description = "Guided setup: mise run init [speaker | bottle-school] (no name sets up both on this machine; --yes and flags skip the prompts)"
+depends = ["install"]
+# The prompts need the terminal itself.
+raw = true
+run = "node init.ts"
+
 [tasks.check]
-description = "Typecheck both packages and lint speaker"
+description = "Typecheck both packages (and the init CLI) and lint speaker"
 run = [
   "cd speaker && pnpm exec tsc --noEmit && pnpm exec biome check .",
   "cd bottle-school && pnpm exec tsc --noEmit",
@@ -54,11 +56,6 @@ run = "guest/build.sh"
 description = "Run the bottle CLI: mise run bottle-cli register|run|ls|attach|stop"
 dir = "bottle-school"
 run = "node src/cli.ts"
-
-[tasks.setup]
-description = "Create bottle-school/config.json and its directories from bottle-school/.env"
-dir = "bottle-school"
-run = "node setup.ts"
 
 [tasks.doctor]
 description = "Check this host for bottle-school prerequisites (Linux or macOS)"

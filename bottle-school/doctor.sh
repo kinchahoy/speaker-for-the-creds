@@ -27,7 +27,7 @@ if [ "$(uname -s)" = Darwin ]; then
 else
 	check "/dev/kvm readable and writable" "sudo usermod -aG kvm \$USER, then log in again (WSL: wsl --shutdown)" sh -c 'test -r /dev/kvm && test -w /dev/kvm'
 fi
-check "config.json (mise run setup)" "mise run setup" test -f "$config"
+check "config.json (mise run init bottle-school)" "mise run init bottle-school" test -f "$config"
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
 if [ "$failed" = 0 ]; then
 	image=$(cfg guestImage)

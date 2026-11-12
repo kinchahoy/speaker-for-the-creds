@@ -27,16 +27,10 @@ mise run check
 mise run test
 ```
 
-For speaker, copy `speaker/.env.example` to `speaker/.env`, set the browser-facing `PUBLIC_URL`, then start the service and set the owner password on your first visit to `/admin`:
+To set up speaker and bottle-school together, run `mise run init` (see "Run everything on one machine"); `mise run init speaker` sets up speaker alone, and speaker's `.env` and owner password come from it. Start speaker later with `mise run speaker`.
 {.ai}
 
-```sh
-cp speaker/.env.example speaker/.env
-chmod 600 speaker/.env
-mise run speaker
-```
-
-Open `PUBLIC_URL/admin`, configure a service, and test approval and revocation with the demo before adding real credentials. Agents use [the access-and-creds skill](speaker/skill/SKILL.md) to enroll and ask for items. The owner approves each request, item by item, in the browser.
+Open `PUBLIC_URL/admin`, sign in, configure a service, and test approval and revocation with the demo before adding real credentials. Agents use [the access-and-creds skill](speaker/skill/SKILL.md) to enroll and ask for items. The owner approves each request, item by item, in the browser.
 {.ai}
 
 The owner can deploy speaker through [Docker](speaker/README.md#docker--home-server-deployment). The owner must verify the real upstream URL, TLS, private routing, and approval flow. Speaker is a supervised-pilot candidate. bottle-school still needs an end-to-end guest run and host storage quotas before unattended use.
@@ -51,19 +45,20 @@ The owner can deploy speaker through [Docker](speaker/README.md#docker--home-ser
 One Linux machine can run speaker, bottle-school, and a direct agent together. Details live in [speaker/README.md](speaker/README.md) and [bottle-school/README.md](bottle-school/README.md).
 {.ai}
 
-1. **Prerequisites.** `mise` (then `mise install && mise run install`), Docker for the guest build, `/dev/kvm` access and `setsid` for the VMs (`mise run doctor` checks them). Optional: `sshd` (an SSH target to test) and `sshfs` (folders for direct agents; without it agents use `sftp` or `scp`).
-2. **Configure speaker.** In `speaker/.env` set `DATA_DIR`, `PORT`, `PUBLIC_URL` (for example `http://127.0.0.1:3000`), `PROXY_PORT` (secrets proxy) and `SSH_PORT` (jump server). Start it with `mise run speaker`.
-3. **Set the owner password.** Open `PUBLIC_URL/admin`; the first visit asks for a password. After every restart speaker is `locked` (agents get `503 locked`) until you sign in at `/admin`, and restarting also forgets all agents and grants.
-4. **Add what agents can use** under Setup (the Services page): a service (the `demo` service works without a key), a secret (name, value, allowed hosts, variable name; the agent only ever sees a placeholder), an SSH target (put the line Setup shows into that account's `authorized_keys` first, then add it), and a share on that target (`VM mount`, `over SSH`, or both).
-5. **Connect a direct agent.** Give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`; its sh steps in `/_speaker/help` enroll it, and each request it makes appears as a card in `/admin`.
-6. **Configure bottle-school.** Copy `bottle-school/.env.example` to `bottle-school/.env` and set `SPEAKER_URL`, `SPEAKER_PROXY_PORT` (speaker's `PROXY_PORT`), `SPEAKER_SSH_PORT` (speaker's `SSH_PORT`, needed for folders) and the model (`LLM_UPSTREAM`, `LLM_MODEL`), then `mise run setup`. `BOTTLE_HOME` chooses where config, state and output live (default `~/.local/share/bottle-school`); setup creates them private (mode 700), which microsandbox requires, and the filesystem holding them needs at least 20 GiB free for tasks to launch. `SPEAKER_URL` must be an address the VM can reach: use the machine's LAN address (for example `http://192.168.1.10:3000`), not `127.0.0.1`, which inside a VM is the VM itself. To use a different guest image tag or ports, edit `bottle-school/config.json`.
-7. **Build the guest image:** `mise run guest-build pi-v5-guest` (run `mise run doctor` afterwards; it checks the image loads and boots) (about 10 GiB and several minutes; the tag must match `guestImage` in `config.json`). The build loads the image into microsandbox.
-8. **Register and approve the sandbox host.** `mise run bottle-cli register`, then approve the pending sandbox host in speaker's `/admin`. If you later change `SPEAKER_URL`, remove the old host in `/admin`, delete `speaker.token` from the state directory (under `BOTTLE_HOME`, default `~/.local/share/bottle-school/state`) and register again.
-9. **Start bottle-school:** `mise run bottle`. It prints `speaker connected`.
-10. **Launch a task:** `mise run bottle-cli run --template offline --prompt "..."` (add `--attended` or omit `--prompt` to work at its terminal). A `site:`, `secret:` or `folder:` item shows up in `/admin` as a card; once you approve it the VM can use it, and Revoke stops it within seconds. Model ids carry their provider, as in `local/<id>`.
-11. **Stop everything.** `mise run bottle-cli stop <id>` for each task (the archive lands in the output directory and the agent disappears from speaker), then stop `mise run bottle` and speaker with Ctrl-C. Stop speaker last, since its restart drops every grant.
+1. **Prerequisites.** `mise` (then `mise trust && mise install`), Docker for the guest build, `/dev/kvm` access and `setsid` for the VMs. Optional: `sshd` (an SSH target to test) and `sshfs` (folders for direct agents; without it agents use `sftp` or `scp`).
+2. **Run `mise run init`.** It installs both packages, then runs the speaker setup followed by the bottle-school setup, giving bottle-school the URL you chose for speaker. It asks, in order:
+   - *speaker*: where its data lives (default `~/.local/share/speaker`), the web, secrets-proxy and SSH ports (3000, 3128, 2222; each must be free), the address agents and VMs use (it offers this machine's LAN address, never `127.0.0.1`, which inside a VM is the VM itself), whether it sits behind a reverse proxy (then open the proxy and SSH ports directly and raise the proxy timeout above 120 s), and the owner password twice. It then offers to start speaker.
+   - *bottle-school*: it checks KVM, Docker and 20 GiB free, then asks where it lives (default `~/.local/share/bottle-school`, all private), its control ports (7001/7002), the model server (`host:port`, then pick a model from its list), whether to build the guest image (about 10 GiB, several minutes), and then registers the host and waits while you sign in to speaker's `/admin` (speaker is locked until you do) and approve the sandbox host at the printed link. It ends by offering a smoke-test task and printing what Pi wrote.
 
-Pi needs a model endpoint to do any work. Point `LLM_UPSTREAM` at an OpenAI-compatible server (a loopback or LAN address and port) and `LLM_MODEL` at one of its model ids. To use a hosted model instead, add the provider's key as a speaker secret (allowed host: the provider's API host), list the provider under `hostedProviders` in `config.json` with `credential` set to that secret's name, and launch with `--model <provider>/<model>`. The task then asks for that secret in its first card; the key stays in speaker, and the VM only holds a placeholder that speaker's proxy replaces. A task launched with `--prompt` starts Pi once you approve that card.
+   Every question has a flag (`--yes` takes the defaults; see each package's README), so it also runs unattended. After a restart, sign in at `/admin` again; speaker is `locked` (agents get `503 locked`) until you do, and restarting also forgets all agents and grants.
+3. **Add what agents can use** under Setup (the Services page): a service (the `demo` service works without a key), a secret (name, value, allowed hosts, variable name; the agent only ever sees a placeholder), an SSH target (put the line Setup shows into that account's `authorized_keys` first, then add it), and a share on that target (`VM mount`, `over SSH`, or both).
+4. **Connect a direct agent.** Give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`; its sh steps in `/_speaker/help` enroll it, and each request it makes appears as a card in `/admin`.
+5. **Launch a task:** `mise run bottle-cli run --template offline --prompt "..."` (add `--attended` or omit `--prompt` to work at its terminal). A `site:`, `secret:` or `folder:` item shows up in `/admin` as a card; once you approve it the VM can use it, and Revoke stops it within seconds. Model ids carry their provider, as in `local/<id>`. Start bottle-school with `mise run bottle` if init did not leave it running. If you later change speaker's address, run `mise run init bottle-school --force` again.
+6. **Stop everything.** `mise run bottle-cli stop <id>` for each task (the archive lands in the output directory and the agent disappears from speaker), then stop `mise run bottle` and speaker with Ctrl-C (or the `kill` commands init printed for the ones it started). Stop speaker last, since its restart drops every grant.
+
+On two machines, run `mise run init speaker` on the server and `mise run init bottle-school` on the sandbox machine.
+
+Pi needs a model endpoint to do any work. `init` asks for an OpenAI-compatible server (a loopback or LAN address and port) and the model to use. To use a hosted model instead, add the provider's key as a speaker secret (allowed host: the provider's API host), list the provider under `hostedProviders` in `config.json` with `credential` set to that secret's name, and launch with `--model <provider>/<model>`. The task then asks for that secret in its first card; the key stays in speaker, and the VM only holds a placeholder that speaker's proxy replaces. A task launched with `--prompt` starts Pi once you approve that card.
 
 {.ai}
 
@@ -75,13 +70,14 @@ Pi needs a model endpoint to do any work. Point `LLM_UPSTREAM` at an OpenAI-comp
 
 | Command | Purpose |
 | --- | --- |
+| `mise run init [speaker \| bottle-school]` | Guided setup (both on this machine without a name) |
 | `mise run install` | Install both packages with pnpm |
 | `mise run check` | Typecheck both packages and lint speaker |
 | `mise run test` | Run both packages' tests |
 | `mise run format` | Format speaker |
 | `mise run speaker` | Run speaker with live reload |
 | `mise run bottle` | Run the bottle-school service |
-| `mise run bottle-cli register` | Register the sandbox host; approve it in speaker |
+| `mise run bottle-cli register` | Register the sandbox host again; approve it in speaker |
 | `mise run bottle-cli run --template offline` | Launch a sandbox task |
 | `mise run bottle-cli ls` | List tasks |
 | `mise run bottle-cli attach <id>` | Join Pi in a running guest |
