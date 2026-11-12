@@ -127,6 +127,13 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
   const active = await (await f.call('/admin/panel/active', { headers: owner })).text()
   const grantId = /<li id="grant-(\w+)"/.exec(active)?.[1] ?? ''
   assert.ok(grantId)
+  // Local-time stamps the page script rewrites; request cards survive a panel refresh with the owner's choices.
+  assert.match(active, /<time datetime="[^"]+" data-local data-left>/)
+  await f.json('/_speaker/requests', { want: ['demo.full'], reason: 'r', duration: '30m' }, agent)
+  assert.match(
+    await (await f.call('/admin/panel/inbox', { headers: owner })).text(),
+    /<article id="request-\w+" hx-preserve/,
+  )
   await f.call('/admin/grants/revoke', { method: 'POST', headers: owner, body: new URLSearchParams({ id: grantId }) })
   assert.equal((await me()).grants.length, 0)
 
