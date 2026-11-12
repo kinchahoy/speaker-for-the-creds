@@ -253,7 +253,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
       throw new Error(`task ${task.id} is ${task.state}, so it has no terminal to attach to`);
     console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches, and Pi keeps running.`);
-    const terminal = attach(config, task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    const terminal = attach(task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
     const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => {
       console.error(`error: cannot start the terminal: ${error.message}`);

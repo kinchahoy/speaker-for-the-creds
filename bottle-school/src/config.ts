@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { BlockList, isIPv4 } from "node:net";
-import { networkInterfaces } from "node:os";
-import { isAbsolute } from "node:path";
+import { homedir, networkInterfaces } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 const port = z.number().int().min(1).max(65_535);
@@ -119,6 +119,12 @@ export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
   if (!env.BOTTLE_SCHOOL_CONFIG && old) console.error(`note: ${old} is deprecated; use BOTTLE_SCHOOL_CONFIG.`);
   return env.BOTTLE_SCHOOL_CONFIG || (old && env[old]) || `${import.meta.dirname}/../config.json`;
 };
+
+/**
+ * microsandbox's own home (MSB_HOME, else its default ~/.microsandbox): images, VM disks, and its unix sockets. It does not
+ * follow stateRoot: socket paths are capped near 104-108 bytes, and a deep stateRoot would push them over.
+ */
+export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(homedir(), ".microsandbox");
 
 export const controlOrigin = (config: Config) => `http://${config.bindHost}:${config.controlPort}`;
 
