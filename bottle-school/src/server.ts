@@ -107,7 +107,7 @@ export const startControl = (config: Config, tasks: Tasks) => {
     );
   });
   app.post("/api/tasks", validator("json", (body) => NewTask.parse(body)), async (context) =>
-    context.json({ id: (await tasks.create(context.req.valid("json"))).id }),
+    context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
   );
   app.post("/api/tasks/:id/abort", async (context) =>
     context.json(await tasks.abort(tasks.get(context.req.param("id")))),

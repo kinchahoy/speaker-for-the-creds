@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
@@ -21,6 +22,7 @@ type Task = {
 };
 
 const SELF = "mise run bottle-cli";
+const FINISHED_SHOWN = 5;
 const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
 const run = promisify(execFile);
@@ -50,7 +52,8 @@ nobody is watching, so it records assumptions instead of asking. Without --promp
     help: `usage: ${SELF} ls
 
 Lists live tasks with state, mode (attended or unattended), pending approvals, age, model, name, and Pi's
-latest message.`,
+latest message. Below them it lists the last five finished tasks with their state (archived or failed-archive)
+and archive folder.`,
   },
   attach: {
     positional: 1,
@@ -195,7 +198,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       if (!Number.isFinite(hoursValue) || hoursValue <= 0)
         throw new UsageError(`--hours must be a positive number of hours, got "${hours}"`);
     }
-    const { id } = await api<{ id: string }>("POST", `${control}/api/tasks`, {
+    const { id, outputDir } = await api<{ id: string; outputDir: string }>("POST", `${control}/api/tasks`, {
       name,
       template,
       model,
@@ -209,14 +212,11 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       await run("herdr", ["pane", "run", JSON.parse(stdout).result.pane.pane_id, attach]);
     } else {
       const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
-      console.log(`Started ${id} (${template}).${archive} Attach: ${attach}`);
+      console.log(`Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}`);
     }
   } else if (command === "ls") {
     const list = await tasks();
-    if (list.length === 0) {
-      console.log(`No live tasks. Start one with: ${SELF} run --prompt "..."`);
-      return;
-    }
+    if (list.length === 0) console.log(`No live tasks. Start one with: ${SELF} run --prompt "..."`);
     const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
     const rows = list.map((task) => [
       task.id,
@@ -228,14 +228,26 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       task.name,
       truncate(task.summary ?? "", 60),
     ]);
-    const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
-    const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
-    console.log(line(header));
-    list.forEach((task, index) => {
-      console.log(line(rows[index]!));
-      for (const request of task.pendingRequests)
-        console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it in speaker /admin`);
-    });
+    if (list.length > 0) {
+      const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
+      const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
+      console.log(line(header));
+      list.forEach((task, index) => {
+        console.log(line(rows[index]!));
+        for (const request of task.pendingRequests)
+          console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it in speaker /admin`);
+      });
+    }
+    // Finished tasks leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.
+    const finished = readdirSync(config.outputRoot).sort().reverse().flatMap((folder) => {
+      try {
+        const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "task.json"), "utf8")) as { state: string };
+        return [`${state.padEnd(15)}${join(config.outputRoot, folder)}`];
+      } catch {
+        return []; // a live task's folder has no task.json yet
+      }
+    }).slice(0, FINISHED_SHOWN);
+    if (finished.length > 0) console.log(`\nLast finished tasks (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
     const task = await resolveTask(positionals[0]!);
     if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
