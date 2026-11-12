@@ -14,11 +14,10 @@ import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import type { Config } from "./config.ts";
-import { mintCredentials, type Credential } from "./credentials.ts";
 import { bootGuest, note, shareProvider, type CapturedBody, type Guest, type Live } from "./gondolin.ts";
-import { attendedFor, folderRef, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
-import { availableModels, mcpHosts, pi, writeGuestConfig, type Catalog } from "./pi.ts";
-import { speakerClient, watchLeases, type Lease, type Snapshot } from "./speaker.ts";
+import { attendedFor, folderRef, launchRequest, secretHosts, secretRef, siteRef, unexpired, type Template } from "./leases.ts";
+import { availableModels, pi, writeGuestConfig, type Catalog } from "./pi.ts";
+import { speakerClient, speakerProxy, watchLeases, type Lease, type SecretInfo, type Snapshot } from "./speaker.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "./trace-runs.ts";
 
 export type TaskState =
@@ -43,6 +42,8 @@ export type Task = {
   model: string;
   token: string;
   subjectId: string;
+  /** The task's agent token at speaker. It stays on the host: the guest only has a placeholder for it. */
+  speakerToken: string;
   startedAt: string;
   deadline: string;
   workDir: string;
@@ -59,7 +60,8 @@ export type Task = {
   /** The catalog extensions Pi started with. */
   extensionsRunning: string[];
   events: TaskEvent[];
-  credentials: Map<string, Credential>;
+  /** Placeholders speaker issued for this task's hosted-model key (provider secret name to placeholder). */
+  keys: Map<string, string>;
   live: Live;
   guest: Guest;
 };
@@ -115,6 +117,19 @@ const taskRecord = (
   ...(error ? { error } : {}),
 });
 
+/**
+ * The grants in effect for a task, as speaker should hear them: site, secret and folder grants apply the moment they
+ * are installed; an MCP server or extension only once Pi has restarted with it.
+ */
+export const inForce = (leases: Lease[], running: { mcp: string[]; extensions: string[] }) =>
+  unexpired(leases)
+    .filter(
+      (lease) =>
+        (lease.kind !== "mcp" || running.mcp.includes(lease.ref)) &&
+        (lease.kind !== "extension" || running.extensions.includes(lease.ref)),
+    )
+    .map((lease) => lease.id);
+
 export class Tasks {
   readonly byId = new Map<string, Task>();
   readonly byToken = new Map<string, Task>();
@@ -126,20 +141,14 @@ export class Tasks {
   config: Config;
   templates: Map<string, Template>;
   catalog: Catalog;
-  secrets: Map<string, string>;
+  /** The secrets the owner set up in speaker, as the last snapshot listed them (names and hosts, never values). */
+  secrets: SecretInfo[] = [];
   speaker: ReturnType<typeof speakerClient>;
 
-  constructor(
-    config: Config,
-    templates: Map<string, Template>,
-    catalog: Catalog,
-    secrets: Map<string, string>,
-    hostToken: string,
-  ) {
+  constructor(config: Config, templates: Map<string, Template>, catalog: Catalog, hostToken: string) {
     this.config = config;
     this.templates = templates;
     this.catalog = catalog;
-    this.secrets = secrets;
     this.speaker = speakerClient(config, hostToken);
     this.#report = watchLeases(
       config,
@@ -224,10 +233,11 @@ export class Tasks {
       maxModelRequests: template.limits.maxModelRequests,
       modelCapNoted: false,
     };
-    const credentials = mintCredentials(this.secrets);
+    const keys = new Map<string, string>();
     const token = randomBytes(24).toString("hex");
 
-    const subject = await this.speaker.createAgent(name, `${model} · Pi on ${hostname()}`);
+    // The agent's label is the task as the owner would say it: the launch name, else the template's label.
+    const subject = await this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`);
     let registered = false;
     try {
       writeGuestConfig(
@@ -235,10 +245,11 @@ export class Tasks {
         this.config,
         this.catalog,
         { name, model, prompt: input.prompt, attended },
-        credentials,
+        keys,
         [],
         [],
         [],
+        this.secrets,
       );
       const guest = await bootGuest(
         this.config,
@@ -250,7 +261,6 @@ export class Tasks {
           guestConfig: guestConfigDir,
           capture: `${outputDir}/_control/blobs`,
         },
-        credentials,
         {
           PI_V2_TOKEN: token,
           PI_V2_CONTROL: "http://control.internal",
@@ -259,6 +269,7 @@ export class Tasks {
           PI_SKIP_VERSION_CHECK: "1",
         },
         { url: this.config.speaker.url, token: subject.token },
+        () => speakerProxy(this.config, subject.token),
       );
 
       const task: Task = {
@@ -272,6 +283,7 @@ export class Tasks {
         model,
         token,
         subjectId: subject.id,
+        speakerToken: subject.token,
         startedAt: new Date().toISOString(),
         deadline: new Date(Date.now() + hours * 3_600_000).toISOString(),
         workDir,
@@ -283,19 +295,15 @@ export class Tasks {
         events,
         live,
         guest,
-        credentials,
+        keys,
       };
       this.byId.set(id, task);
       this.byToken.set(token, task);
       registered = true;
       try {
-        if (template.bundle)
-          await this.speaker.request({
-            agentId: task.subjectId,
-            want: [`group:${template.bundle}`],
-            reason: `launch template ${template.id}`,
-            duration: template.bundleDuration ?? "1d",
-          });
+        // The template's want list is the task's first request. A hosted model's key is a speaker secret, asked for here too.
+        const first = launchRequest(template, task.subjectId, this.#providerSecrets(model));
+        if (first) await this.speaker.request(first);
         await pi.start(guest);
         task.state = "idle";
         if (input.prompt)
@@ -323,14 +331,21 @@ export class Tasks {
     }
   }
 
+  /** A hosted model's key is the speaker secret its provider names; a local model needs none. */
+  #providerSecrets = (model: string) =>
+    this.config.hostedProviders
+      .filter((provider) => provider.id === model.split("/")[0])
+      .map((provider) => `secret:${provider.credential}`);
+
   /** Replaces every task's leases with a speaker snapshot, then reports what is in effect. */
-  #onSnapshot({ leases, requests }: Snapshot) {
+  #onSnapshot({ leases, requests, secrets }: Snapshot) {
     this.#requests = requests;
+    if (secrets) this.secrets = secrets;
     for (const task of this.byId.values()) {
       const mine = leases.filter((lease) => {
         if (lease.subjectId !== task.subjectId) return false;
         const valid = lease.kind === "credential" ||
-          (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && task.credentials.has(lease.ref.split("@")[0]!)) ||
+          (lease.kind === "secret" && secretRef.safeParse(lease.ref).success && secretHosts.safeParse(lease.hosts).success) ||
           (lease.kind === "folder" && folderRef.safeParse(lease.ref).success && Object.hasOwn(this.config.shareRoots, lease.ref.split(":")[0]!)) ||
           (lease.kind === "site" && siteRef.safeParse(lease.ref).success) ||
           (lease.kind === "mcp" && Object.hasOwn(this.catalog.mcps, lease.ref)) ||
@@ -348,23 +363,33 @@ export class Tasks {
       }
       task.leases = mine;
       this.#apply(task);
+      this.#fetchProviderKey(task);
     }
     this.#reportApplied();
   }
 
-  /** An MCP or extension lease is in effect only after Pi restarted with it. */
+  /** Reports to speaker which grants are in force (see inForce). */
   #reportApplied() {
     this.#report(
       this.list().flatMap((task) =>
-        unexpired(task.leases)
-          .filter(
-            (lease) =>
-              (lease.kind !== "mcp" || task.mcpRunning.includes(lease.ref)) &&
-              (lease.kind !== "extension" || task.extensionsRunning.includes(lease.ref)),
-          )
-          .map((lease) => lease.id),
+        inForce(task.leases, { mcp: task.mcpRunning, extensions: task.extensionsRunning }),
       ),
     );
+  }
+
+  /** Once the task holds its hosted model's secret, asks speaker for the placeholder and restarts Pi with it in models.json. */
+  #fetchProviderKey(task: Task) {
+    for (const item of this.#providerSecrets(task.model)) {
+      const secret = item.slice("secret:".length);
+      if (task.keys.has(secret) || !this.#leased(task, "secret").some((lease) => lease.ref === secret)) continue;
+      void this.speaker
+        .placeholder(task.speakerToken, secret)
+        .then((placeholder) => {
+          task.keys.set(secret, placeholder);
+          return this.#restartAtIdle(task);
+        })
+        .catch((error: Error) => this.#event(task, `could not set up the model key ${secret}: ${error.message}`));
+    }
   }
 
   mcpPending = (task: Task) =>
@@ -385,16 +410,14 @@ export class Tasks {
   /** Moves the live task view to its leases. Hosts and shares are replaced as a whole, so no lease outlives its snapshot. */
   #apply(task: Task) {
     const hosts = this.#leased(task, "site").map(({ ref, expiresAt }) => ({ host: ref, expiresAt }));
-    task.live.secretHosts = this.#leased(task, "secret").map(({ ref, expiresAt }) => {
-      return { ...secretRef.parse(ref), expiresAt };
-    });
+    task.live.secretHosts = this.#leased(task, "secret").map(({ ref, hosts, expiresAt }) => ({
+      name: ref,
+      hosts: secretHosts.parse(hosts),
+      expiresAt,
+    }));
     // A secret lease also opens egress to the hosts it names.
     for (const secret of task.live.secretHosts)
       for (const host of secret.hosts) hosts.push({ host, expiresAt: secret.expiresAt });
-    for (const lease of this.#leased(task, "mcp"))
-      if (task.mcpRunning.includes(lease.ref))
-        for (const host of mcpHosts(this.catalog, [lease.ref]))
-          hosts.push({ host, expiresAt: lease.expiresAt });
     task.live.hosts = hosts;
 
     task.live.shares.clear();
@@ -450,10 +473,11 @@ export class Tasks {
           this.config,
           this.catalog,
           task,
-          task.credentials,
+          task.keys,
           task.leases,
           mcpIds,
           extensionIds,
+          this.secrets,
         );
         await pi.restart(task.guest);
         task.mcpRunning = mcpIds;

@@ -1,7 +1,7 @@
 [
   {
     "id": "developer",
-    "label": "Developer (packages, GitHub, Context7 docs)",
+    "label": "Develop with packages, GitHub and library docs",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -9,11 +9,12 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "bundle": "developer"
+    "want": ["group:developer"],
+    "duration": "1d"
   },
   {
     "id": "github-read",
-    "label": "GitHub read",
+    "label": "Read GitHub repositories",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -21,11 +22,12 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "bundle": "github-read"
+    "want": ["group:github-read"],
+    "duration": "1d"
   },
   {
     "id": "loop",
-    "label": "Scheduled loop (unattended wake-ups and monitors)",
+    "label": "Scheduled loop with wake-ups and monitors",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -35,8 +37,8 @@
       "maxModelRequests": 300
     },
     "attended": false,
-    "bundle": "loop",
-    "bundleDuration": "1d"
+    "want": ["group:loop"],
+    "duration": "1d"
   },
   {
     "id": "offline",
@@ -51,7 +53,7 @@
   },
   {
     "id": "packages",
-    "label": "Packages (PyPI and npm)",
+    "label": "Install PyPI and npm packages",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -59,11 +61,12 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "bundle": "packages"
+    "want": ["group:packages"],
+    "duration": "1d"
   },
   {
     "id": "research",
-    "label": "Public research (Exa search and web fetch)",
+    "label": "Public web research",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -71,6 +74,7 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "bundle": "research"
+    "want": ["group:research"],
+    "duration": "1d"
   }
 ]

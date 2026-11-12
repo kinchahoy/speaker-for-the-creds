@@ -15,22 +15,33 @@ const Limits = z
   .strict();
 
 /**
- * A launch template is the runtime profile speaker does not decide: VM limits, attended mode, and the bundle to
- * request at launch. What the agent may use (sites, secrets, MCP servers, Pi extensions) comes from that bundle.
+ * A launch template is the runtime profile speaker does not decide (VM limits, attended mode) plus what the task starts
+ * with: a `want` list of items and groups, named by its `label` and asked for over `duration`. Speaker shows that as the
+ * task's first request; the task starts at once and works on whatever needs no new access while the owner decides.
  */
 export const Template = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
+    /** What the task is, as the owner would say it: the label on the task's request card. */
     label: z.string().min(1).max(120),
     limits: Limits,
     /** Forces attended (true) or unattended (false) launches; unset, the launch decides. */
     attended: z.boolean().optional(),
-    bundle: z.string().optional(),
-    /** How long the launch bundle is requested for; defaults to 1d. */
-    bundleDuration: z.enum(["30m", "1h", "2h", "1d", "30d"]).optional(),
+    /** Items and groups the task asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
+    want: z.array(z.string().trim().min(1)).max(50).default([]),
+    /** How long the first request asks for. */
+    duration: z.enum(["30m", "1h", "2h", "1d", "30d"]).default("2h"),
   })
   .strict();
 export type Template = z.infer<typeof Template>;
+
+/** The task's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
+export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
+  const want = [...new Set([...template.want, ...extra])];
+  return want.length
+    ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration }
+    : undefined;
+};
 
 /**
  * Attended means the owner is at the terminal to answer questions. A launch prompt implies the owner walked away;
@@ -68,10 +79,9 @@ export const ipv4Destination = (ip: string) => isIPv4(ip);
 /** Speaker owns approvals; bottle-school owns the syntax and local meaning of refs. */
 const host = z.hostname().refine((value) => value === value.toLowerCase());
 export const siteRef = z.union([host, z.string().startsWith("*.").refine((value) => host.safeParse(value.slice(2)).success)]);
-export const secretRef = z.string().regex(/^[A-Z][A-Z0-9_]*@[^@]+$/).transform((ref) => {
-  const [name, hosts] = ref.split("@");
-  return { name: name!, hosts: hosts!.split(",") };
-}).pipe(z.object({ name: z.string(), hosts: z.array(siteRef).min(1) }));
+/** A `secret:<NAME>` grant names a secret in speaker and arrives with the hosts the owner bound it to. */
+export const secretRef = z.string().regex(/^[A-Za-z0-9_]+$/);
+export const secretHosts = z.array(siteRef).min(1);
 export const folderRef = z.string().regex(/^[a-zA-Z0-9_-]+(:rw)?$/);
 
 /** Guests may use only the agent-facing speaker API and service proxy. */

@@ -1,11 +1,13 @@
 diff --git a/dist/src/qemu/contracts.d.ts b/dist/src/qemu/contracts.d.ts
-index 6e16f8ad199233f01b0a340d69147225eae61859..80729839e300567dad5fc7b7c44b8fba2c464fba 100644
+index 6e16f8ad199233f01b0a340d69147225eae61859..72994f51c19b8270d181b80af9cd627740eec38a 100644
 --- a/dist/src/qemu/contracts.d.ts
 +++ b/dist/src/qemu/contracts.d.ts
-@@ -32,6 +32,19 @@ export type HttpHooks = {
+@@ -32,6 +32,21 @@ export type HttpHooks = {
      onRequest?: HttpOnRequestHook;
      /** response rewrite hook */
      onResponse?: (response: Response, request: Request) => Promise<Response | void> | Response | void;
++    /** upstream dispatcher for a request (for example a proxy); replaces the checked default dispatcher */
++    upstreamDispatcher?: (request: { url: string; method: string }) => import("undici").Dispatcher | undefined;
 +    /** maximum body bytes retained by the response-complete observer */
 +    captureBodyLimit?: (request: { url: string; method: string }, direction: "request" | "response") => number;
 +    /** observer called after a response body is forwarded or an upstream fetch fails */
@@ -23,18 +25,34 @@ index 6e16f8ad199233f01b0a340d69147225eae61859..80729839e300567dad5fc7b7c44b8fba
  export type DnsMode = "open" | "trusted" | "synthetic";
  export type SyntheticDnsHostMappingMode = "single" | "per-host";
 diff --git a/dist/src/qemu/http.js b/dist/src/qemu/http.js
-index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195146d9fb8 100644
+index 1ad74a445c941203d773f2213577e8e52468ceb4..2781a94e8ed6a16be7a59ca15f9d718353f69309 100644
 --- a/dist/src/qemu/http.js
 +++ b/dist/src/qemu/http.js
-@@ -928,11 +928,26 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -917,22 +917,39 @@ export async function fetchHookRequestAndRespond(backend, options) {
+             await ensureIpAllowed(backend, currentUrl, protocol, port);
+         }
+         const useDefaultFetch = backend.options.fetch === undefined;
+-        const originKey = useDefaultFetch
++        // bottle-school sends some requests through speaker's proxy: a hook-chosen dispatcher replaces the checked one.
++        const routedDispatcher = backend.options.httpHooks?.upstreamDispatcher?.(currentRequest);
++        const originKey = useDefaultFetch && !routedDispatcher
+             ? `${protocol}://${currentUrl.hostname}:${port}`
+             : null;
+         httpSession.upstreamOriginKey = originKey;
+-        const dispatcher = useDefaultFetch
++        const dispatcher = routedDispatcher ?? (useDefaultFetch
+             ? getCheckedDispatcher(backend, {
+                 hostname: currentUrl.hostname,
+                 port,
                  protocol,
              })
-             : null;
+-            : null;
 -        const bodyInit = bodyStream
 -            ? bodyStream
 -            : currentRequest.body
 -                ? new Uint8Array(currentRequest.body)
 -                : undefined;
++            : null);
 +        const requestLimit = Math.max(0, backend.options.httpHooks?.captureBodyLimit?.(currentRequest, "request") ?? 0);
 +        const responseLimit = Math.max(0, backend.options.httpHooks?.captureBodyLimit?.(currentRequest, "response") ?? 0);
 +        const requestChunks = [];
@@ -58,7 +76,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
          // Avoid duplicate Content-Length when Fetch derives framing for buffered bodies.
          // Remove it from a copy so redirects and hooks keep the measured length.
          const fetchHeaders = { ...currentRequest.headers };
-@@ -956,11 +971,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -956,11 +973,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
              });
          }
          catch (err) {
@@ -72,7 +90,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
                  backend.emitDebug(`http bridge fetch failed ${currentRequest.method} ${currentUrl.toString()} (${message})`);
              }
              throw err;
-@@ -1052,12 +1068,23 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1052,12 +1070,23 @@ export async function fetchHookRequestAndRespond(backend, options) {
              };
              hookResponse = await applyResponseHooks(backend, hookResponse, currentRequest);
              sendHttpResponse(write, normalizeHookResponseForGuest(hookResponse, currentRequest.method), httpVersion);
@@ -96,7 +114,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
              try {
                  if (contentEncoding || !hasValidLength) {
                      delete responseHeaders["content-length"];
-@@ -1068,7 +1095,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1068,7 +1097,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
                              statusText: response.statusText || "OK",
                              headers: responseHeaders,
                          }, httpVersion);
@@ -105,7 +123,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
                      }
                      else {
                          delete responseHeaders["transfer-encoding"];
-@@ -1077,7 +1104,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1077,7 +1106,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
                              statusText: response.statusText || "OK",
                              headers: responseHeaders,
                          }, httpVersion);
@@ -114,7 +132,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
                      }
                  }
                  else {
-@@ -1088,10 +1115,16 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1088,10 +1117,16 @@ export async function fetchHookRequestAndRespond(backend, options) {
                          statusText: response.statusText || "OK",
                          headers: responseHeaders,
                      }, httpVersion);
@@ -132,7 +150,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
                  if (originKey) {
                      evictSharedDispatcher(backend, originKey);
                  }
-@@ -1107,6 +1140,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1107,6 +1142,12 @@ export async function fetchHookRequestAndRespond(backend, options) {
                  const elapsed = Date.now() - responseStart;
                  backend.emitDebug(`http bridge body complete ${requestLabel} ${streamedBytes} bytes in ${elapsed}ms`);
              }
@@ -145,7 +163,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
              return;
          }
          const maxResponseBytes = backend.http.maxHttpResponseBodyBytes;
-@@ -1143,6 +1182,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
+@@ -1143,6 +1184,7 @@ export async function fetchHookRequestAndRespond(backend, options) {
              const elapsed = Date.now() - responseStart;
              backend.emitDebug(`http bridge body complete ${requestLabel} ${hookResponse.body.length} bytes in ${elapsed}ms`);
          }
@@ -153,7 +171,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
          return;
      }
  }
-@@ -1218,7 +1258,7 @@ async function handleWebSocketUpgrade(backend, key, request, session, options, h
+@@ -1218,7 +1260,7 @@ async function handleWebSocketUpgrade(backend, key, request, session, options, h
          hookRequest,
      }, options, httpVersion);
  }
@@ -162,7 +180,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
      const reader = body.getReader();
      let total = 0;
      try {
-@@ -1229,6 +1269,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
+@@ -1229,6 +1271,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
              if (!value || value.length === 0)
                  continue;
              total += value.length;
@@ -170,7 +188,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
              const sizeLine = Buffer.from(`${value.length.toString(16)}\r\n`);
              write(sizeLine);
              write(Buffer.from(value));
-@@ -1244,7 +1285,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
+@@ -1244,7 +1287,7 @@ async function sendChunkedBody(body, write, waitForWritable) {
      write(Buffer.from("0\r\n\r\n"));
      return total;
  }
@@ -179,7 +197,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
      const reader = body.getReader();
      let total = 0;
      try {
-@@ -1255,6 +1296,7 @@ async function sendStreamBody(body, write, waitForWritable) {
+@@ -1255,6 +1298,7 @@ async function sendStreamBody(body, write, waitForWritable) {
              if (!value || value.length === 0)
                  continue;
              total += value.length;
@@ -187,7 +205,7 @@ index 1ad74a445c941203d773f2213577e8e52468ceb4..8469f7db8ec01cece433430138f5d195
              write(Buffer.from(value));
              if (waitForWritable) {
                  await waitForWritable();
-@@ -1616,6 +1658,12 @@ async function applyResponseHooks(backend, response, request) {
+@@ -1616,6 +1660,12 @@ async function applyResponseHooks(backend, response, request) {
          maxBodyBytes: backend.http.maxHttpResponseBodyBytes,
      });
  }

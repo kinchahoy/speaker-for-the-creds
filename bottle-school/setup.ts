@@ -1,6 +1,6 @@
 // Creates bottle-school/config.json and its config, state and output directories for a single-host setup.
-// Usage: node setup.ts   (env: BOTTLE_HOME, SPEAKER_URL, LLM_UPSTREAM host:port, LLM_MODEL id)
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// Usage: node setup.ts   (env: BOTTLE_HOME, SPEAKER_URL, SPEAKER_PROXY_PORT,LLM_UPSTREAM host:port, LLM_MODEL id)
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -17,7 +17,10 @@ for (const directory of [configRoot, stateRoot, outputRoot, documents]) mkdirSyn
 const config = JSON.parse(readFileSync(join(here, "config.example.json"), "utf8"));
 Object.assign(config, {
   bindHost: "127.0.0.1",
-  speaker: { url: process.env.SPEAKER_URL ?? "http://127.0.0.1:3000" },
+  speaker: {
+    url: process.env.SPEAKER_URL ?? "http://127.0.0.1:3000",
+    ...(process.env.SPEAKER_PROXY_PORT ? { proxyPort: Number(process.env.SPEAKER_PROXY_PORT) } : {}),
+  },
   configRoot,
   stateRoot,
   outputRoot,
@@ -31,7 +34,4 @@ else console.warn("LLM_UPSTREAM and LLM_MODEL are not set; edit localModel in co
 writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
 
 for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
-const secrets = join(configRoot, "secrets.env");
-if (!existsSync(secrets)) copyFileSync(join(here, "secrets.env.example"), secrets);
-chmodSync(secrets, 0o600);
 console.log(`wrote ${target}\nconfig, state and output are under ${home}\nnext: mise run doctor`);

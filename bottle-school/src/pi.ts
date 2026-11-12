@@ -1,35 +1,24 @@
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import type { Config } from "./config.ts";
-import type { Credential } from "./credentials.ts";
 import type { Guest } from "./gondolin.ts";
 import { unexpired } from "./leases.ts";
-import type { Lease } from "./speaker.ts";
+import type { Lease, SecretInfo } from "./speaker.ts";
 
-const McpBase = z.object({
-  label: z.string().min(1),
-  tools: z.array(z.string().regex(/^[a-z0-9_-]+$/)).min(1),
-  write: z.boolean(),
-});
-const McpEntry = z.discriminatedUnion("transport", [
-  McpBase.extend({
-    transport: z.literal("stdio"),
+/**
+ * An MCP server that runs inside the VM from an image-local command. Remote and hosted MCP servers are not catalog
+ * entries: they are speaker services (`<service>.read` / `.full`), reached at `$SPEAKER_URL/<service>`.
+ */
+const McpEntry = z
+  .object({
+    label: z.string().min(1),
+    transport: z.literal("stdio", "only MCP servers that run inside the VM are catalog entries; add remote ones as speaker services"),
     command: z.string().startsWith("/", "an MCP command is an image-local absolute path"),
     args: z.array(z.string()),
-  }).strict(),
-  McpBase.extend({
-    transport: z.literal("streamable-http"),
-    url: z
-      .url()
-      .refine((value) => new URL(value).protocol === "https:", "a remote MCP server uses https"),
-    headers: z.record(z.string(), z.string()).optional(),
-    /** Secret whose guest placeholder replaces `${NAME}` in the header values. */
-    credential: z
-      .string()
-      .regex(/^[A-Z][A-Z0-9_]*$/, "use uppercase letters, digits, and underscores")
-      .optional(),
-  }).strict(),
-]);
+    tools: z.array(z.string().regex(/^[a-z0-9_-]+$/)).min(1),
+    write: z.boolean(),
+  })
+  .strict();
 
 export const Catalog = z
   .object({
@@ -64,16 +53,6 @@ export const Catalog = z
 
 export type Catalog = z.infer<typeof Catalog>;
 
-/** A remote MCP server authorizes only the endpoint host that its curated catalog entry names. */
-export const mcpHosts = (catalog: Catalog, ids: string[]) => [
-  ...new Set(
-    ids.flatMap((id) => {
-      const entry = catalog.mcps[id];
-      return entry?.transport === "streamable-http" ? [new URL(entry.url).hostname] : [];
-    }),
-  ),
-];
-
 const SESSION = "/work/.pi-session/task.jsonl";
 /** Commands the guest image provides. */
 export const CLI_TOOLS = `
@@ -83,7 +62,7 @@ export const CLI_TOOLS = `
 `.trim().split(/\s+/);
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 
-/** Hosted providers listed in models.json work once a secret lease binds their credential to their host. */
+/** Hosted providers listed in models.json work once their key, a speaker secret, is granted to the task. */
 export const availableModels = (config: Config) => [
   ...config.localModel.models.map((model) => ({
     id: `local/${model.id}`,
@@ -99,7 +78,8 @@ export const availableModels = (config: Config) => [
 
 const modelIds = (models: { id: string }[]) => models.map(({ id }) => ({ id }));
 
-const modelsJson = (config: Config, credentials: Map<string, Credential>) => ({
+/** `keys` holds the placeholder speaker issued for each granted provider secret; until then Pi is told it is missing. */
+const modelsJson = (config: Config, keys: Map<string, string>) => ({
   providers: {
     local: {
       baseUrl: `http://${config.localModel.guestHost}/v1`,
@@ -114,8 +94,8 @@ const modelsJson = (config: Config, credentials: Map<string, Credential>) => ({
         {
           baseUrl: provider.baseUrl,
           api: "openai-completions",
-          // Gondolin swaps this placeholder for the real key only in requests to the bound host.
-          apiKey: credentials.get(provider.credential)!.placeholder,
+          // Speaker's proxy swaps this placeholder for the real key in requests to the secret's hosts.
+          apiKey: keys.get(provider.credential) ?? `speaker-secret-${provider.credential}-not-granted-yet`,
           models: modelIds(provider.models),
         },
       ]),
@@ -128,6 +108,7 @@ export const systemNote = (
   leases: Lease[],
   catalog: Catalog,
   extensionIds: string[],
+  secrets: SecretInfo[] = [],
 ) => {
   const rows = unexpired(leases).map(
     (lease) =>
@@ -137,12 +118,16 @@ export const systemNote = (
     Object.entries(catalog.mcps)
       .map(
         ([id, entry]) =>
-          `- ${id}: ${entry.label}; tools: ${entry.tools.join(", ")}; ${entry.write ? "can write" : "read-only"}${entry.transport === "streamable-http" ? `; endpoint: ${new URL(entry.url).hostname}` : ""}`,
+          `- mcp:${id}: ${entry.label}; tools: ${entry.tools.join(", ")}; ${entry.write ? "can write" : "read-only"}`,
       )
+      .join("\n") || "- none";
+  const secretCatalog =
+    secrets
+      .map(({ name, hosts, env }) => `- secret:${name}: set ${env} to its placeholder; used for ${hosts.join(", ")}`)
       .join("\n") || "- none";
   const extensionCatalog =
     Object.entries(catalog.extensions)
-      .map(([id, entry]) => `- ${id}: ${entry.label}. ${entry.description}${extensionIds.includes(id) ? " (loaded)" : ""}`)
+      .map(([id, entry]) => `- ext:${id}: ${entry.label}. ${entry.description}${extensionIds.includes(id) ? " (loaded)" : ""}`)
       .join("\n") || "- none";
   const notes = extensionIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
@@ -172,7 +157,7 @@ export const systemNote = (
     "- Browser automation: some images include Python Playwright with headless Chromium. Check with `command -v playwright`.",
     "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (such as GitHub releases) only when no registry package exists.",
     "- Hosts to request as `site:<host>` items: PyPI `pypi.org`, `files.pythonhosted.org`; npm `registry.npmjs.org`; git clone `github.com`, `codeload.github.com`; GitHub raw `raw.githubusercontent.com`; GitHub releases `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com`; Hugging Face `huggingface.co`, `cdn-lfs.huggingface.co`, `cas-bridge.xethub.hf.co`; Rust `crates.io`, `index.crates.io`, `static.crates.io`; Go `proxy.golang.org`, `sum.golang.org`. For any other site request the exact hostnames the tool contacts, and check redirects. Prefer a group (`group:<name>`, listed by `GET /_speaker/me`) when it covers three or more of the items you need.",
-    "- For homelab APIs, HTTP MCP servers, and every other item kind, follow the `access-and-creds` skill.",
+    "- For homelab APIs, remote MCP servers, and every other item kind, follow the `access-and-creds` skill.",
     "",
     "## Leases at this Pi start",
     "",
@@ -182,12 +167,21 @@ export const systemNote = (
     "A denied HTTP request returns 403. Treat the current request result as authoritative because the owner can change leases while you run.",
     "When a lease blocks required work, call `request_capability` once with `want`, a list of items. It waits for the owner's decision and returns what was granted and denied; continue independent work meanwhile.",
     "- `site:<host>`: a hostname such as `site:pypi.org`, or `site:*.example.com` (subdomains only). Request several hostnames in one call.",
-    "- `secret:NAME@host[,host]`: lets a host-held credential reach those hosts.",
-    "- `folder:<share>` for read-only access, or `folder:<share>:rw` for write access. It appears under `/input/<share>`.",
-    "- `mcp:<id>`: an exact catalog ID. A new MCP server starts after Pi restarts at idle.",
+    "- `secret:<NAME>`: lets you use one of the owner's secrets (listed below) on the hosts the owner bound it to, without seeing it. Granting it also opens those hosts.",
+    "- `folder:<share>` for read-only access, or `folder:<share>:rw` for write access. It appears under `/input/<share>` when the sandbox holds the share; otherwise `/me` shows how to reach it.",
+    "- `mcp:<id>`: an MCP server that runs inside this VM, from the catalog below (exact id). It starts after Pi restarts at idle.",
     "- `ext:<id>`: an exact extension catalog ID. Its tools appear after Pi restarts at idle; this session resumes.",
+    "- `<service>.read` or `<service>.full`: a homelab API or a remote MCP server, which speaker hosts. Call `$SPEAKER_URL/<service>` with `Authorization: Bearer $SPEAKER_TOKEN`; `/me` marks MCP services `mcp: true`, and an MCP service takes Streamable HTTP JSON-RPC (POST). Remote MCP servers are never `mcp:` items.",
     "",
-    "## Available MCP catalog",
+    "## Using a secret",
+    "",
+    "After `secret:<NAME>` is granted, `GET $SPEAKER_URL/_speaker/me` shows it under `secrets.<NAME>`: the variable to set (its value is a placeholder, not the secret), the hosts, and any proxy settings that apply to you. Set exactly those on the one command that needs them, for example `GH_TOKEN=<placeholder> gh pr list`; for `git` run `gh auth setup-git` once. In this sandbox requests to the secret's hosts already go through speaker's proxy, which swaps the placeholder for the real value, so `/me` lists no proxy settings or certificate for you. Never print the placeholder or your speaker token.",
+    "",
+    "## Secrets you can ask for",
+    "",
+    secretCatalog,
+    "",
+    "## Available MCP catalog (run inside this VM)",
     "",
     mcpCatalog,
     "",
@@ -246,27 +240,13 @@ const webSearchJson = {
   video: { enabled: false },
 };
 
-/** Curated servers are small, so Pi declares their tools directly; its default `codemode` exposure hides them behind a tool we do not grant. Pi reads remote MCP headers from mcp.json; Gondolin swaps each placeholder for the real secret at its bound host. */
-const mcpServers = (catalog: Catalog, ids: string[], credentials: Map<string, Credential>) =>
+/** Curated servers are small, so Pi declares their tools directly; its default `codemode` exposure hides them behind a tool we do not grant. */
+const mcpServers = (catalog: Catalog, ids: string[]) =>
   Object.fromEntries(
     ids.map((id) => {
       const entry = catalog.mcps[id];
       if (!entry) throw new Error(`unknown MCP server ${id}`);
-      const common = { description: entry.label, exposure: "direct" };
-      if (entry.transport === "stdio")
-        return [id, { command: entry.command, args: entry.args, ...common }];
-      const headers = Object.fromEntries(
-        Object.entries(entry.headers ?? {}).map(([name, value]) => {
-          if (!entry.credential) return [name, value];
-          const credential = credentials.get(entry.credential);
-          if (!credential)
-            throw new Error(
-              `MCP server ${id} needs secret ${entry.credential}, which is not configured`,
-            );
-          return [name, value.replaceAll(`\${${entry.credential}}`, credential.placeholder)];
-        }),
-      );
-      return [id, { url: entry.url, headers, ...common }];
+      return [id, { command: entry.command, args: entry.args, description: entry.label, exposure: "direct" }];
     }),
   );
 
@@ -276,10 +256,11 @@ export const writeGuestConfig = (
   config: Config,
   catalog: Catalog,
   task: { name: string; model: string; prompt?: string; attended: boolean },
-  credentials: Map<string, Credential>,
+  keys: Map<string, string>,
   leases: Lease[],
   mcpIds: string[],
   extensionIds: string[],
+  secrets: SecretInfo[] = [],
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
@@ -292,11 +273,11 @@ export const writeGuestConfig = (
   copyFileSync(`${import.meta.dirname}/../../speaker/skill/SKILL.md`, `${directory}/skills/access-and-creds/SKILL.md`);
   const writeJson = (name: string, value: unknown) =>
     writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
-  writeJson("models.json", modelsJson(config, credentials));
+  writeJson("models.json", modelsJson(config, keys));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
   writeJson("web-search.json", webSearchJson);
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds));
-  writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds, credentials) });
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds, secrets));
+  writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
   const [provider, ...model] = task.model.split("/");
   // `--tools` filters MCP tools only when it names them, so each leased tool is listed by its Pi name.

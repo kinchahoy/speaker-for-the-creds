@@ -131,6 +131,7 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
     call,
     ownerForm,
     ownerHeaders,
+    live,
     pending,
     decide,
     grants,
@@ -322,6 +323,52 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   const gone = await f.call(`/_speaker/hosts/agents/${agent.id}`, { method: 'DELETE', headers: bearer('host-token') })
   assert.equal(gone.status, 200)
   assert.equal((await f.call('/_speaker/me', { headers: bearer(agent.token) })).status, 403)
+})
+
+test('a sandbox host records the shares it reports, and a grant is applying for the agent until the host reports it', async (t) => {
+  const f = await setup(t)
+  const { agent } = await approvedHost(f, ['site', 'folder'])
+  const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
+    headers: { authorization: 'Bearer host-token' },
+  })
+  t.after(() => ws.terminate())
+  const inbox: Snapshot[] = []
+  ws.on('message', (data) => inbox.push(JSON.parse(String(data))))
+  await once(ws, 'open')
+
+  ws.send(
+    JSON.stringify({
+      type: 'shares',
+      shares: [
+        { name: 'documents', mount: true },
+        { name: 'ghost', mount: false },
+      ],
+    }),
+  )
+  for (let i = 0; i < 100 && !(await f.live()).grants.includes('documents (VM mount)'); i++) await sleep(20)
+  assert.match((await f.live()).grants, /shares: documents \(VM mount\), ghost \(no VM mount\)/)
+
+  // Asked over the agent's own token and held until decided: the item is granted for the agent only once reported.
+  const held = askFor(f, agent.token, { want: ['site:example.com'], reason: 'docs' }, { 'speaker-wait': '10' })
+  let card = (await f.pending())[0]
+  for (let i = 0; i < 100 && !card; i++) {
+    await sleep(20)
+    card = (await f.pending())[0]
+  }
+  await f.decide(card.id, 'approve')
+  let grant: Snapshot['grants'][number] | undefined
+  for (let i = 0; i < 100 && !grant; i++) {
+    await sleep(20)
+    grant = inbox.findLast((s) => s.grants.length)?.grants[0]
+  }
+  assert.ok(grant)
+  const state = async () =>
+    (await me(f, agent.token)).grants.map((g) => [g.item, (g as { applying?: boolean }).applying])
+  assert.deepEqual(await state(), [['site:example.com', true]])
+  ws.send(JSON.stringify({ type: 'applied', grantIds: [grant.id] }))
+  const answered = (await (await held).json()) as Outcome & { applying?: string[] }
+  assert.deepEqual([answered.status, answered.granted, answered.applying], ['decided', ['site:example.com'], undefined])
+  assert.deepEqual(await state(), [['site:example.com', undefined]])
 })
 
 test('a group request creates one grant per item with the same expiry', async (t) => {

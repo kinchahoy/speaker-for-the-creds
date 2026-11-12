@@ -346,7 +346,7 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 - value: a GitHub fine-grained token limited to the repositories and permissions tasks should have;
 - allowed hosts `api.github.com` and `github.com`.
 
-**At task start.** The sandbox host sets `GH_TOKEN=speaker-placeholder-<random, per task>` in the VM and runs `gh auth setup-git`, so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
+**At task start.** Nothing is set in the VM: speaker issues the placeholder (`speaker-placeholder-<random, per agent>`) only when the grant exists. The agent reads it from `/me` and sets `GH_TOKEN` on the command that needs it, running `gh auth setup-git` once so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
 
 **The agent asks.** Pi requests `secret:GITHUB_TOKEN` with a reason, for example "open a pull request for the fix". The owner's card shows the secret, its allowed hosts, and the write tint. Granting it also allows the sandbox to reach those two hosts; no separate `site:` items are needed. Speaker tells the sandbox host over its WebSocket that the agent holds `secret:GITHUB_TOKEN` for `api.github.com` and `github.com`, until the grant's end. The value is not sent.
 
@@ -354,7 +354,7 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 
 1. `gh` sends `POST https://api.github.com/repos/<owner>/<repo>/pulls` with `Authorization: token speaker-placeholder-…`.
 2. The VM's only network route is the sandbox host's interception. It terminates TLS with the sandbox's own certificate authority, which the VM trusts, and sees a request to a host covered by an active secret grant.
-3. Instead of sending it to GitHub, the sandbox host passes the whole request to speaker over its authenticated channel, naming the agent and the destination URL.
+3. Instead of sending it straight to GitHub, the sandbox host sends it to speaker's proxy (an HTTP `CONNECT` tunnel to the destination, authenticated as the agent; the tunnel trusts speaker's certificate authority).
 4. Speaker checks that the agent holds `secret:GITHUB_TOKEN`, that `api.github.com` is one of its allowed hosts, and that the grant is still active. It replaces the placeholder with the real token, in the `Authorization` header and, for `git`, inside HTTP Basic credentials (`git` sends the token as the Basic password), and nowhere else.
 5. Speaker sends the request to GitHub over its own TLS connection, streams the response back to the sandbox host, and logs agent, host, method, path and status, never the token and never the bodies.
 6. The sandbox host returns the response to `gh`, which works as usual. `git clone`, `git push` and `gh api` go the same way to `github.com` and `api.github.com`.
