@@ -253,7 +253,7 @@ export async function initSpeaker(flags: SpeakerFlags) {
   )
   if (trustedProxy)
     p.log.warn(
-      `Open ports ${proxyPort} (secrets proxy) and ${sshPort} (SSH) on this machine directly: the reverse proxy cannot carry them. Raise the proxy's timeout above 120 s, because speaker holds requests for up to 120 s.`,
+      `Behind a reverse proxy, open ports ${proxyPort} (secrets proxy) and ${sshPort} (SSH) on this machine directly: the proxy cannot carry them. Also raise its timeout above 120 s, since speaker holds requests for up to 120 s.`,
     )
   p.outro('Speaker is set up.')
   return { url: publicUrl, started: start }

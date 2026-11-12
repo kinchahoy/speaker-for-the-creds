@@ -4,15 +4,15 @@
 
 <sub>AI-written</sub>
 
-speaker-for-the-creds holds your keys and approves each use. Agents enroll and ask for items. You approve each request from a phone page. Sandbox hosts such as bottle-school apply the sandbox grants.
+Speaker holds your keys. Agents enroll and ask for items, and you approve each request from a phone page. Sandbox hosts such as bottle-school apply the sandbox grants.
 {.ai}
 
-[DESIGN.md](DESIGN.md) covers items, lifecycles, waiting, errors, sandbox hosts, routes, and code layout. [USECASES.md](USECASES.md) walks through the flows.
+[DESIGN.md](DESIGN.md) has the details; [USECASES.md](USECASES.md) walks through the flows.
 {.ai}
 
 <!-- author: ai -->
 
-## Running Locally
+## Running locally
 
 <sub>AI-written</sub>
 
@@ -21,7 +21,7 @@ mise trust && mise install
 mise run init speaker
 ```
 
-Run this on the machine that hosts speaker. It asks its questions, creates the encrypted store, writes `speaker/.env`, and offers to start speaker. Every question has a flag, so it also runs unattended:
+Run this on the machine that hosts speaker. It asks its questions, creates the encrypted store, writes `speaker/.env`, and offers to start speaker. Speaker keeps its data in `~/.local/share/speaker` by default. The web, secrets-proxy, and SSH ports default to 3000, 3128, and 2222, and each must be free. Agents and VMs need an address for this machine. They cannot use `127.0.0.1`, because inside a VM that is the VM itself, so `init` offers the machine's LAN address. Every question has a flag, so it also runs unattended:
 {.ai}
 
 ```sh
@@ -31,7 +31,7 @@ printf '%s\n' "$PASSWORD" | mise run init speaker --yes --password-stdin --data-
 The other flags are `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, and `--force`. On a separate sandbox machine, run `mise run init bottle-school` afterward.
 {.ai}
 
-Open `PUBLIC_URL/admin` and sign in with the password you chose. You sign in again after every restart, which unlocks the stored keys (see Keys and Sign-In). Start speaker later with `mise run speaker`.
+Open `PUBLIC_URL/admin` and sign in with the password you chose. You sign in again after every restart, which unlocks the stored keys (see Keys and sign-in). Start speaker later with `mise run speaker`.
 {.ai}
 
 <!-- author: ai -->
@@ -61,7 +61,7 @@ A call without access answers `approval_required` with the request's ID, and fil
 
 <!-- author: ai -->
 
-## Who Receives Service Credentials
+## Who receives service credentials
 
 <sub>AI-written</sub>
 
@@ -77,7 +77,7 @@ Speaker keeps these values encrypted on its data volume, decrypts them in memory
 
 <!-- author: ai -->
 
-## Keys and Sign-In
+## Keys and sign-in
 
 <sub>AI-written</sub>
 
@@ -86,13 +86,13 @@ All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/sto
 
 - `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
 - When a store exists, speaker starts locked. Agent and sandbox-host calls answer `503` `locked` with a `tell_user` line. `/admin` shows only sign-in. If ntfy is set, one push asks you to sign in. Signing in unlocks.
-- Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets Proxy).
+- Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.
 - Upgrading: when you set the password, speaker imports plaintext key files from earlier versions (`DATA_DIR/secrets/`) into the store and deletes them.
 
 <!-- author: ai -->
 
-## Secrets Proxy
+## Secrets proxy
 
 <sub>AI-written</sub>
 
@@ -133,7 +133,7 @@ The description is optional. A group may hold any items except other groups. Cop
 A request names the group, and you approve it with the group's items. `GET /_speaker/me` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items, or with `secret:` items unless `PROXY_PORT` is set.
 {.ai}
 
-## Phone Notifications
+## Phone notifications
 
 <sub>AI-written</sub>
 
@@ -151,7 +151,7 @@ NTFY_TOKEN=your-publish-token
 
 <!-- author: ai -->
 
-## Docker and Home-Server Deployment
+## Docker and home-server deployment
 
 <sub>AI-written</sub>
 
@@ -178,22 +178,22 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 <!-- author: ai -->
 
-## SSH and Folders
+## SSH and folders
 
-_AI-drafted_
+<sub>AI-written</sub>
 
 Agents run commands on your hosts and use your folders through a jump server inside speaker's container. Speaker listens on `SSH_PORT` only while an SSH or over-SSH folder grant is active. It hands each connection to a stock, non-root `sshd -i` with a new host key each time it starts. The relay (`relay.ts`) is each session's forced command. Set `SSH_PORT` to turn this on. Without it, speaker answers `ssh:` and `folder:` items with `denied`. [DESIGN.md](DESIGN.md#ssh-and-shares-how-speaker-controls-them) explains how the relay controls sessions and folders.
 
-- **Targets** (Setup): an alias, a host, a port, and the account speaker uses there. Adding a target pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first. You can edit the address list per target.
-- **Shares** (Setup): a name, a target, an absolute path, and how to deliver it (`VM mount`, `over SSH`, or both). Cards show the account (and any sudo warning) for `ssh:<target>`. For `folder:<share>[:rw]` they show the share, whether it is read-only or read-write, and the delivery.
-- **Agents** send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker answers unknown names, and items it cannot deliver, with `denied` at once and logs them. After approval, `GET /_speaker/me` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
+- Targets (Setup): an alias, a host, a port, and the account speaker uses there. Adding a target pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first. You can edit the address list per target.
+- Shares (Setup): a name, a target, an absolute path, and how to deliver it (`VM mount`, `over SSH`, or both). Cards show the account (and any sudo warning) for `ssh:<target>`. For `folder:<share>[:rw]` they show the share, whether it is read-only or read-write, and the delivery.
+- Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker answers unknown names, and items it cannot deliver, with `denied` at once and logs them. After approval, `GET /_speaker/me` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
 - For an `ssh:` grant, `scp` and `sftp` paths are `<target>/<absolute path on the target>`. Speaker refuses `rsync`, legacy `scp -O`, and commands on a folder grant, with a pointer to `sftp`.
 - The Active page lists open sessions with **End**. Ending a grant, revoking it, or restarting speaker ends its sessions.
 - Container: the image has `openssh-server` and `openssh-client`, and `compose.yaml` publishes `SSH_PORT` (default 2222). The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store, and in clear only in memory inside `ssh-agent`. The jump server's files (public keys, its per-start host key, the ssh-agent socket) sit in a private temporary directory.
 
 <!-- author: ai -->
 
-## Agent Access
+## Agent access
 
 <sub>AI-written</sub>
 
@@ -207,7 +207,7 @@ Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker ser
 
 <!-- author: ai -->
 
-## Proxy Boundary
+## Proxy boundary
 
 <sub>AI-written</sub>
 

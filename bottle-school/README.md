@@ -9,7 +9,7 @@ bottle-school runs the Pi coding agent in disposable [microsandbox](https://gith
 
 <!-- author: ai -->
 
-## Host Setup
+## Host setup
 
 <sub>AI-written</sub>
 
@@ -23,7 +23,7 @@ From the repository root, run `mise trust && mise install` once, then:
 mise run init bottle-school
 ```
 
-The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. Every question has a flag, so it also runs unattended:
+The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. Every question has a flag, so it also runs unattended:
 {.ai}
 
 ```sh
@@ -40,13 +40,13 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-cli register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
-- `localModel.models`: the served model IDs. Local inference is baseline access, independent of speaker leases.
+- `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
 - `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
 - `PI_V2_CONFIG` selects the service configuration, and `BOTTLE_CONFIG` selects the CLI configuration. Both default to `bottle-school/config.json`.
 
 <!-- author: ai -->
 
-## Build and Run
+## Build and run
 
 <sub>AI-written</sub>
 
@@ -127,7 +127,7 @@ docker save <image> | MSB_HOME=<stateRoot>/microsandbox msb load --tag <guestIma
 Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. `mise run doctor` checks that the guest image loads and boots.
 {.ai}
 
-The guest has **no network device**. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
+The guest has no network device. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
 {.ai}
 
 - an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`)
@@ -135,34 +135,34 @@ The guest has **no network device**. Its only doors are host unix sockets on gue
 - speaker (`SPEAKER_URL`)
 - the control channel that Pi's status reports use
 
-When `speaker.sshPort` is set, a fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see Folders below).
+When `speaker.sshPort` is set, a fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
 {.ai}
 
 Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, trace records, archive writing), `src/tasks.ts` (task lifecycle as a transition table: starting, idle, busy, reconfiguring, closing, archived, failed, failed-archive), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped).
 {.ai}
 
-- **Egress.** One `proxy-chain` server per task decides every request from the live lease view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: it fetches the certificate from `/_speaker/proxy/ca.pem` at boot, installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
-- **Model endpoint.** A small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
-- **Speaker.** The speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
-- **Terminal.** `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
-- **Folders** go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle-school reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
+- Egress: one `proxy-chain` server per task decides every request from the live lease view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: it fetches the certificate from `/_speaker/proxy/ca.pem` at boot, installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
+- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
+- Speaker: the speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
+- Terminal: `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
+- Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle-school reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
   - Each task gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle-school adds it to the task's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
   - While a folder grant is active, bottle-school (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/me`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle-school unmounts the share.
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
   - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
   - A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
-- **Storage.** microsandbox keeps images and VM records in `<stateRoot>/microsandbox`, created with mode 700. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`), so use a `stateRoot` whose parents are not group-writable. `start.sh` checks this and stops with the directory to `chmod 700`.
+- Storage: microsandbox keeps images and VM records in `<stateRoot>/microsandbox`, created with mode 700. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`), so use a `stateRoot` whose parents are not group-writable. `start.sh` checks this and stops with the directory to `chmod 700`.
 
 <!-- author: ai -->
 
-## Templates, Catalogs, and Leases
+## Templates, catalogs, and leases
 
 <sub>AI-written</sub>
 
 `templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `attended`, which fixes the launch mode. `want` lists items and groups (`group:developer`, `site:pypi.org`, `notes.read`). `label` and `duration` are the task's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the task's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing (the `offline` preset). The file ships the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
 {.ai}
 
-**Templates versus groups.** A template is the runtime profile bottle-school owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items you approve together. To change what tasks start with, edit a template's `want` or the group in speaker. To change how big or how long a task is, edit the template's limits.
+A template is the runtime profile bottle-school owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items you approve together. To change what tasks start with, edit a template's `want` or the group in speaker. To change how big or how long a task is, edit the template's limits.
 {.ai}
 
 A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp` or `extension` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
@@ -181,24 +181,24 @@ A task with a local model starts Pi at once and does not wait for its first requ
 
 <!-- author: ai -->
 
-## Secrets and Speaker's Proxy
+## Secrets and speaker's proxy
 
 <sub>AI-written</sub>
 
 bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` variables are retired, and startup stops with a message while either is present. You add each secret once in speaker's Setup, with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`). A task asks for `secret:<NAME>`, and the card shows the hosts.
 {.ai}
 
-**The route.** The grant snapshot for a secret carries the secret's hosts, not its value. bottle-school's egress proxy sends every request the VM makes to those hosts through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README) as a CONNECT tunnel authenticated as the task's agent. bottle-school holds that token; the guest has only a placeholder. The guest's TLS for those hosts ends at speaker's proxy, whose certificate the guest trusts (see Egress under The VM). [speaker's DESIGN.md](../speaker/DESIGN.md#secrets-speaker-inserts-them) covers what speaker does next. bottle-school drops the route when its grant goes. Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it. If speaker's proxy is unreachable, bottle-school refuses the request and never sends it directly.
+The grant snapshot for a secret carries the secret's hosts, not its value. bottle-school's egress proxy sends every request the VM makes to those hosts through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README) as a CONNECT tunnel authenticated as the task's agent. bottle-school holds that token; the guest has only a placeholder. The guest's TLS for those hosts ends at speaker's proxy, whose certificate the guest trusts (see the Egress bullet under The VM). [speaker's DESIGN.md](../speaker/DESIGN.md#secrets-speaker-inserts-them) covers what speaker does next. bottle-school drops the route when its grant goes. Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it. If speaker's proxy is unreachable, bottle-school refuses the request and never sends it directly.
 {.ai}
 
 ### Hosted model providers
 
-A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle-school asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, Catalogs, and Leases).
+A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle-school asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and leases).
 {.ai}
 
 <!-- author: ai -->
 
-## Research and Loop Presets
+## Research and loop presets
 
 <sub>AI-written</sub>
 
@@ -216,18 +216,18 @@ The `loop` template is unattended. It runs at most 24 hours and 300 model reques
 
 <!-- author: ai -->
 
-## Upgrading an Existing Install
+## Upgrading an existing install
 
 <sub>AI-written</sub>
 
-- **Secrets move to speaker.** Add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees). Delete `secrets.env` and the `BROKER_SECRET_*` variables. Register again, which learns speaker's `PROXY_PORT`, and publish that port. In old groups, a grant for `secret:<NAME>@host` becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now name a speaker secret.
-- **Config files.** The `templates/` and `catalog/` directories became `templates.json` and `catalog.json`. Copy the new files into `configRoot`.
-- **Templates.** `bundle` becomes `want: ["group:<name>"]`, and `bundleDuration` becomes `duration`. The old keys fail validation. Edit your `templates.json` or copy the new one.
-- **Catalog.** Remove remote MCP entries from `catalog.json`; `mcps` keeps only servers that run inside the VM. Add the remote ones in speaker's Setup as services (tick "MCP server"), and replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
+- Secrets move to speaker: add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees). Delete `secrets.env` and the `BROKER_SECRET_*` variables. Register again, which learns speaker's `PROXY_PORT`, and publish that port. In old groups, a grant for `secret:<NAME>@host` becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now name a speaker secret.
+- Config files: the `templates/` and `catalog/` directories became `templates.json` and `catalog.json`. Copy the new files into `configRoot`.
+- Templates: `bundle` becomes `want: ["group:<name>"]`, and `bundleDuration` becomes `duration`. The old keys fail validation. Edit your `templates.json` or copy the new one.
+- Catalog: remove remote MCP entries from `catalog.json`; `mcps` keeps only servers that run inside the VM. Add the remote ones in speaker's Setup as services (tick "MCP server"), and replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
 
 <!-- author: ai -->
 
-## Who Receives Credentials
+## Who receives credentials
 
 <sub>AI-written</sub>
 
@@ -247,7 +247,7 @@ Placeholder substitution keeps the real value off the guest and off bottle-schoo
 
 <!-- author: ai -->
 
-## Task Archive
+## Task archive
 
 <sub>AI-written</sub>
 
@@ -265,7 +265,7 @@ You delete archives manually. If archiving fails, bottle-school keeps the work t
 
 <!-- author: ai -->
 
-## Verification and Troubleshooting
+## Verification and troubleshooting
 
 <sub>AI-written</sub>
 
@@ -291,7 +291,7 @@ Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concur
 
 <!-- author: ai -->
 
-## Security Boundary
+## Security boundary
 
 <sub>AI-written</sub>
 

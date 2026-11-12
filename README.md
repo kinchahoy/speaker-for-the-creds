@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-Agents need your API keys, SSH hosts, and folders. This repository lets you approve each use from a phone, for a time you choose.
+This repository lets you approve each use of your API keys, SSH hosts and folders from a phone, for a time you choose.
 {.ai}
 
 - [speaker](speaker/README.md) ([design](speaker/DESIGN.md)) holds your keys, shows approval requests, proxies APIs, and issues grants.
@@ -12,7 +12,7 @@ Agents need your API keys, SSH hosts, and folders. This repository lets you appr
 
 <!-- author: ai -->
 
-## Getting Started
+## Getting started
 
 <sub>AI-written</sub>
 
@@ -35,7 +35,7 @@ mise install
 mise run init
 ```
 
-`init` installs both packages and asks what it needs to set up speaker, then bottle-school. It offers to start each and to run a smoke-test task. Every question has a flag, and `--yes` takes the defaults, so it also runs unattended. Each package README lists the flags.
+`init` installs both packages, then asks the questions needed to set up speaker and then bottle-school. It offers to start each and to run a smoke-test task. Every question has a flag, and `--yes` takes the defaults, so it also runs unattended. Each package README lists the flags.
 {.ai}
 
 To use two machines, run `mise run init speaker` on the server and `mise run init bottle-school` on the sandbox machine. To set up only one, name it the same way.
@@ -44,21 +44,21 @@ To use two machines, run `mise run init speaker` on the server and `mise run ini
 Then:
 {.ai}
 
-1. **Sign in.** Open `PUBLIC_URL/admin`. Speaker stays locked until you do, and again after every restart.
-2. **Add what agents can use.** On the Services page under Setup, add any of these:
+1. Open `PUBLIC_URL/admin` and sign in. Speaker stays locked until you do, and again after every restart.
+2. To add what agents can use, go to the Services page under Setup and add any of these:
    - a service (the `demo` service works without a key; start there to try approval and revocation)
    - a secret: a name, a value, the hosts it may reach, and a variable name (the agent only sees a placeholder)
    - an SSH target: first put the line Setup shows into that account's `authorized_keys`
    - a share on that target (`VM mount`, `over SSH`, or both)
-3. **Connect a direct agent.** Give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
-4. **Launch a sandboxed task.** Run `mise run bottle-cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle`.
-5. **Stop.** Run `mise run bottle-cli stop <id>` for each task. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
+3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
+4. To launch a sandboxed task, run `mise run bottle-cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle`.
+5. To stop, run `mise run bottle-cli stop <id>` for each task. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}
 
 If speaker's address changes later, run `mise run init bottle-school --force`.
 {.ai}
 
-Pi needs a model server. `init` asks for an OpenAI-compatible one. To use a hosted model instead, see [Hosted Model Providers](bottle-school/README.md#hosted-model-providers).
+Pi needs a model server. `init` asks for an OpenAI-compatible one. To use a hosted model instead, see [Hosted model providers](bottle-school/README.md#hosted-model-providers).
 {.ai}
 
 <!-- author: ai -->
@@ -94,7 +94,7 @@ Speaker is a candidate for supervised pilots. Before you rely on it, check the r
 
 <!-- author: ai -->
 
-## Local Files
+## Local files
 
 <sub>AI-written</sub>
 

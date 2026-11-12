@@ -1,14 +1,14 @@
-# Speaker Help
+# Speaker help
 
 Use only names the user gave you or that `GET $SPEAKER_URL/_speaker/me` shows. Never ask for upstream keys.
 
-## In a Sandbox
+## In a sandbox
 
 Read this section and the item list in section 3. Skip the rest.
 
 You are already enrolled: `SPEAKER_URL` and `SPEAKER_TOKEN` are set. Send `Authorization: Bearer $SPEAKER_TOKEN`. Ask for items with the `request_capability` tool. It waits and returns the decision. The sandbox then applies each granted item. Retry what was blocked; `applying` in `/me` means not yet. For a secret, set only the placeholder variable from `/me` on the command. You need no proxy or certificate setup. `mcp:<id>` and `ext:<id>` start inside the sandbox, from its host's list.
 
-## 1. Set Up
+## 1. Set up
 
 Do this once per user and machine. Skip it if the header file works. In a sandbox, you are already enrolled.
 
@@ -37,11 +37,11 @@ From now on call with `curl.exe -H "@$d\header" ...`.
 
 Your token works only from the address you enrolled from. From another address, set up again with a new token.
 
-## 2. Check Where You Stand
+## 2. Check where you stand
 
 `GET $SPEAKER_URL/_speaker/me` shows your services, grants, secrets, SSH commands, the groups you may ask for, and your requests. `GET $SPEAKER_URL/_speaker/help/<service>` gives that service's usage and your state for it.
 
-## 3. Ask for Access
+## 3. Ask for access
 
 To use a service, call it with `Speaker-Wait: 60` (see the core skill). Speaker asks the owner for you. To ask for several things at once, `POST $SPEAKER_URL/_speaker/requests` with the header `Speaker-Wait: 60` and this body:
 
@@ -55,7 +55,7 @@ Durations: `30m`, `1h`, `2h` (default), `1d`, `30d`.
 
 The reply lists `granted` and `denied`. Work with what was granted. Do not ask again for what was denied. Repeating the call joins your pending request.
 
-## 4. SSH and Folders
+## 4. SSH and folders
 
 Target and share names come only from the user or your task. Make a throwaway key once, with `ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"`, and send `"sshKey":"<contents of ssh_key.pub>"` with your first request. Then ask for `ssh:<target>` or `folder:<share>`.
 
@@ -73,7 +73,7 @@ Ask for `secret:<NAME>`. After approval, `/me` lists it under `secrets`: `enviro
 
 In `HTTPS_PROXY`, replace `<token>` with the part after `Bearer ` in your header file. Speaker refuses other hosts.
 
-## 6. Remote MCP Servers
+## 6. Remote MCP servers
 
 A service in `/me` with `mcp: true` is a remote MCP server. Ask for `<service>.read`, then point your MCP client at `$SPEAKER_URL/<service>` with the `Authorization` header from your header file.
 
