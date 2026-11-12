@@ -81,7 +81,7 @@ Identity fields, as the agent is told to fill them:
 - `agent`: `<model> · <app> on <machine>`. Example: `Opus 5.5 · Claude Code on PrimeX`. `unknown` for any part it does not know.
 - `reason` (every request): one sentence on why the task needs this now.
 
-Speaker adds the source address and a token fingerprint to the card itself.
+Speaker adds the source address and a token fingerprint to the card itself. The source address is the only verified fact about where an agent runs; `label` and `agent` are the agent's claims and are shown as such.
 
 ### Calling a service
 
@@ -186,7 +186,7 @@ New requests and the locked state go to the owner's phone as a push notification
 
 ## Sandbox hosts
 
-A sandbox host registers with a name and the item kinds it can enforce; the owner approves it once. For each task it creates a sandboxed agent and receives that agent's token. It holds a WebSocket to speaker, receives every grant and revocation for its agents as they happen, applies them inside the VM, and reports which grants are in force. A task template names what the task starts with as a `want` list and a `label`; that becomes the task's first request.
+A sandbox host registers with a name and the item kinds it can enforce; the owner approves it once. For each task it creates a sandboxed agent, with the same identity fields a direct agent sends (`label` from the task prompt or template, `agent` as `<model> · Pi on <sandbox host>`, and a `reason` on its first request), and receives that agent's token. Speaker adds the sandbox host and task id, which it knows from the host's authenticated channel, and binds the token to the sandbox host's address, so a token leaked from a VM works nowhere else. It holds a WebSocket to speaker, receives every grant and revocation for its agents as they happen, applies them inside the VM, and reports which grants are in force. A task template names what the task starts with as a `want` list and a `label`; that becomes the task's first request.
 
 ## Discovery and instructions
 
@@ -225,7 +225,7 @@ Placement:
 
 ## Security model
 
-- **Agent tokens** are random, stored by speaker only as SHA-256 hashes, kept by agents in a user-only header file, and bound to the address they enrolled from. That address is the socket address, or the address recorded by `TRUSTED_PROXY` when one is configured; a client-supplied `X-Forwarded-For` is never trusted otherwise.
+- **Agent tokens** are random, stored by speaker only as SHA-256 hashes, kept by agents in a user-only header file, and bound to the address they enrolled from. That address is the socket address; when the connection comes from `TRUSTED_PROXY`, it is the last `X-Forwarded-For` entry, the one that proxy appended. `X-Forwarded-For` from any other sender is ignored.
 - **Enrollment** is unauthenticated but rate limited (20 per 15 minutes in total). It refuses malformed hashes and the hash of an empty token; enrolling again with the same token returns the existing agent.
 - **Approval** happens only in `/admin`, behind the owner's sign-in, with same-origin checks on every change. Card details supplied by the agent (label, agent string, reason) are shown as claims; the source address and fingerprint are speaker's own.
 - **Upstream calls** do not follow redirects; a key embedded in an upstream URL is redacted from replies and logs.
