@@ -1,20 +1,27 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { once } from "node:events";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
-import { createServer as createNetServer, isIP } from "node:net";
+import { connect, createServer as createNetServer, isIP, type Socket } from "node:net";
 import { pipeline } from "node:stream/promises";
 import { buffer } from "node:stream/consumers";
+import { promisify } from "node:util";
 import { RequestError, Server as ProxyServer } from "proxy-chain";
 import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
+import { z } from "zod";
 import { countModelRequest, isInternalIp, note, recordHttp, secretRoute, type Backend, type Live } from "../backend.ts";
 import type { Config } from "../config.ts";
 import { hostMatches, ipv4Destination, speakerRequestAllowed, unexpired } from "../leases.ts";
 
 /** Guest vsock ports, one per door; `socat` in the guest exposes each as a localhost TCP port. */
 const DOORS = { egress: [5000, 3128], model: [5001, 80], speaker: [5002, 3129], control: [5003, 3130] } as const;
+
+/** The fifth door: the guest's ssh reaches speaker's jump server through it (`ProxyCommand socat`), for folders over `sshfs`. */
+const SSH_VSOCK = 5004;
+const GUEST_SSH = { key: "/run/speaker/ssh_key", config: "/run/speaker/ssh_config", knownHosts: "/run/speaker/known_hosts" };
 
 /** microsandbox keeps its images and sandbox records here. It refuses a folder other accounts could write. */
 const home = (config: Config) => {
@@ -71,6 +78,32 @@ export const serveEgress = async (proxy: ProxyServer, path: string) => {
   return Object.assign(server, { closeAllConnections: () => proxy.closeConnections() });
 };
 
+/** Pipes each guest connection on a unix socket to speaker's SSH port. The guest has no network device; this is its only way there. */
+const serveSsh = async (path: string, host: string, port: number) => {
+  const sockets = new Set<Socket>();
+  const server = createNetServer((guest) => {
+    const speaker = connect(port, host);
+    for (const socket of [guest, speaker]) {
+      sockets.add(socket);
+      socket.on("close", () => (sockets.delete(socket), guest.destroy(), speaker.destroy())).on("error", () => undefined);
+    }
+    guest.pipe(speaker).pipe(guest);
+  });
+  server.listen(path);
+  await once(server, "listening");
+  return Object.assign(server, { closeAllConnections: () => sockets.forEach((socket) => socket.destroy()) });
+};
+
+/** A throwaway SSH key for one task: the private half goes into the VM, the public half to speaker as the agent's `sshKey`. */
+const newSshKey = async (dir: string) => {
+  const file = `${dir}/ssh_key`;
+  await promisify(execFile)("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "", "-f", file]);
+  const key = { private: readFileSync(file, "utf8"), public: readFileSync(`${file}.pub`, "utf8").trim() };
+  rmSync(file);
+  rmSync(`${file}.pub`);
+  return key;
+};
+
 const headersOf = (headers: IncomingHttpHeaders) =>
   new Headers(Object.entries(headers).flatMap(([name, value]) => (value === undefined ? [] : [[name, [value].flat().join(", ")]])));
 const reply = (res: ServerResponse, status: number, message: string) =>
@@ -81,10 +114,12 @@ const forward = async (
   req: IncomingMessage,
   res: ServerResponse,
   target: URL,
-  options: { headers?: Record<string, string>; dispatcher?: Dispatcher; record?: { live: Live; dir: string } } = {},
+  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; dir: string } } = {},
 ) => {
   const started = Date.now();
-  const body = await buffer(req);
+  const sent = await buffer(req);
+  // `json` is merged into a JSON request body (the task's SSH key into its requests to speaker).
+  const body = options.json ? Buffer.from(JSON.stringify({ ...JSON.parse(sent.toString()), ...options.json })) : sent;
   const { host: _host, connection: _connection, "content-length": _length, ...headers } = req.headers;
   const method = req.method ?? "GET";
   const upstream = await request(target, {
@@ -139,13 +174,69 @@ export const modelDoor = (config: Config, live: Live, route: ReturnType<typeof s
     await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, dir } });
   };
 
-/** Speaker's agent API for the guest: the same paths the Gondolin backend allows, with the task's real token added here. */
-const speakerDoor = (speaker: { url: string; token: string }): RequestListener => async (req, res) => {
+/**
+ * Speaker's agent API for the guest: the same paths the Gondolin backend allows, with the task's real token added here.
+ * The task's SSH public key rides along on its requests, so a `folder:` grant is deliverable over SSH.
+ */
+export const speakerDoor = (speaker: { url: string; token: string }, sshKey?: string): RequestListener => async (req, res) => {
   const target = new URL(req.url ?? "/", speaker.url);
   if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET"))
     return void reply(res, 403, "this speaker path is not available to a sandboxed task");
-  await forward(req, res, target, { headers: { authorization: `Bearer ${speaker.token}` } });
+  const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
+  await forward(req, res, target, {
+    headers: { authorization: `Bearer ${speaker.token}` },
+    ...(sshKey && requests ? { json: { sshKey } } : {}),
+  });
 };
+
+/**
+ * Keeps the guest's folders in step with `live.shares`: each active grant is mounted, a mode change is remounted, and a
+ * mount whose grant ended (or whose session speaker ended) is removed or made again. The guest's own mount table is the
+ * state. A failed mount is noted once and retried (speaker may not have installed the key yet).
+ */
+export const folderSync = (
+  live: Live,
+  guest: {
+    /** Folders mounted now, each with whether it is read-write. */
+    mounted: () => Promise<Map<string, boolean>>;
+    mount: (share: string, writable: boolean) => Promise<void>;
+    unmount: (share: string) => Promise<void>;
+  },
+  retryMs = 3_000,
+) => {
+  const failing = new Map<string, number>();
+  let used = false;
+  return async () => {
+    const wanted = new Map(
+      [...live.shares].filter(([, share]) => unexpired([share]).length).map(([name, share]) => [name, share.writable]),
+    );
+    if (!wanted.size && !used) return;
+    const mounted = await guest.mounted();
+    for (const share of failing.keys()) if (!wanted.has(share)) failing.delete(share);
+    for (const [share, writable] of mounted)
+      if (wanted.get(share) !== writable) {
+        mounted.delete(share);
+        await guest.unmount(share).then(
+          () => note(live, `unmounted /input/${share}`),
+          (error: Error) => note(live, `could not unmount /input/${share}: ${error.message}`),
+        );
+      }
+    for (const [share, writable] of wanted) {
+      if (mounted.has(share) || Date.now() < (failing.get(share) ?? 0)) continue;
+      try {
+        await guest.mount(share, writable);
+        used = true;
+        failing.delete(share);
+        note(live, `mounted /input/${share} ${writable ? "read-write" : "read-only"} over SSH`);
+      } catch (error) {
+        if (!failing.has(share)) note(live, `could not mount folder ${share}: ${(error as Error).message}`);
+        failing.set(share, Date.now() + retryMs);
+      }
+    }
+  };
+};
+
+const Me = z.object({ ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()) })) });
 
 /** Starts a server on a unix socket that a vsock route reaches; a failed request ends as a 502, never an unhandled error. */
 export const listen = async (path: string, handler: RequestListener) => {
@@ -169,14 +260,21 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
     ...(proxyPort ? { proxy: `${new URL(config.speaker.url).hostname}:${proxyPort}` } : {}),
     token: speaker.token,
   });
+  // Folders arrive over SSH through speaker (see `folderSync`); without speaker.sshPort the guest has no way to them.
+  const sshPort = config.speaker.sshPort;
+  const key = sshPort ? await newSshKey(dir) : undefined;
   const servers = [
     await serveEgress(egress, `${dir}/egress.sock`),
     await listen(`${dir}/model.sock`, modelDoor(config, live, route, paths.capture)),
-    await listen(`${dir}/speaker.sock`, speakerDoor(speaker)),
+    await listen(`${dir}/speaker.sock`, speakerDoor(speaker, key?.public)),
     await listen(`${dir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
+    ...(sshPort ? [await serveSsh(`${dir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
   ];
-  const stopDoors = () =>
-    Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]);
+  let folders: NodeJS.Timeout | undefined;
+  const stopDoors = () => {
+    clearInterval(folders);
+    return Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]);
+  };
 
   let sandbox: MicroVm | undefined;
   try {
@@ -210,16 +308,71 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
       .volume("/output", (mount) => mount.bind(paths.artifacts))
       .volume("/etc/pi-v2", (mount) => mount.bind(paths.guestConfig).readonly());
     for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${dir}/${door}.sock`, port);
+    if (key) builder = builder.vsock(`${dir}/ssh.sock`, SSH_VSOCK);
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);
     sandbox = await builder.create();
     if (ca) await sandbox.fs().write(caPath, ca);
     const doors = Object.values(DOORS)
       .map(([vsock, port]) => `setsid socat TCP-LISTEN:${port},fork,reuseaddr,bind=127.0.0.1 VSOCK-CONNECT:2:${vsock} >/dev/null 2>&1 </dev/null &`)
       .join("\n");
+    // The SSH key is root-only, and ssh reaches speaker through the vsock door, never a network.
+    const ssh = key
+      ? `umask 077\nmkdir -p /run/speaker\ncat > ${GUEST_SSH.key} <<'KEY'\n${key.private}KEY\nprintf 'Host *\\n  ProxyCommand socat - VSOCK-CONNECT:2:${SSH_VSOCK}\\n  ServerAliveInterval 5\\n  ServerAliveCountMax 2\\n' > ${GUEST_SSH.config}\n`
+      : "";
     const started = await sandbox.shell(
-      `set -e\necho '127.0.0.1 ${config.localModel.guestHost}' >> /etc/hosts\n${ca ? "update-ca-certificates >/dev/null\n" : ""}${doors}`,
+      `set -e\necho '127.0.0.1 ${config.localModel.guestHost}' >> /etc/hosts\n${ca ? "update-ca-certificates >/dev/null\n" : ""}${ssh}${doors}`,
     );
     if (started.code !== 0) throw new Error(`guest setup failed: ${started.stderr()}`);
+    if (key) {
+      const vm = sandbox;
+      const run = async (command: string) => {
+        const result = await vm.shell(command);
+        if (result.code !== 0) throw new Error(result.stderr().trim() || `exit ${result.code}`);
+      };
+      const sync = folderSync(live, {
+        // speaker's own /me gives the complete sshfs command line for the grant, with the jump server's pinned host key.
+        mount: async (share, writable) => {
+          const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+            headers: { authorization: `Bearer ${speaker.token}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) throw new Error(`speaker GET me returned ${response.status}`);
+          const item = `folder:${share}${writable ? ":rw" : ""}`;
+          const command = Me.parse(await response.json()).ssh.find((entry) => entry.item === item)?.commands[0];
+          if (!command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
+          // sshfs 3.7 hands ssh only the options it knows, and KnownHostsCommand is not one: the pinned key goes in a file.
+          const pinned = /-o 'KnownHostsCommand=\/bin\/echo "([^"]+)"'/.exec(command);
+          if (!pinned) throw new Error(`speaker's sshfs command for ${item} has no pinned host key`);
+          const sshfs = command
+            .replace(pinned[0], "")
+            .replace("UserKnownHostsFile=/dev/null", `UserKnownHostsFile=${GUEST_SSH.knownHosts}`)
+            .replace("<key>", () => GUEST_SSH.key)
+            .replace("<mountpoint>", () => `/input/${share}`)
+            .replace("sshfs ", `sshfs -F ${GUEST_SSH.config}${writable ? "" : " -o ro"} `);
+          await run(`mkdir -p /input/${share} && echo '${pinned[1]}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
+        },
+        // speaker ending a session takes its mount with it, so there may be nothing left to unmount.
+        unmount: (share) => run(`if grep -q ' /input/${share} ' /proc/mounts; then fusermount3 -uz /input/${share}; fi`),
+        mounted: async () => {
+          const table = await vm.shell("grep ' fuse.sshfs ' /proc/mounts || true");
+          return new Map(
+            table
+              .stdout()
+              .split("\n")
+              .flatMap((line) => {
+                const [, path, , options] = line.split(" ");
+                return path?.startsWith("/input/") ? [[path.slice("/input/".length), options!.split(",").includes("rw")] as const] : [];
+              }),
+          );
+        },
+      });
+      let busy = false;
+      folders = setInterval(() => {
+        if (busy) return;
+        busy = true;
+        void sync().finally(() => (busy = false));
+      }, 1_000);
+    }
   } catch (error) {
     await sandbox?.stop().then(() => sandbox?.waitUntilStopped()).catch(() => undefined);
     await Sandbox.remove(name).catch(() => undefined);
@@ -228,12 +381,14 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
   }
   const vm = sandbox;
   return {
+    ...(key ? { sshKey: key.public } : {}),
     sessionId: name,
     exec: async (command) => {
       const result = await vm.shell(command);
       return { exitCode: result.code, stdout: result.stdout(), stderr: result.stderr() };
     },
     close: async () => {
+      clearInterval(folders);
       try {
         await vm.stop();
         await vm.waitUntilStopped();
@@ -247,7 +402,7 @@ const boot: Backend["boot"] = async (config, live, limits, paths, env, speaker, 
 
 export const microsandbox: Backend = {
   boot,
-  folders: false,
+  folders: true,
   attach: (config, sessionId, command) => ({
     file: "env",
     args: [`MSB_HOME=${config.stateRoot}/microsandbox`, `${import.meta.dirname}/../../node_modules/.bin/msb`, "exec", "-t", sessionId, "--", ...command],

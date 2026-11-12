@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { Client, type Dispatcher } from "undici";
 import { secretRoute, type Live } from "../src/backend.ts";
-import { egressDecision, egressProxy, serveEgress, listen, modelDoor } from "../src/backends/microsandbox.ts";
+import { egressDecision, egressProxy, folderSync, listen, modelDoor, serveEgress, speakerDoor } from "../src/backends/microsandbox.ts";
 import type { Config } from "../src/config.ts";
 
 const live = (extra: Partial<Live> = {}): Live => ({
@@ -108,5 +108,80 @@ describe("model endpoint", () => {
     await client.close();
     door.close();
     upstream.close();
+  });
+});
+
+describe("folders over SSH", () => {
+  const future = new Date(Date.now() + 60_000).toISOString();
+  /** A guest whose mount table is a map, recording what the sync asked of it. */
+  const fakeGuest = (fail = false) => {
+    const table = new Map<string, boolean>();
+    const calls: string[] = [];
+    return {
+      table,
+      calls,
+      mounted: async () => new Map(table),
+      mount: async (share: string, writable: boolean) => {
+        calls.push(`mount ${share} ${writable ? "rw" : "ro"}`);
+        if (fail) throw new Error("no key yet");
+        table.set(share, writable);
+      },
+      unmount: async (share: string) => {
+        calls.push(`unmount ${share}`);
+        table.delete(share);
+      },
+    };
+  };
+
+  test("mounts a grant, remounts a changed mode, unmounts an ended grant, and remounts a mount that vanished", async () => {
+    const view = live();
+    const guest = fakeGuest();
+    const sync = folderSync(view, guest);
+    await sync();
+    assert.deepEqual(guest.calls, []);
+    view.shares.set("docs", { root: "", writable: false, expiresAt: future });
+    await sync();
+    view.shares.set("docs", { root: "", writable: true, expiresAt: future });
+    await sync();
+    guest.table.delete("docs"); // speaker ended the session
+    await sync();
+    view.shares.set("docs", { root: "", writable: true, expiresAt: new Date(Date.now() - 1).toISOString() });
+    await sync();
+    assert.deepEqual(guest.calls, ["mount docs ro", "unmount docs", "mount docs rw", "mount docs rw", "unmount docs"]);
+    assert.equal(guest.table.size, 0);
+  });
+
+  test("notes a failed mount once and retries it", async () => {
+    const view = live();
+    view.shares.set("docs", { root: "", writable: false, expiresAt: future });
+    const guest = fakeGuest(true);
+    const sync = folderSync(view, guest, 0);
+    await sync();
+    await sync();
+    assert.equal(guest.calls.length, 2);
+    assert.deepEqual(view.events.map((event) => event.text), ["could not mount folder docs: no key yet"]);
+  });
+
+  test("the guest's requests to speaker carry the task's SSH key, and nothing else is touched", async () => {
+    const seen: { method?: string; url?: string; body: string }[] = [];
+    const speaker = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk)).on("end", () => {
+        seen.push({ method: req.method, url: req.url, body });
+        res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      });
+    });
+    await new Promise<void>((resolve) => speaker.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(speaker.address() as { port: number }).port}`;
+    const socket = join(root, "speaker.sock");
+    const door = await listen(socket, speakerDoor({ url, token: "t" }, "ssh-ed25519 AAAA"));
+    const client = new Client("http://speaker.internal", { socketPath: socket });
+    await (await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })).body.dump();
+    await (await client.request({ method: "GET", path: "/_speaker/me" })).body.dump();
+    assert.deepEqual(JSON.parse(seen[0]!.body), { want: ["folder:docs"], sshKey: "ssh-ed25519 AAAA" });
+    assert.deepEqual([seen[1]!.method, seen[1]!.body], ["GET", ""]);
+    await client.close();
+    door.close();
+    speaker.close();
   });
 });
