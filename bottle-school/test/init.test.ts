@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
@@ -85,9 +85,11 @@ test("init bottle-school refuses a home so deep that microsandbox's unix sockets
   assert.match(result.stderr, /too long for microsandbox's unix sockets.*Fix: choose a shorter --home/);
 });
 
-// A speaker that is locked until /admin/signin gets the owner password; it approves any host token at once.
+// A speaker that is locked until /admin/signin gets the owner password. A registered host stays pending (401 on
+// /_speaker/me) until the signed-in owner posts the approval, as the admin page does.
 const lockedSpeaker = async (t: TestContext, owner: string) => {
   let unlocked = false;
+  let approved = false;
   const port = await listen(t, "0.0.0.0", (request, response) => {
     const url = request.url ?? "";
     if (request.method === "POST" && url === "/admin/signin") {
@@ -95,13 +97,18 @@ const lockedSpeaker = async (t: TestContext, owner: string) => {
       request.on("data", (chunk) => (body += chunk));
       request.on("end", () => {
         unlocked ||= new URLSearchParams(body).get("password") === owner;
-        response.writeHead(unlocked ? 303 : 401, { location: "/admin" }).end();
+        response.writeHead(unlocked ? 303 : 401, { location: "/admin", "set-cookie": "speaker_session=s1; HttpOnly; Path=/admin" }).end();
       });
-    } else if (!unlocked && url.startsWith("/_speaker/") && !url.endsWith("/health")) response.writeHead(503).end("{}");
+    } else if (request.method === "POST" && url === "/admin/hosts/h1/approve") {
+      const signedIn = request.headers.cookie === "speaker_session=s1" && request.headers.origin === `http://${request.headers.host}`;
+      approved ||= signedIn;
+      response.writeHead(signedIn ? 303 : 401).end();
+    } else if (url === "/_speaker/me" && request.headers.authorization && !approved) response.writeHead(401).end("{}");
+    else if (!unlocked && url.startsWith("/_speaker/") && !url.endsWith("/health")) response.writeHead(503).end("{}");
     else if (request.method === "POST" && url === "/_speaker/hosts") response.writeHead(201).end('{"id":"h1"}');
     else response.end('{"ok":true}');
   });
-  return { port, unlocked: () => unlocked };
+  return { port, unlocked: () => unlocked, approved: () => approved };
 };
 
 const registering = async (t: TestContext, owner: string, typed: string) => {
@@ -120,10 +127,39 @@ test("init bottle-school unlocks a locked speaker with the password from --passw
   const { status, speaker } = await registering(t, "the owner password", "the owner password");
   assert.equal(status, 0);
   assert.equal(speaker.unlocked(), true);
+  assert.equal(speaker.approved(), true, "init approved its own sandbox host without waiting");
 });
 
 test("init bottle-school stops when --password-stdin carries the wrong password", { skip: !kvm || !lan }, async (t) => {
   const { status, speaker } = await registering(t, "the owner password", "not it");
   assert.equal(status, 1);
   assert.equal(speaker.unlocked(), false);
+});
+
+// The CLI reads the control API of a bottle-school that is not running: a fake that serves no live tasks.
+test("bottle-cli run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
+  const dir = scratch(t);
+  const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
+  const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
+  const configPath = join(dir, "config.json");
+  const made = await run([...["--home", join(dir, "h"), "--config", configPath], ...["--control-port", "7411", "--guest-port", "7412", "--speaker-url", `http://${lan}:${speaker}`], ...["--model-endpoint", `127.0.0.1:${model}`]]);
+  assert.equal(made.status, 0, made.stderr + made.stdout);
+  const { outputRoot } = loadConfig(configPath);
+  const folder = join(outputRoot, "2026-01-01_0000--demo--abc123");
+  mkdirSync(join(folder, "_control"), { recursive: true });
+  writeFileSync(join(folder, "_control", "task.json"), JSON.stringify({ id: "abc123", state: "archived" }));
+  mkdirSync(join(outputRoot, "2026-01-02_0000--live--def456"), { recursive: true }); // a live task has no task.json yet
+
+  const control = createServer((request, response) =>
+    response.end(request.method === "POST" ? JSON.stringify({ id: "new1", outputDir: join(outputRoot, "stamp--new--new1") }) : '{"tasks":[]}'),
+  ).listen(7411, "127.0.0.1");
+  t.after(() => void control.close());
+  await new Promise((done) => control.once("listening", done));
+  const cli = async (...args: string[]) =>
+    (await promisify(execFile)(process.execPath, [join(import.meta.dirname, "..", "src", "cli.ts"), ...args], { env: { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath } })).stdout;
+
+  assert.match(await cli("run", "--prompt", "x"), new RegExp(`The archive will be written to ${join(outputRoot, "stamp--new--new1")}`));
+  const listing = await cli("ls");
+  assert.match(listing, new RegExp(`archived\\s+${folder}`));
+  assert.doesNotMatch(listing, /def456/);
 });
