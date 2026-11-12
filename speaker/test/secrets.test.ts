@@ -245,7 +245,8 @@ test('placeholders become the real secret for covered hosts only, in Bearer and 
   assert.equal(grant.environment.HTTPS_PROXY, `http://agent:<token>@127.0.0.1:${s.proxyPort}`)
   assert.match(grant.environment.SSL_CERT_FILE, /ca\.pem$/)
   assert.match(grant.certificate, /_speaker\/proxy\/ca\.pem.*GIT_SSL_CAINFO.*http\.sslCAInfo/)
-  assert.match(grant.git, /gh auth setup-git/)
+  // The gh/git hint is only for secrets bound to GitHub hosts; this one goes to localhost.
+  assert.equal(grant.git, undefined)
   // The same placeholder every time, and the real value nowhere in what the agent sees.
   assert.equal((await agent.me()).secrets.GITHUB_TOKEN.environment.GH_TOKEN, placeholder)
   assert.ok(!JSON.stringify(grant).includes(realToken))

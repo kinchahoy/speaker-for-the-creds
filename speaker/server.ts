@@ -1566,7 +1566,12 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   // Per secret grant, everything the agent needs to use it through the proxy (the value is never shown).
   const secretsView = (c: Context, agent: Agent) => {
     const base = baseOf(c),
-      ca = '$HOME/.local/state/speaker/ca.pem'
+      ca = '${XDG_STATE_HOME:-$HOME/.local/state}/speaker/ca.pem'
+    // The gh/git hint only makes sense for a secret that GitHub hosts accept.
+    const gitHint = (hosts: string[]) =>
+      hosts.some((host) => /(^|\.)github\.com$/.test(host))
+        ? { git: 'Run `gh auth setup-git` once so git takes its credentials from gh.' }
+        : {}
     return Object.fromEntries(
       secretGrants(agent.id).map(({ name, env, placeholder, hosts, until }) => [
         name,
@@ -1576,7 +1581,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
               hosts,
               placeholder,
               environment: { [env]: placeholder },
-              git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
+              ...gitHint(hosts),
               note: "Set the variable on the command that needs it (for example GH_TOKEN=... gh pr list). No proxy settings or certificate are needed: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
             }
           : {
@@ -1590,7 +1595,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
               },
               token: '<token> is the part after "Bearer " in your header file; do not print it',
               certificate: `Once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh; for git set GIT_SSL_CAINFO to the same file or run git config --global http.sslCAInfo "${ca}".`,
-              git: 'Run `gh auth setup-git` once so git takes its credentials from gh.',
+              ...gitHint(hosts),
               note: 'Set these only on the command that needs them (for example HTTPS_PROXY=... gh pr list): the proxy refuses every host except these.',
             },
       ]),
