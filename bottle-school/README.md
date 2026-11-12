@@ -33,7 +33,7 @@ To configure by hand instead, copy `config.example.json` to `config.json`. Choos
 {.ai}
 
 - `bindHost` must be an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts peers that can reach it; keep that listener private.
-- `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability.
+- `speaker.url` points to the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` is speaker's `PROXY_PORT`, on the same host as `speaker.url`. Set it to use `secret:` items; without it a task that is granted a secret cannot reach the secret's hosts (the request is refused with that message).
 - `localModel.upstream` names one loopback, RFC1918, or Tailscale IPv4 `host:port`. Use the literal address, such as the inference server's LAN or `100.x` Tailscale IP. The validator requires a literal IPv4 address (or `localhost`), so MagicDNS names are rejected.
 - `localModel.models` lists served model IDs. Local inference is baseline access, independent of speaker leases.

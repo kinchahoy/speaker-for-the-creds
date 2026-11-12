@@ -998,7 +998,11 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       syncJump()
     }
     const items = resolveItems(input.want, agent)
-    if (!agent.sshKey && items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '')))
+    // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
+    if (
+      !agent.sshKey &&
+      items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
+    )
       throw invalid('ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)')
     const request = createRequest(agent, items, input.want, input.reason, input.duration)
     // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
@@ -1888,6 +1892,9 @@ if (import.meta.main) {
     }
   })()
   const app = await createApp(config)
+  // Stop the jump server and ssh-agent with speaker: left running, they keep SSH_PORT and block the next start.
+  for (const signal of ['SIGINT', 'SIGTERM'] as const)
+    process.once(signal, () => void app.stop().finally(() => process.exit(0)))
   serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0', websocket: { server: wss } }, (info) =>
     console.log(JSON.stringify({ time: new Date().toISOString(), event: 'listening', port: info.port })),
   )

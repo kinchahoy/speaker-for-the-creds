@@ -48,7 +48,7 @@ Target and share names come only from the user. Once, make a throwaway key with 
 After approval, `/me` lists complete command lines under `ssh`. Copy them and fill in `<key>` (the path of `ssh_key`), `<command>`, `<file>`, `<path>`, `<mountpoint>`.
 
 - Commands: the `ssh` line. There is no terminal. For a script, end the line with `'sh -s' <<'EOF'`.
-- Folders: use `sshfs` first and work inside the mountpoint. Use `scp` or `sftp` only for a one-off copy. Paths start with the share name. `rsync` and `scp -O` are refused.
+- Folders: use `sshfs` first and work inside the mountpoint; if `sshfs` is not installed, use `sftp` or `scp` (fine for a few files). Paths start with the share name. `rsync` and `scp -O` are refused.
 - When a grant ends the session stops: read `/me` again.
 
 ## 5. Secrets (`gh`, `git`)
