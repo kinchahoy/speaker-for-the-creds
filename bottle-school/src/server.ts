@@ -5,7 +5,7 @@ import { html } from "hono/html";
 import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
-import { backends } from "./backends/index.ts";
+import { reconcile } from "./sandbox.ts";
 import { assertNoHostSecrets, loadConfig, type Config } from "./config.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
@@ -152,7 +152,7 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
     (context) => {
       const task = context.get("task");
       const { busy, summary } = context.req.valid("json");
-      if (task.state === "idle" || task.state === "busy") task.state = busy ? "busy" : "idle";
+      tasks.report(task, busy);
       if (summary) {
         task.lastMessage = summary;
         task.lastMessageAt = new Date().toISOString();
@@ -187,8 +187,8 @@ export const startBroker = (config: Config) => {
 if (import.meta.main) {
   const configPath = process.env.PI_V2_CONFIG ?? `${import.meta.dirname}/../config.json`;
   const config = loadConfig(configPath);
-  const staleSessions = await backends[config.backend].reconcile(config);
-  if (staleSessions) console.log(`reconciled ${staleSessions} stale ${config.backend} session records`);
+  const staleSessions = await reconcile(config);
+  if (staleSessions) console.log(`removed ${staleSessions} microsandbox VMs a crashed service left behind`);
   const { tasks } = startBroker(config);
 
   let shuttingDown = false;

@@ -30,9 +30,11 @@ Phases 4 and 5a run in parallel; 5b follows 5a; 6 comes last.
 
 ## Status
 
-All six phases are merged into main and pass their tests. An end-to-end run on one Linux machine (speaker and bottle-school together, a real VM, no real model) passed: sign-in and the locked state; a direct agent following `/_speaker/help` verbatim (held call approved through a card, SSH command, `scp`, `sftp` inside a read-only share with escapes refused, a secret through the proxy with real `curl`); and from inside a VM: speaker reachable, a site blocked until its card was approved, a dummy secret arriving at the upstream while appearing nowhere in the VM, bottle-school's config, environment or logs, revoke stopping both within seconds, a read-only folder mounted at `/input/<share>` and removed on revoke, and a task's agent ending with the task. Bugs found then were fixed on main (guest build pin, zombie Pi restarts, prompted hosted-model tasks, VM-mounted folders needing an SSH key, the jump server outliving speaker, qboot missing from the Gondolin 0.14 patch).
+All six phases are merged into main and pass their tests. An end-to-end run on one Linux machine (speaker and bottle-school together, a real VM, no real model) passed: sign-in and the locked state; a direct agent following `/_speaker/help` verbatim (held call approved through a card, SSH command, `scp`, `sftp` inside a read-only share with escapes refused, a secret through the proxy with real `curl`); and from inside a VM: speaker reachable, a site blocked until its card was approved, a dummy secret arriving at the upstream while appearing nowhere in the VM, bottle-school's config, environment or logs, revoke stopping both within seconds, a read-only folder mounted at `/input/<share>` and removed on revoke, and a task's agent ending with the task. Bugs found then were fixed on main (guest build pin, zombie Pi restarts, prompted hosted-model tasks, VM-mounted folders needing an SSH key, the jump server outliving speaker).
 
-Not yet verified: `sshfs`, the PowerShell setup steps, a hosted model with a real key (the stored OpenRouter key on this machine is a 9-character stub), real model work by Pi, `gh`/`git` against GitHub, and the Krun backend.
+After the build, a refactor (no route or response changes) split `server.ts` into `core.ts`, `api.ts`, `admin.ts` and `server.ts` (see DESIGN.md, Code), made the jump server speaker's own listener handing each connection to `sshd -i`, and rebuilt the admin UI on Pico CSS and htmx (DESIGN.md, The owner's side). The Phase 2 and 3 notes below on page layout predate that rebuild.
+
+Not yet verified: `sshfs`, the PowerShell setup steps, a hosted model with a real key (the stored OpenRouter key on this machine is a 9-character stub), real model work by Pi, and `gh`/`git` against GitHub.
 
 ## Redeploying speaker and bottle-school together
 
@@ -93,7 +95,7 @@ Calls made where the design left room; each can be revisited.
 - A `secret:` request for a name not in Setup still makes a card, marked "not set up".
 
 **Phase 5b (bottle-school)**
-- Secret route: for a secret's hosts, bottle-school's network layer opens its upstream connection as a `CONNECT` tunnel to speaker's proxy, authenticated as the task's agent; speaker inserts the value. If the proxy is unconfigured, locked or unreachable, the request is refused, never sent directly. This needed a ~10-line hook in the existing Gondolin patch (`httpHooks.upstreamDispatcher`).
+- Secret route: for a secret's hosts, bottle-school's egress proxy (and its model door, for hosted providers) opens the upstream connection as a `CONNECT` tunnel to speaker's proxy, authenticated as the task's agent; speaker inserts the value. If the proxy is unconfigured, locked or unreachable, the request is refused, never sent directly.
 - The guest gets no `HTTPS_PROXY` and no extra certificate; Pi reads the placeholder from `/me` and sets the variable on the one command that needs it (DESIGN.md's worked example now says so).
 - `secrets.env` and `BROKER_SECRET_*` are gone; bottle-school refuses to start while either is still present. Hosted model keys are speaker secrets too.
 - `catalog.json` holds only MCP servers that run inside the VM; remote ones are speaker services (keyless Context7 and Parallel Search ship as examples). Pi calls them at `$SPEAKER_URL/<service>`.
@@ -101,7 +103,7 @@ Calls made where the design left room; each can be revisited.
 - A sandbox-only grant shows as `applying` until bottle-school reports it in force; held calls wait for it, except `mcp:` and `ext:`, which need Pi idle.
 - bottle-school reports its shares on every connection and drops all grants after 30 seconds without speaker.
 - `config.json` gains `speaker.proxyPort`, which must equal speaker's `PROXY_PORT`.
-- Not yet verified in a real VM: `gh`/`git` through the hook, hosted-model keys, Pi with the new instructions, Krun routing.
+- Not yet verified in a real VM: `gh`/`git` through the secret route, hosted-model keys, Pi with the new instructions.
 
 **Phase 6 (skill and help)**
 - The core skill is about 250 tokens and is served at `/` and `/skill.md`; the one help page (`skill/help.md`, about 1,350 tokens) replaces the per-topic pages.

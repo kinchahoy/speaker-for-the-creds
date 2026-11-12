@@ -81,12 +81,15 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
       headers: { cookie, origin: ownerHeaders.origin },
       body: new URLSearchParams(body),
     })
-  const live = async () =>
-    (await (await call('/admin/live', { headers: ownerHeaders })).json()) as { approvals: string; grants: string }
+  // The Inbox and Active panels, as the owner's page polls them.
+  const live = async () => ({
+    approvals: await (await call('/admin/panel/inbox', { headers: ownerHeaders })).text(),
+    grants: await (await call('/admin/panel/active', { headers: ownerHeaders })).text(),
+  })
   // The pending request cards, as the owner's page renders them.
   const pending = async () =>
     (await live()).approvals
-      .split('<li class="ticket" id="request-')
+      .split('<article id="request-')
       .slice(1)
       .map((card) => ({ id: card.slice(0, card.indexOf('"')), html: card }))
   // Taps Approve or Deny on a card: posts the ticked items (default all) and the items the card showed.
@@ -114,8 +117,8 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
       .map((row) => ({
         id: row.slice(0, row.indexOf('"')),
         item: /<code>(.*?)<\/code>/.exec(row)?.[1] ?? '',
-        expiresAt: /<time class="left" datetime="([^"]*)"/.exec(row)?.[1] ?? null,
-        state: /chip \w+">(granted|waiting for sandbox host)</.test(row) ? 'granted' : 'active',
+        expiresAt: /<time datetime="([^"]*)"/.exec(row)?.[1] ?? null,
+        state: /data-state="(granted|waiting)"/.test(row) ? 'granted' : 'active',
       }))
   const saved = await ownerForm('/services/save', {
     id: 'notes',
@@ -566,11 +569,13 @@ test('a card lists groups and loose items, and Approve decides only the items it
   await enroll(f, 'tok')
   await askFor(f, 'tok', { want: ['group:dev', 'extra.read'], reason: 'work', duration: '1d' })
   const [card] = await f.pending()
-  assert.match(card.html, /<strong>dev<\/strong><span class="meta">Notes work · 2 items/)
+  assert.match(card.html, /<strong>dev<\/strong> <small>Notes work · 2 items/)
   assert.match(card.html, /<option value="1d" selected>/)
-  assert.match(card.html, /Not in a group/)
-  assert.match(card.html, /pickable risky[^>]*><label[^>]*><input type="checkbox" name="items" value="notes.full"/)
-  assert.match(card.html, /pickable {2}loose/)
+  assert.match(card.html, /<label class="risky"><input type="checkbox" name="items" value="notes.full"/)
+  assert.match(
+    card.html,
+    /<legend>Not in a group<\/legend><label class=""><input type="checkbox" name="items" value="extra.read"/,
+  )
   // An item added after the card was rendered is not part of the decision.
   await askFor(f, 'tok', { want: ['extra.full'], reason: 'work' })
   assert.equal(
@@ -599,6 +604,12 @@ test('the admin pages have no JSON routes', async (t) => {
   const f = await setup(t)
   for (const path of ['/admin/api/requests', '/admin/api/grants'])
     assert.equal((await f.call(path, { headers: f.ownerHeaders })).status, 404)
+  // A live panel polls with the hash of what it shows: unchanged answers 204, a new request answers the new panel.
+  const poll = /hx-get="([^"]+)"/.exec(await (await f.call('/admin', { headers: f.ownerHeaders })).text())?.[1] ?? ''
+  assert.equal((await f.call(poll, { headers: f.ownerHeaders })).status, 204)
+  await enroll(f, 'poll-token', { want: ['notes.read'], reason: 'poll' })
+  assert.match(await (await f.call(poll, { headers: f.ownerHeaders })).text(), /<article id="request-/)
+  for (const asset of ['pico.css', 'htmx.js']) assert.equal((await f.call(`/admin/assets/${asset}`)).status, 200)
 })
 
 test('a service set to never answers denied at once, and a POST read path counts as a read', async (t) => {

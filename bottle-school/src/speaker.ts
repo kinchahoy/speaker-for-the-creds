@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { ProxyAgent } from "undici";
 import { z } from "zod";
 import type { Config } from "./config.ts";
@@ -108,19 +108,8 @@ export const speakerProxy = async (config: Config, agentToken: string) => {
   });
 };
 
-/**
- * The shares this host holds and whether the VM can mount each (its directory is readable), for speaker's choice of
- * delivery. The microsandbox guest has no VM mount: it reaches folders over SSH through speaker.
- */
-export const shareReport = (config: Config) =>
-  Object.entries(config.shareRoots).map(([name, root]) => {
-    try {
-      accessSync(root, constants.R_OK | constants.X_OK);
-      return { name, mount: config.backend !== "microsandbox" };
-    } catch {
-      return { name, mount: false };
-    }
-  });
+/** The shares this host holds, for speaker's choice of delivery: the guest has no VM mount, its folders arrive over SSH. */
+export const shareReport = (config: Config) => Object.keys(config.shareRoots).map((name) => ({ name, mount: false }));
 
 /**
  * How long the service may run without reaching speaker: at startup, and after losing it. After `dropMs` without
@@ -172,28 +161,27 @@ export const watchLeases = (
 ) => {
   const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  // The connection: `connecting` until speaker first answers, `open` while connected, `down` after losing it, and
+  // `stopped` for good (stop() or a fatal error).
+  let state: "connecting" | "open" | "down" | "stopped" = "connecting";
   let socket: WebSocket | undefined;
   let lastHeard = Date.now();
-  let dropped = false;
-  let applied = "[]";
-  let connected = false;
   let downSince = Date.now();
   let backoff = limits.retryMs;
-  let stopped = false;
   let retryTimer: NodeJS.Timeout | undefined;
+  let dropped = false;
+  let applied = "[]";
   const fail = (message: string) => {
-    if (stopped) return;
-    stopped = true;
+    if (state === "stopped") return;
+    state = "stopped";
     onFatal(message);
   };
   const retry = async () => {
-    if (stopped) return;
     const probe = await probeSpeaker(config, token);
-    if (stopped) return;
+    if (state === "stopped") return;
     if (probe.fatal) return fail(probe.message);
-    const limit = connected ? limits.outageMs : limits.firstConnectMs;
     const down = Date.now() - downSince;
-    if (down >= limit)
+    if (down >= (state === "down" ? limits.outageMs : limits.firstConnectMs))
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
           `Check that speaker is running and that speaker.url is right in the bottle-school config.json.`,
@@ -206,13 +194,11 @@ export const watchLeases = (
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
   const open = () => {
-    if (stopped) return;
-    let opened = false;
+    if (state === "stopped") return;
     socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } });
     socket.onopen = () => {
-      opened = true;
-      if (!connected) console.log(`speaker connected at ${config.speaker.url}`);
-      connected = true;
+      if (state === "connecting") console.log(`speaker connected at ${config.speaker.url}`);
+      state = "open";
       backoff = limits.retryMs;
       lastHeard = Date.now();
       send({ type: "shares", shares: shareReport(config) });
@@ -225,7 +211,11 @@ export const watchLeases = (
       onSnapshot({ leases: grants, requests, secrets });
     };
     socket.onclose = () => {
-      if (opened) downSince = Date.now();
+      if (state === "stopped") return;
+      if (state === "open") {
+        state = "down";
+        downSince = Date.now();
+      }
       void retry();
     };
   };
@@ -243,7 +233,7 @@ export const watchLeases = (
     send({ type: "applied", grantIds: leaseIds });
   };
   const stop = () => {
-    stopped = true;
+    state = "stopped";
     clearInterval(dropTimer);
     clearTimeout(retryTimer);
     socket?.close();

@@ -20,7 +20,7 @@ import { createApp, readConfig } from "../../speaker/server.ts";
 import * as x509 from "../../speaker/node_modules/@peculiar/x509/build/index.js";
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
-import { secretRoute } from "../src/backend.ts";
+import { secretRoute } from "../src/sandbox.ts";
 import { launchRequest, Template } from "../src/leases.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
 import { SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases as watch } from "../src/speaker.ts";
@@ -131,8 +131,8 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
     });
     assert.equal(response.status, 303, `approve answered ${response.status}`);
   };
-  const live = async () =>
-    (await (await fetch(`${url}/admin/live`, { headers: owner })).json()) as { grants: string; approvals: string };
+  const panel = async (name: string) => (await fetch(`${url}/admin/panel/${name}`, { headers: owner })).text();
+  const live = async () => ({ grants: await panel("active"), approvals: await panel("inbox") });
   /** An approved sandbox host, its client, and one task agent. */
   const host = async (kinds: string[]) => {
     const token = "host-token";
@@ -201,8 +201,8 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
 
   reportApplied([lease.id]);
   const active = async () => {
-    const { grants } = (await (await fetch(`${url}/admin/live`, { headers: owner })).json()) as { grants: string };
-    return grants.includes('<span class="sr">active</span>');
+    const grants = await (await fetch(`${url}/admin/panel/active`, { headers: owner })).text();
+    return grants.includes('<li id="grant-') && !grants.includes("data-state=");
   };
   await until(active);
 });
@@ -230,22 +230,12 @@ test("a template's want becomes the task's first request, labelled and timed as 
   assert.match(approvals, /<option value="1d" selected/);
 });
 
-test("bottle-school reports the shares it holds, and whether it can mount them, to speaker", async (t) => {
+test("bottle-school reports its shares to speaker as not mountable, since its folders arrive over SSH", async (t) => {
   const f = await fixture(t);
   const { token } = await f.host([]);
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
   t.after(() => rm(documents, { recursive: true, force: true }));
-  const config = { ...f.config, shareRoots: { documents, ghost: join(documents, "missing") } } as Config;
-  watchLeases(t, config, token, () => {}, (message) => assert.fail(message));
-  await until(async () => (await f.live()).grants.includes("shares: documents (VM mount), ghost (no VM mount)"));
-});
-
-test("a microsandbox host reports its shares as not mountable, since its folders arrive over SSH", async (t) => {
-  const f = await fixture(t);
-  const { token } = await f.host([]);
-  const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
-  t.after(() => rm(documents, { recursive: true, force: true }));
-  const config = { ...f.config, backend: "microsandbox", shareRoots: { documents } } as Config;
+  const config = { ...f.config, shareRoots: { documents } } as Config;
   watchLeases(t, config, token, () => {}, (message) => assert.fail(message));
   await until(async () => (await f.live()).grants.includes("shares: documents (no VM mount)"));
 });

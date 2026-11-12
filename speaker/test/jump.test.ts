@@ -206,7 +206,7 @@ test('a command runs through the jump server as the target account and is logged
   running.stderr.on('data', (chunk) => {
     errors += chunk
   })
-  const live = async () => JSON.parse(await f.ownerGet('/admin/live')) as { grants: string }
+  const live = async () => ({ grants: await f.ownerGet('/admin/panel/active') })
   for (let i = 0; i < 60 && !(await live()).grants.includes('SSH session open'); i++) await sleep(100)
   const panel = (await live()).grants
   assert.match(panel, /End/)

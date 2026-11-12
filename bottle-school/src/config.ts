@@ -26,17 +26,13 @@ const HostedProviderSchema = z.object({
 
 const ConfigFile = z
   .object({
-    // Supported sandbox backends; src/backends/index.ts holds the implementations.
-    backend: z
-      .enum(["gondolin", "microsandbox"], { error: "backend must be one of the supported backends: gondolin, microsandbox" })
-      .default("microsandbox"),
     bindHost: z.string(),
     controlPort: port,
     guestPort: port,
     maxTasks: z.number().int().min(1).max(3),
     guestImage: z.string().min(1),
     // proxyPort is speaker's PROXY_PORT: where requests to a granted secret's hosts go so speaker can insert the secret.
-    // sshPort is speaker's SSH_PORT: where the microsandbox backend's guest reaches the jump server for `folder:` grants.
+    // sshPort is speaker's SSH_PORT: where the guest reaches the jump server for `folder:` grants.
     speaker: z.object({ url: z.url(), proxyPort: port.optional(), sshPort: port.optional() }),
     configRoot: z.string(),
     stateRoot: z.string(),

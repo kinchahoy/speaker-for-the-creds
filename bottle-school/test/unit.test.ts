@@ -8,7 +8,7 @@ import { assertNoHostSecrets, loadConfig } from "../src/config.ts";
 import { attendedFor, folderRef, ipv4Destination, launchRequest, loadTemplates, secretHosts, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
 import { inForce } from "../src/tasks.ts";
 import type { Lease } from "../src/speaker.ts";
-import { assembleStream, createModelRuns, createToolRuns } from "../src/trace-runs.ts";
+import { assembleStream, createModelRuns, createToolRuns } from "../src/trace.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -59,15 +59,10 @@ describe("configuration", () => {
     assert.throws(() => loadConfig(writeConfig("0.0.0.0")), /bindHost must be one exact/);
   });
 
-  test("defaults to the microsandbox backend, accepts gondolin, and rejects any other by name", () => {
+  test("rejects a backend choice: microsandbox is the only one", () => {
     const path = writeConfig();
-    assert.equal(loadConfig(path).backend, "microsandbox");
-    const set = (backend: string) =>
-      writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), backend }));
-    set("gondolin");
-    assert.equal(loadConfig(path).backend, "gondolin");
-    set("firecracker");
-    assert.throws(() => loadConfig(path), /supported backends: gondolin, microsandbox/);
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), backend: "gondolin" }));
+    assert.throws(() => loadConfig(path), /backend/);
   });
 
   test("rejects the same control and guest port", () => {

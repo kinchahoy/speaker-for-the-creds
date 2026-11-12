@@ -1,10 +1,8 @@
 # syntax=docker/dockerfile:1
-# The one guest image for both backends, on Debian slim, in five layers (least-changing first). Latest releases
-# throughout, except the pinned Pi extensions. guest/build.sh builds it for the host architecture (linux/amd64 and
-# linux/arm64 share this file), imports it into Gondolin (which turns it into a VM rootfs, see build.json) and loads it
-# into microsandbox (which runs it as is).
-# microsandbox needs socat (vsock doors), sshfs (folders, later), dtach (attach), openssh-client, git, curl, ca-certificates.
-# Gondolin needs kmod (modprobe), iproute2, udhcpc (network) and e2fsprogs (resize2fs, to grow the root disk); all sit in this layer.
+# The guest image, on Debian slim, in five layers (least-changing first). Latest releases throughout, except the pinned
+# Pi extensions. guest/build.sh builds it for the host architecture (linux/amd64 and linux/arm64 share this file) and
+# loads it into microsandbox, which runs it as is.
+# microsandbox needs socat (vsock doors), sshfs and fuse3 (folders), dtach (attach), openssh-client, git, curl, ca-certificates.
 FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -18,7 +16,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       build-essential cmake ninja-build pkg-config sqlite3 universal-ctags parallel \
       ffmpeg imagemagick poppler-utils qpdf tesseract-ocr tesseract-ocr-eng graphviz mediainfo libimage-exiftool-perl \
       fonts-dejavu-core fonts-liberation \
-      strace lsof iproute2 udhcpc kmod e2fsprogs procps zip unzip xz-utils file tree less rsync vim-tiny
+      strace lsof iproute2 procps zip unzip xz-utils file tree less rsync vim-tiny
 
 # 2. Node, via mise (checksum from the release SHASUMS256.txt). Playwright needs it. `mise use -g` writes
 # /etc/mise/config.toml; the later layers add their tools as /etc/mise/conf.d/*.toml. Shims are on PATH.

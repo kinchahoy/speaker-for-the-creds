@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
-import { backends } from "./backends/index.ts";
+import { attach } from "./sandbox.ts";
 import { controlOrigin, loadConfig, type Config } from "./config.ts";
 
 /** The owner's terminal client: `mise run bottle-cli register | run | ls | attach | stop`. */
@@ -247,7 +247,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
       throw new Error(`task ${task.id} is ${task.state}; it has no terminal to attach to`);
     console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches; Pi keeps running.`);
-    const terminal = backends[config.backend].attach(config, task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    const terminal = attach(config, task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
     const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => {
       console.error(`error: cannot start the terminal: ${error.message}`);

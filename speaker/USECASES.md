@@ -37,8 +37,8 @@ Variation: if the owner marked a service's reads open (for example "are the ligh
 1. The agent (already enrolled) generates a throwaway SSH key and posts `{"want":["ssh:nas"],"sshKey":"ssh-ed25519 …","reason":"…","duration":"30m"}` to `/_speaker/requests`, with `Speaker-Wait`. An agent sends its SSH key once, so later requests omit it. Speaker holds the reply.
 2. Speaker checks that `nas` exists and can be delivered to this agent. The name comes only from the owner's prompt; a request for an unknown target is answered `denied` at once and appears in the Log, with no card.
 3. The card shows the account the commands will run as (for example `agent`), a warning if speaker found passwordless sudo on that account when the target was added, and the colour used for `ssh:` items. The owner approves for 30 minutes.
-4. Speaker starts its SSH port (it listens only while an SSH or folder grant is active), writes one key line for the agent, and returns `granted`. The agent calls `GET /_speaker/me` and copies the ready-made command, including the port, the pinned host key and `-o IdentitiesOnly=yes -o BatchMode=yes`.
-5. The agent runs `ssh … s@speaker nas 'df -h'`. Speaker's relay runs the command on `nas` as the agent account and returns output and exit code. The Log records the exact command.
+4. Speaker starts its SSH port (see DESIGN.md, The jump server and relay), writes one key line for the agent, and returns `granted`. The agent calls `GET /_speaker/me` and copies the ready-made command, including the port, the pinned host key and `-o IdentitiesOnly=yes -o BatchMode=yes`.
+5. The agent runs `ssh … <account>@speaker nas 'df -h'` (the login name is the account speaker runs as). Speaker's relay runs the command on `nas` as the agent account and returns output and exit code. The Log records the exact command.
 6. At 30 minutes, or on Revoke, the session ends and the key line is removed.
 
 ### 3. Fetch or deliver files on another machine
@@ -78,7 +78,7 @@ A sandboxed agent that needs a homelab service, SSH or a folder uses the same fl
 **Flow.**
 1. Pi tries `curl https://example.org` and is blocked by the sandbox's network filter. The block message should say what to do.
 2. Pi posts `{"want":["site:example.org"],"reason":"Read the paper the task is about","duration":"1h"}` to `/_speaker/requests`, with `Speaker-Wait`. If it needs three or more items from one group, it asks for the group instead.
-3. The card lists items outside any group separately and highlighted, and each group as one row. The owner approves, or unticks a site.
+3. The card shows the request as DESIGN.md's Inbox describes. The owner approves, or unticks a site.
 4. Speaker tells the sandbox host; the host opens the route; Pi retries and succeeds. A denied site gets `denied`, and Pi is told to stop.
 5. For an extension or MCP server, the same steps apply with `ext:<id>` or `mcp:<id>`. How Pi is then told to use it is an open point.
 

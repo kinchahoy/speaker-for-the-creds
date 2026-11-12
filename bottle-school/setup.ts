@@ -32,8 +32,8 @@ const upstream = process.env.LLM_UPSTREAM;
 const model = process.env.LLM_MODEL;
 if (upstream && model) config.localModel = { ...config.localModel, upstream, models: [{ id: model, label: model }] };
 else console.warn("LLM_UPSTREAM and LLM_MODEL are not set; edit localModel in config.json before launching a task.");
-if (config.backend === "microsandbox" && !process.env.SPEAKER_SSH_PORT)
-  console.warn("SPEAKER_SSH_PORT is not set; folder: grants on the microsandbox backend need speaker.sshPort in config.json.");
+if (!process.env.SPEAKER_SSH_PORT)
+  console.warn("SPEAKER_SSH_PORT is not set; folder: grants need speaker.sshPort in config.json.");
 writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
 
 for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
