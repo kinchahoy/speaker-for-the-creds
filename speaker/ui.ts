@@ -8,7 +8,7 @@ const itemKind = (item: string) => (item.includes(':') ? item.split(':')[0] : 's
 const input = (name: string, label: string, type = 'text', value = '') =>
   html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
-  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', ask: 'Ask the owner', open: 'Open (any agent may read)', never: 'Never' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
+  html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${({ permanent: 'Until revoked', none: 'None (keyless)', ask: 'Ask the owner', open: 'Open (any agent may read)', never: 'Never' } as Record<string, string>)[value] ?? value}</option>`)}</select></label>`
 // `confirm` makes the browser ask in a native dialog before posting; without JS the form posts directly.
 const form = (action: string, fields: unknown, button: string, kind = 'inline', name = '', confirm = '') =>
   html`<form class="${kind}" method="post" action="${action}" ${raw(confirm ? `data-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button ${raw(name ? `aria-label="${String(html`${name}`)}"` : '')}>${button}</button></form>`
@@ -406,10 +406,10 @@ export function adminPage(
           : 'approvals'
   const serviceList = Object.entries(services).map(
     ([id, service]) =>
-      html`<li data-search="${searchable(id, service.baseUrl)}" data-kinds="service"><div class="row wrap">${mark('service')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${service.baseUrl}</code></div><div class="row-sub"><span class="chip ${secrets.get(id) !== undefined ? 'good' : 'bad'}">Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}</span> read ${service.read} · write ${service.write} · notes ${service.notes ? 'yes' : 'no'}${service.mcp ? ' · MCP' : ''}${service.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}" aria-label="Edit service ${id}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}" aria-label="Log for service ${id}">Log</a>${form('/admin/services/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete service ${id}`, `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></div></li>`,
+      html`<li data-search="${searchable(id, service.baseUrl)}" data-kinds="service"><div class="row wrap">${mark('service')}<div class="row-main"><div class="row-title">${id}</div><div class="row-sub"><code>${service.baseUrl}</code></div><div class="row-sub"><span class="chip ${service.auth.type === 'none' || secrets.get(id) !== undefined ? 'good' : 'bad'}">${service.auth.type === 'none' ? 'No credential' : `Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}`}</span> read ${service.read} · write ${service.write} · notes ${service.notes ? 'yes' : 'no'}${service.mcp ? ' · MCP' : ''}${service.auth.type === 'path' ? ' · path secret' : ''}</div></div><div class="row-act"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}" aria-label="Edit service ${id}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}" aria-label="Log for service ${id}">Log</a>${form('/admin/services/delete', input('id', '', 'hidden', id), 'Delete', 'inline danger', `Delete service ${id}`, `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></div></li>`,
   )
-  const panels = livePanels(view, groups)
-  const serviceFields = html`${input('id', 'Service id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id)', ['bearer', 'header', 'basic', 'path'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], selected?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], selected?.write ?? 'ask')}<label>POST paths that only read, one per line (for example a search endpoint)<textarea name="readPaths" rows="2" placeholder="/search/simple">${selected?.readPaths?.join('\n')}</textarea></label><label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Notes for agents (markdown, optional)<textarea name="notes" rows="5">${selected?.notes}</textarea></label>`
+  const panels = livePanels(view, groups, owned)
+  const serviceFields = html`${input('id', 'Service id', 'text', selected ? selectedId : '')}${input('baseUrl', 'Upstream base URL', 'url', selected?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], selected?.auth.type ?? 'bearer')}${input('headerName', 'Credential header', 'text', selected?.auth.type === 'header' ? selected.auth.headerName : '')}${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], selected?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], selected?.write ?? 'ask')}<label>POST paths that only read, one per line (for example a search endpoint)<textarea name="readPaths" rows="2" placeholder="/search/simple">${selected?.readPaths?.join('\n')}</textarea></label><label class="override"><input type="checkbox" name="mcp" ${raw(selected?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label><label>Notes for agents (markdown, optional)<textarea name="notes" rows="5">${selected?.notes}</textarea></label>`
   const serviceEditor = selected
     ? html`<section class="editor"><h3>Edit service: ${selectedId}</h3>${form('/admin/services/save', serviceFields, 'Save service', 'fields')}${selected.mcp ? mcpTools(selectedId ?? '') : ''}</section>`
     : ''
@@ -519,7 +519,11 @@ const logPanel = (
 // Items that can change things (or reach out with a credential) get a warmer tint on the card.
 const risky = (item: string) => /^(ssh(-cert)?|secret):|\.full$|^folder:.+:rw$/.test(item)
 
-export function livePanels({ hosts, agents, requests, grants }: View, groups: Record<string, Group> = {}) {
+export function livePanels(
+  { hosts, agents, requests, grants }: View,
+  groups: Record<string, Group> = {},
+  owned: Record<string, Pick<OwnerSecret, 'hosts'>> = {},
+) {
   const byId = new Map(agents.map((a) => [a.id, a]))
   // Flags an agent whose identity (same label and agent string) enrolled in the 30 minutes before it.
   const twin = (a: View['agents'][number]) => {
@@ -547,8 +551,13 @@ export function livePanels({ hosts, agents, requests, grants }: View, groups: Re
   ) =>
     html`<li class="ticket" id="${id}" data-search="${search.toLowerCase()}" data-kinds="${kindList.join(' ')}"><div class="t-head">${head}</div>${body}<div class="stub">${stub}</div></li>`
   // One tickable item; its checkbox belongs to the card's form wherever the row sits.
+  // A secret's card row names the hosts its value will be sent to: granting it opens those hosts.
+  const secretHosts = (item: string) => {
+    const name = item.slice('secret:'.length)
+    return Object.hasOwn(owned, name) ? `sent to ${owned[name].hosts.join(', ')}` : 'not set up: it will do nothing'
+  }
   const pickItem = (formId: string, item: string, loose = false) =>
-    html`<li class="cap pickable ${risky(item) ? 'risky' : ''} ${loose ? 'loose' : ''}"><label class="tick"><input type="checkbox" name="items" value="${item}" form="${formId}" checked>${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${itemKind(item)}</span></div></label></li>`
+    html`<li class="cap pickable ${risky(item) ? 'risky' : ''} ${loose ? 'loose' : ''}"><label class="tick"><input type="checkbox" name="items" value="${item}" form="${formId}" checked>${mark(itemKind(item))}<div><code>${item}</code><span class="meta">${itemKind(item)}${item.startsWith('secret:') ? ` · ${secretHosts(item)}` : ''}</span></div></label></li>`
   // The groups a request asked for, each with the members still awaiting a decision.
   const groupsAsked = (r: View['requests'][number]) =>
     r.want

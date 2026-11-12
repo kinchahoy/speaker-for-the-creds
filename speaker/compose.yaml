@@ -9,6 +9,8 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env to the browser-facing URL}
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
+      # The secrets proxy (listens only when PROXY_PORT is set in .env; keep it equal to this port).
+      - "127.0.0.1:${PROXY_PORT:-3128}:${PROXY_PORT:-3128}"
     volumes:
       - data:/data
     read_only: true

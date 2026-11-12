@@ -19,6 +19,8 @@ export type Vault = {
   secrets: Record<string, OwnerSecret>
   // Speaker's SSH key for its targets (phase 4).
   ssh: { private: string; public: string }
+  // Certificate authority of the secrets proxy (PEM), made at first need.
+  ca?: { cert: string; key: string }
 }
 export type Store = { vault: Vault; save(): Promise<void>; setPassword(password: string): Promise<void> }
 export class WrongPassword extends Error {
