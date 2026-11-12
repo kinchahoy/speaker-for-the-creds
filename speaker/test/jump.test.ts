@@ -51,6 +51,8 @@ const sh = (line: string) =>
     ),
   )
 
+type Fixture = Awaited<ReturnType<typeof fixture>>
+
 // Speaker (serving HTTP, jump server enabled) in front of a throwaway non-root sshd standing in for a homelab host.
 async function fixture(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'speaker-jump-'))
@@ -327,76 +329,84 @@ test('without SSH_PORT, SSH and folders are off and answered denied', async (t) 
   await app.stop()
 })
 
-test('a folder the sandbox mounts needs no sshKey from the agent', async (t) => {
-  const f = await fixture(t)
-  await f.ownerForm('/ssh/shares/save', [
-    ['name', 'mounted'],
-    ['target', 'box'],
-    ['path', join(f.world, 'pics')],
-    ['delivery', 'vm'],
-  ])
+// An approved sandbox host whose WebSocket has reported `shares`; collects the grants of every snapshot it hears.
+async function sandboxHost(f: Fixture, t: TestContext, shares: { name: string; mount: boolean }[]) {
   const post = (path: string, token: string, body: object) =>
     f.agent(path, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-  const created = await post('/_speaker/hosts', '', {
-    name: 'sandbox',
-    kinds: ['folder'],
-    tokenHash: sha('host-token'),
-  })
+  const created = await post('/_speaker/hosts', '', { name: 'sandbox', kinds: ['site'], tokenHash: sha('host-token') })
   const { id } = (await created.json()) as { id: string }
   assert.equal((await f.ownerForm(`/hosts/${id}/approve`, [])).status, 303)
-  const made = await post('/_speaker/hosts/agents', 'host-token', { label: 'pi', agent: 'Pi' })
-  const { token } = (await made.json()) as { token: string }
-  const ask = (want: string[]) => post('/_speaker/requests', token, { want, reason: 'test', duration: '1h' })
-  assert.equal((await ask(['folder:mounted'])).status, 202) // a card is waiting
+  const { token } = (await (
+    await post('/_speaker/hosts/agents', 'host-token', { label: 'pi', agent: 'Pi' })
+  ).json()) as {
+    token: string
+  }
+  const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
+    headers: { authorization: 'Bearer host-token' },
+  })
+  t.after(() => ws.terminate())
+  const grants: { item: string }[][] = []
+  ws.on('message', (data) => grants.push((JSON.parse(String(data)) as { grants: { item: string }[] }).grants))
+  await once(ws, 'open')
+  ws.send(JSON.stringify({ type: 'shares', shares }))
+  // Speaker answers a share report with a new snapshot (the first came on connect).
+  for (let i = 0; i < 100 && grants.length < 2; i++) await sleep(20)
+  assert.ok(grants.length >= 2, 'speaker took the share report')
+  return {
+    ask: (body: object) => post('/_speaker/requests', token, { reason: 'test', duration: '1h', ...body }),
+    // The items /me offers this agent SSH commands for: its over-SSH grants.
+    overSsh: async () =>
+      (
+        (await (await f.agent('/_speaker/me', { headers: { authorization: `Bearer ${token}` } })).json()) as {
+          ssh?: { item: string }[]
+        }
+      ).ssh?.map((entry) => entry.item) ?? [],
+    grants,
+  }
+}
+const saveShare = (f: Fixture, name: string, delivery: string) =>
+  f.ownerForm('/ssh/shares/save', [
+    ['name', name],
+    ['target', 'box'],
+    ['path', join(f.world, 'pics')],
+    ['delivery', delivery],
+  ])
+
+// The sandbox host reports each share it holds with `mount`; that, not its registered kinds, picks the delivery.
+test('a folder the sandbox host reported mountable needs no sshKey from the agent', async (t) => {
+  const f = await fixture(t)
+  await saveShare(f, 'mounted', 'both')
+  const host = await sandboxHost(f, t, [{ name: 'mounted', mount: true }])
+  assert.equal((await host.ask({ want: ['folder:mounted'] })).status, 202) // a card is waiting
   // The same agent still needs a key for anything delivered over SSH.
-  assert.equal((await ask(['folder:pics'])).status, 400)
+  assert.equal((await host.ask({ want: ['folder:pics'] })).status, 400)
 })
 
-// A sandbox host that mounts folders itself (kind `folder`) takes VM mounts; one without the kind mounts over-SSH
-// folders with sshfs, so it must hear those grants to do it.
-for (const [kinds, hears] of [
-  [['site'], true],
-  [['site', 'folder'], false],
+test('a folder the sandbox host reported not mountable needs an sshKey', async (t) => {
+  const f = await fixture(t)
+  await saveShare(f, 'mixed', 'both')
+  const host = await sandboxHost(f, t, [{ name: 'mixed', mount: false }])
+  assert.equal((await host.ask({ want: ['folder:mixed'] })).status, 400)
+})
+
+for (const [mount, overSsh] of [
+  [false, true],
+  [true, false],
 ] as const) {
-  test(`a sandbox host with kinds ${kinds.join(', ')} ${hears ? 'hears' : 'does not hear'} its agent's over-SSH folder grant`, async (t) => {
+  test(`a share reported mount: ${mount} is delivered ${overSsh ? 'over SSH' : 'as a VM mount'}, and the host hears the grant either way`, async (t) => {
     const f = await fixture(t)
-    const post = (path: string, token: string, body: object) =>
-      f.agent(path, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-    const created = await post('/_speaker/hosts', '', { name: 'sandbox', kinds, tokenHash: sha('host-token') })
-    const { id } = (await created.json()) as { id: string }
-    assert.equal((await f.ownerForm(`/hosts/${id}/approve`, [])).status, 303)
-    const { token } = (await (
-      await post('/_speaker/hosts/agents', 'host-token', { label: 'pi', agent: 'Pi' })
-    ).json()) as {
-      token: string
-    }
-    const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
-      headers: { authorization: 'Bearer host-token' },
-    })
-    t.after(() => ws.terminate())
-    const grants: { item: string }[][] = []
-    ws.on('message', (data) => grants.push((JSON.parse(String(data)) as { grants: { item: string }[] }).grants))
+    await saveShare(f, 'mixed', 'both')
+    const host = await sandboxHost(f, t, [{ name: 'mixed', mount }])
     const sshKey = (await readFile(join(f.dir, 'agent_key.pub'), 'utf8')).trim()
-    const asked = await post('/_speaker/requests', token, {
-      want: ['folder:pics'],
-      reason: 'test',
-      duration: '1h',
-      sshKey,
-    })
-    assert.equal(asked.status, 202)
+    assert.equal((await host.ask({ want: ['folder:mixed'], sshKey })).status, 202)
     await f.approve()
-    for (let i = 0; i < 40 && !grants.some((list) => list.length); i++) await sleep(50)
-    assert.equal(
-      grants.some((list) => list.some((grant) => grant.item === 'folder:pics')),
-      hears,
-    )
+    // Over SSH the host mounts it with sshfs, so it must hear the grant; a VM mount it hears as it always did.
+    for (let i = 0; i < 40 && !host.grants.some((list) => list.length); i++) await sleep(50)
+    assert.ok(host.grants.some((list) => list.some((grant) => grant.item === 'folder:mixed')))
+    assert.deepEqual(await host.overSsh(), overSsh ? ['folder:mixed'] : [])
   })
 }

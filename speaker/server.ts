@@ -420,7 +420,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     dataDir,
     agent: (id) => agents.get(id),
     grants: () => [...grants.values()].filter(live),
-    mountable: (agentId) => Boolean(hostOf(agents.get(agentId) ?? {})?.kinds.includes('folder')),
+    mountable: (agentId, share) => {
+      const host = agents.get(agentId)?.host
+      return Boolean(host && hostShares.get(host)?.some((held) => held.name === share && held.mount))
+    },
     audit,
     expire: () => sweep(),
   })
@@ -576,10 +579,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const hostOf = (agent: { host?: string }) => (agent.host ? hosts.get(agent.host) : undefined)
   const secretHosts = (name: string) =>
     store && Object.hasOwn(store.vault.secrets, name) ? store.vault.secrets[name].hosts : []
-  // A sandbox host that does not mount folders itself (no `folder` kind) mounts its agents' over-SSH folders with
-  // `sshfs`, so it hears those grants; every other over-SSH grant is between the agent and the relay alone.
-  const hostMountsOverSsh = (grant: { item: string }, hostId: string) =>
-    grant.item.startsWith('folder:') && !hosts.get(hostId)?.kinds.includes('folder')
+  // A sandbox host mounts its agents' over-SSH folders with `sshfs`, so it hears those grants; every other over-SSH
+  // grant is between the agent and the relay alone.
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
     version,
@@ -588,7 +589,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         (grant) =>
           live(grant) &&
           agents.get(grant.agentId)?.host === hostId &&
-          (!jump.overSsh(grant) || hostMountsOverSsh(grant, hostId)),
+          (!jump.overSsh(grant) || grant.item.startsWith('folder:')),
       )
       .map(({ id, agentId, item, expiresAt }) => ({
         id,
@@ -1535,6 +1536,7 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
           if (message.type === 'shares') {
             hostShares.set(id, message.shares)
             audit('host_shares', { host: id, shares: message.shares })
+            push() // a share's delivery (VM mount or over SSH) follows this report
           } else applied.set(id, new Set(message.grantIds))
         },
         onClose: (_event, ws) => {

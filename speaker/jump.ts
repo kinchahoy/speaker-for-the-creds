@@ -72,8 +72,8 @@ type Env = {
   agent(id: string): { id: string; sshKey?: string; source: string } | undefined
   // Every active grant.
   grants(): { id: string; agentId: string; item: string; expiresAt: string | null }[]
-  // Whether the agent's sandbox host can mount folders itself (VM mount).
-  mountable(agentId: string): boolean
+  // Whether the agent's sandbox host reported that it can mount this share itself (VM mount).
+  mountable(agentId: string, share: string): boolean
   audit(event: string, fields: Record<string, unknown>): void
   // Applies clock-driven expiry now.
   expire(): void
@@ -317,8 +317,8 @@ export async function createJump(env: Env) {
 
   // --- What an item means for an agent ---
   // `vm` when the agent's sandbox host mounts it, else `ssh` when the share allows that.
-  const deliveryOf = (agentId: string, share: Share) =>
-    share.delivery !== 'ssh' && env.mountable(agentId) ? 'vm' : share.delivery !== 'vm' ? 'ssh' : undefined
+  const deliveryOf = (agentId: string, name: string, share: Share) =>
+    share.delivery !== 'ssh' && env.mountable(agentId, name) ? 'vm' : share.delivery !== 'vm' ? 'ssh' : undefined
   // Why an ssh: or folder: item cannot be delivered to this agent, or undefined when it can.
   function unavailable(agentId: string, item: string) {
     const target = targetOf(item)
@@ -332,7 +332,7 @@ export async function createJump(env: Env) {
     if (!folder) return undefined
     const share = settings.shares[folder.name]
     if (!share) return `there is no share named ${folder.name}`
-    const how = deliveryOf(agentId, share)
+    const how = deliveryOf(agentId, folder.name, share)
     if (how === 'vm') return undefined
     if (how === undefined) return `${folder.name} is not delivered over SSH`
     return !enabled
@@ -346,14 +346,16 @@ export async function createJump(env: Env) {
     if (!folder) return targetOf(grant.item) !== undefined && unavailable(grant.agentId, grant.item) === undefined
     const share = settings.shares[folder.name]
     return Boolean(
-      share && unavailable(grant.agentId, grant.item) === undefined && deliveryOf(grant.agentId, share) === 'ssh',
+      share &&
+        unavailable(grant.agentId, grant.item) === undefined &&
+        deliveryOf(grant.agentId, folder.name, share) === 'ssh',
     )
   }
   // A folder the agent's sandbox mounts needs no SSH key from the agent.
   const mounted = (agentId: string, item: string) => {
     const folder = shareOf(item)
     const share = folder && settings.shares[folder.name]
-    return Boolean(share && deliveryOf(agentId, share) === 'vm')
+    return Boolean(share && deliveryOf(agentId, folder.name, share) === 'vm')
   }
   const sshGrants = () => env.grants().filter(overSsh)
   // The card's view of an item: what it reaches, and a warning when it is broader than it looks.
@@ -375,7 +377,7 @@ export async function createJump(env: Env) {
     const share = folder && settings.shares[folder.name]
     if (!folder || !share) return undefined
     const target = settings.targets[share.target]
-    const how = deliveryOf(agentId, share)
+    const how = deliveryOf(agentId, folder.name, share)
     return {
       text: `${share.target}:${share.path} · ${folder.rw ? 'read-write' : 'read-only'} · ${how === 'vm' ? 'VM mount' : 'over SSH'}`,
       warning: target?.home && target.home === share.path ? "this share is the account's home directory" : undefined,
