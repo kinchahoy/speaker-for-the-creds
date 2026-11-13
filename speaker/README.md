@@ -110,7 +110,7 @@ Every other host gets `403` and a one-line message. This is not a general proxy.
 {.ai}
 
 - Speaker makes the certificate authority at first need, keeps it in the encrypted store, and serves it at `GET /_speaker/proxy/ca.pem`. It makes leaf certificates per host and caches them in memory. Agents trust the authority for the proxy only.
-- Each agent gets one random placeholder per secret, held in memory. For each secret grant, `GET /_speaker/me` shows the variable with its placeholder, `HTTPS_PROXY`, where to fetch the certificate, `SSL_CERT_FILE` for `gh` (`GIT_SSL_CAINFO` or `http.sslCAInfo` for `git`), the allowed hosts, and the `gh auth setup-git` hint.
+- Each agent gets one random placeholder per secret, held in memory. For each secret grant, `GET /_speaker/catalog` shows the variable with its placeholder, `HTTPS_PROXY`, where to fetch the certificate, `SSL_CERT_FILE` for `gh` (`GIT_SSL_CAINFO` or `http.sslCAInfo` for `git`), the allowed hosts, and the `gh auth setup-git` hint.
 - Set those variables on the one command that needs them, not on the whole shell. The proxy refuses every other host.
 - The log records agent, host, method, path (no query), and status. It never records the token or bodies.
 - `site:` items stay sandbox-only. Direct agents can use `secret:` items when `PROXY_PORT` is set.
@@ -131,7 +131,7 @@ Define groups in `DATA_DIR/groups.json`:
 The description is optional. A group may hold any items except other groups. Copy [groups.example.json](groups.example.json) to start. The `/admin` Groups page edits the file live. If you edit it by hand, restart speaker.
 {.ai}
 
-A request names the group, and you approve it with the group's items. `GET /_speaker/me` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items, or with `secret:` items unless `PROXY_PORT` is set.
+A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items, or with `secret:` items unless `PROXY_PORT` is set.
 {.ai}
 
 ## Phone notifications
@@ -188,7 +188,7 @@ Agents run commands on your hosts and use your folders through a jump server ins
 
 - Targets (Setup): an alias, a host, a port, and the account speaker uses there. Adding a target pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first. You can edit the address list per target.
 - Shares (Setup): a name, a target, an absolute path, and how to deliver it (`VM mount`, `over SSH`, or both). Cards show the account (and any sudo warning) for `ssh:<target>`. For `folder:<share>[:rw]` they show the share, whether it is read-only or read-write, and the delivery.
-- Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker answers unknown names, and items it cannot deliver, with `denied` at once and logs them. After approval, `GET /_speaker/me` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
+- Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker refuses an unknown name with 400 (`There is no folder named <share> that you can use.`, never listing real names) and creates no card; an item that exists but cannot be delivered is answered `denied` at once and logged. After approval, `GET /_speaker/catalog` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
 - For an `ssh:` grant, `scp` and `sftp` paths are `<target>/<absolute path on the target>`. Speaker refuses `rsync`, legacy `scp -O`, and commands on a folder grant, with a pointer to `sftp`.
 - The Active page lists open sessions with **End**. Ending a grant, revoking it, or restarting speaker ends its sessions.
 - Container: the image has `openssh-server` and `openssh-client`, and `compose.yaml` publishes `SSH_PORT` (default 2222). The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store, and in clear only in memory inside `ssh-agent`. The jump server's files (public keys, its per-start host key, the ssh-agent socket) sit in a private temporary directory.
@@ -199,7 +199,7 @@ Agents run commands on your hosts and use your folders through a jump server ins
 
 <sub>AI-written</sub>
 
-Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker serves it without authentication so a new agent can bootstrap. It is short: the call form, and a pointer to `/_speaker/help` for everything else, including the sh and PowerShell setup (a token kept in a curl header file, nothing to install). `/_speaker/help` is one page, also served without a token. `/` serves the same skill to agents. Services, rules, and groups stay behind auth. Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
+Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker serves it without authentication so a new agent can bootstrap. It is one document: a top part that fits one screen (the call form, how to wait, where things are), then sections for setup (sh and PowerShell, a token kept in a curl header file, nothing to install), what an agent can ask for, asking, folders and SSH, secrets, remote MCP servers and errors. `/_speaker/help` and `/` serve the same document, also without a token. Services, rules, and groups stay behind auth, at `GET /_speaker/catalog`, which also lists every secret by name and state (never folders or SSH targets). Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
 {.ai}
 
 - Every agent error carries a `next` step. Where an approval is needed, it also carries a `tell_user` line with the approval link.

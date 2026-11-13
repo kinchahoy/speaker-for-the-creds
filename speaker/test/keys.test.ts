@@ -115,7 +115,7 @@ test('agents and sandbox hosts get `locked` until the owner signs in, and a push
   for (const [path, init] of [
     ['/_speaker/agents', { method: 'POST', body: '{}' }],
     ['/_speaker/hosts', { method: 'POST', body: '{}' }],
-    ['/_speaker/me', { headers: bearer }],
+    ['/_speaker/catalog', { headers: bearer }],
     ['/demo/check', { headers: bearer }],
   ] as const) {
     const response = await restarted.call(path, init)

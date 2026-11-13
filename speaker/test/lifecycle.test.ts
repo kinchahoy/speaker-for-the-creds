@@ -95,7 +95,7 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
       }
     ).id
   const me = async () =>
-    (await (await f.call('/_speaker/me', { headers: agent })).json()) as {
+    (await (await f.call('/_speaker/catalog', { headers: agent })).json()) as {
       requests: { id: string; status: string; granted: string[] }[]
       grants: unknown[]
     }

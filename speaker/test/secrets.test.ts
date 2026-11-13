@@ -152,7 +152,7 @@ async function setup(t: TestContext) {
       await call(`/admin/requests/${id}/approve`, { method: 'POST', headers: owner, body })
       return card
     }
-    const me = async () => (await (await call('/_speaker/me', { headers })).json()) as Me
+    const me = async () => (await (await call('/_speaker/catalog', { headers })).json()) as Me
     return { token, headers, ask, me }
   }
   const grantIds = async () =>
@@ -167,7 +167,15 @@ async function setup(t: TestContext) {
 type Me = {
   secrets: Record<
     string,
-    { hosts: string[]; environment: Record<string, string>; certificate: string; git: string; note: string }
+    {
+      hosts: string[]
+      state: string
+      placeholder?: string
+      environment: Record<string, string>
+      certificate: string
+      git: string
+      note: string
+    }
   >
 }
 
@@ -246,6 +254,33 @@ test("registering a sandbox host tells it speaker's proxy and SSH ports", async 
   const { id, ...rest } = (await reply.json()) as { id: string }
   assert.ok(id)
   assert.deepEqual(rest, { status: 'pending', proxyPort: s.proxyPort, sshPort: s.sshPort })
+})
+
+test('the catalog lists every secret to a direct agent, and an unknown secret is refused', async (t) => {
+  const s = await setup(t)
+  const agent = await s.agent('lister')
+  const before = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as {
+    secrets: Record<string, object>
+    text: string
+  }
+  assert.deepEqual(before.secrets, { GITHUB_TOKEN: { hosts: ['localhost'], env: 'GH_TOKEN', state: 'ask' } })
+  assert.match(before.text, /^- secret:GITHUB_TOKEN — for localhost \(set GH_TOKEN\)\. Not granted\.$/m)
+  assert.match(before.text, /^- folder:<share> and ssh:<target> — names are not listed;/m)
+  assert.doesNotMatch(before.text, /site:<any hostname>|\/me\b|curl/)
+  const refused = await s.call('/_speaker/requests', {
+    method: 'POST',
+    headers: agent.headers,
+    body: JSON.stringify({ want: ['secret:NOPE'], reason: 'x' }),
+  })
+  assert.equal(refused.status, 400)
+  assert.equal(
+    ((await refused.json()) as { message: string }).message,
+    'secret:NOPE is not something you can ask for. Secrets you can ask for: GITHUB_TOKEN.',
+  )
+  await agent.ask(['secret:GITHUB_TOKEN'])
+  const after = (await agent.me()).secrets.GITHUB_TOKEN
+  assert.equal(after.state, 'granted')
+  assert.match(after.placeholder ?? '', /^speaker-placeholder-/)
 })
 
 test('placeholders become the real secret for covered hosts only, in Bearer and Basic credentials', async (t) => {
@@ -359,6 +394,6 @@ test('a keyless service forwards calls without any credential', async (t) => {
   assert.equal(s.keyless[0].url, '/api/today?city=x')
   assert.equal(s.keyless[0].headers.authorization, undefined)
   // The service is listed with its state like any other.
-  const me = (await (await s.call('/_speaker/me', { headers: agent.headers })).json()) as { services: object }
+  const me = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as { services: object }
   assert.ok('weather' in me.services)
 })

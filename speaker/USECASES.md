@@ -35,9 +35,9 @@ Variation: if the owner marked a service's reads open (for example "are the ligh
 **What the owner wants.** The agent runs commands on `nas` as a limited account for a short time. The owner sees the account name and every command that runs is logged. 
 
 1. The agent (already enrolled) generates a throwaway SSH key and posts `{"want":["ssh:nas"],"sshKey":"ssh-ed25519 …","reason":"…","duration":"30m"}` to `/_speaker/requests`, with `Speaker-Wait`. An agent sends its SSH key once, so later requests omit it. Speaker holds the reply.
-2. Speaker checks that `nas` exists and can be delivered to this agent. The name comes only from the owner's prompt; a request for an unknown target is answered `denied` at once and appears in the Log, with no card.
+2. Speaker checks that `nas` exists and can be delivered to this agent. The name comes only from the owner's prompt; a request for an unknown target is refused with 400, `There is no SSH target named <name> that you can use.`, and creates no card.
 3. The card shows the account the commands will run as (for example `agent`), a warning if speaker found passwordless sudo on that account when the target was added, and the colour used for `ssh:` items. The owner approves for 30 minutes.
-4. Speaker starts its SSH port (see DESIGN.md, The jump server and relay), writes one key line for the agent, and returns `granted`. The agent calls `GET /_speaker/me` and copies the ready-made command, including the port, the pinned host key and `-o IdentitiesOnly=yes -o BatchMode=yes`.
+4. Speaker starts its SSH port (see DESIGN.md, The jump server and relay), writes one key line for the agent, and returns `granted`. The agent calls `GET /_speaker/catalog` and copies the ready-made command, including the port, the pinned host key and `-o IdentitiesOnly=yes -o BatchMode=yes`.
 5. The agent runs `ssh … <account>@speaker nas 'df -h'` (the login name is the account speaker runs as). Speaker's relay runs the command on `nas` as the agent account and returns output and exit code. The Log records the exact command.
 6. At 30 minutes, or on Revoke, the session ends and the key line is removed.
 
@@ -49,7 +49,7 @@ Variation: if the owner marked a service's reads open (for example "are the ligh
 
 **Flow.**
 1. The agent requests `folder:scans` (or `folder:reports:rw`) with a reason, and with its throwaway key if it has not sent one yet. A direct agent gets folders over SSH, if the share allows it; otherwise the item is answered `denied`. The card says "over SSH", the share, and read-only or read-write.
-2. The owner approves. `/me` shows the `scp` and `sftp` lines for this grant first, then `sshfs`. Every path in them starts with the share name.
+2. The owner approves. `/catalog` shows the `scp` and `sftp` lines for this grant first, then `sshfs`. Every path in them starts with the share name.
 3. The client uses sftp or sshfs to do the work required. 
 
 ## Sandboxed agents primarily

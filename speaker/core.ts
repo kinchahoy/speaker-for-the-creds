@@ -230,6 +230,8 @@ export type Request = {
   // Items still awaiting the owner; granted and denied are the decided ones.
   items: string[]
   want: string[]
+  // Every item asked for after group expansion, whatever its outcome: a repeated POST of the same set joins this request.
+  asked: string[]
   granted: string[]
   denied: string[]
   reason: string
@@ -257,6 +259,10 @@ export type View = {
 }
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
+export type HostCatalog = {
+  mcps: { id: string; label: string; tools: string[] }[]
+  extensions: { id: string; label: string; description: string; tools: string[]; sites: string[] }[]
+}
 export type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
 export type Env = { Variables: { caller: Caller } }
 export const demoSecret = 'speaker-demo-credential-not-for-real-services'
@@ -298,15 +304,17 @@ export async function optionalFile(path: string): Promise<string | undefined> {
   }
 }
 export const save = (path: string, value: unknown) => writeFile(path, JSON.stringify(value, null, 2), { mode: 0o600 })
-export const invalid = (message: string, accepted?: string[], status: 400 | 404 = 400) =>
+export const invalid = (message: string, accepted?: string[], status: 400 | 404 = 400, next?: string) =>
   new HTTPException(status, {
-    res: Response.json({ error: 'invalid', message, ...(accepted ? { accepted } : {}) }, { status }),
+    res: Response.json(
+      { error: 'invalid', message, ...(accepted ? { accepted } : {}), ...(next ? { next } : {}) },
+      { status },
+    ),
   })
 
 export async function createCore(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
-  const help = await readFile(new URL('./skill/help.md', import.meta.url), 'utf8')
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   const servicesFile = file('services.json')
@@ -380,6 +388,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const applied = new Map<string, Set<string>>()
   // The shares each connected sandbox host holds and whether it can mount them (recorded for folder delivery).
   const hostShares = new Map<string, { name: string; mount: boolean }[]>()
+  // What each connected sandbox host can start inside its VMs: MCP servers and Pi extensions (with the sites they need).
+  const hostCatalog = new Map<string, HostCatalog>()
   const strikes = new Map<string, number[]>()
   // The log: every event goes to standard output and into this buffer, which the admin Log page reads.
   const logged: LogEntry[] = []
@@ -761,7 +771,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     }
   }
   // Items the owner never grants are denied at once, open reads need no grant, and locked items are denied without a
-  // card; the rest join the agent's pending request (or start one).
+  // card; the rest go to the owner in one request. Asking for exactly the set a pending request already holds joins
+  // that request (this is how a caller waits by posting again); any other set is a request of its own.
   function createRequest(
     agent: Agent,
     items: string[],
@@ -770,13 +781,21 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     duration: Request['duration'],
     trigger?: string,
   ) {
+    const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item))
+    const existing = [...requests.values()].find(
+      (r) => r.agentId === agent.id && r.status === 'pending' && sameSet(r.asked, items),
+    )
+    if (existing) {
+      if (reason) Object.assign(existing, { reason, duration })
+      return existing
+    }
     const outcome = { granted: [] as string[], denied: [] as string[], ask: [] as string[] }
     for (const item of items) {
       const target = serviceItem(item)
       const service = target && services[target.id]
       const rule = service && (target.write ? service.write : service.read)
       const missing = jump.unavailable(agent.id, item)
-      // A name that does not exist or cannot be delivered is denied at once and logged for the owner, with no card.
+      // An item that cannot be delivered is denied at once and logged for the owner, with no card.
       if (missing !== undefined) {
         audit('request_unavailable', { agent: agent.id, item, why: missing })
         outcome.denied.push(item)
@@ -784,12 +803,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       else if (rule === 'open') outcome.granted.push(item)
       else outcome.ask.push(item)
     }
-    const existing = [...requests.values()].find((r) => r.agentId === agent.id && r.status === 'pending')
-    const request: Request = existing ?? {
+    const request: Request = {
       id: rid(),
       agentId: agent.id,
       items: [],
       want: [],
+      asked: items,
       granted: [],
       denied: [],
       reason: '',
@@ -805,7 +824,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     request.granted = union(request.granted, outcome.granted)
     request.denied = union(request.denied, outcome.denied)
     if (reason) Object.assign(request, { reason, duration })
-    if (existing) return request
     requests.set(request.id, request)
     push()
     audit('request_created', { request: request.id, agent: agent.id, items, reason, trigger })
@@ -893,7 +911,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           if (revoked.has(digest)) throw new Refusal(403, 'The owner revoked this agent. Stop and tell the user')
           const agent = [...agents.values()].find((a) => same(a.tokenHash, digest))
           if (!agent || agent.source !== source)
-            throw new Refusal(407, 'Unknown token or address. Enroll again (GET /_speaker/help)')
+            throw new Refusal(407, 'Unknown token or address. Enroll again (read "Set up" in GET /_speaker/help)')
           agent.lastSeen = Date.now()
           return { agent: agent.id }
         },
@@ -925,7 +943,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   return {
     config,
     skill,
-    help,
     services,
     secrets,
     groups,
@@ -937,6 +954,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     sockets,
     applied,
     hostShares,
+    hostCatalog,
     sessions,
     logged,
     mcpTools,

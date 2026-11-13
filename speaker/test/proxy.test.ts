@@ -182,7 +182,7 @@ const enroll = (f: Fixture, token: string, body: object = {}, headers: Record<st
 const enrolled = async (f: Fixture, token: string, headers: Record<string, string> = {}) =>
   ((await (await enroll(f, token, {}, headers)).json()) as { id: string }).id
 const me = async (f: Fixture, token: string) =>
-  (await f.call('/_speaker/me', { headers: bearer(token) })).json() as Promise<{
+  (await f.call('/_speaker/catalog', { headers: bearer(token) })).json() as Promise<{
     agent: { status: string; kind: string }
     services: Record<string, { read: { state: string; until?: string | null }; full: { state: string } }>
     grants: { item: string; expiresAt: string | null }[]
@@ -325,7 +325,7 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   // The host ends its agent: the token answers `denied` afterwards, not `enroll`.
   const gone = await f.call(`/_speaker/hosts/agents/${agent.id}`, { method: 'DELETE', headers: bearer('host-token') })
   assert.equal(gone.status, 200)
-  assert.equal((await f.call('/_speaker/me', { headers: bearer(agent.token) })).status, 403)
+  assert.equal((await f.call('/_speaker/catalog', { headers: bearer(agent.token) })).status, 403)
 })
 
 test('a sandbox host records the shares it reports, and a grant is applying for the agent until the host reports it', async (t) => {
@@ -530,16 +530,16 @@ test('enrollment with Speaker-Wait holds until the owner decides and answers per
   assert.equal((await f.call('/skill.md')).status, 200)
 })
 
-test('enrollment may carry an empty want, and /me then shows where the agent stands', async (t) => {
+test('enrollment may carry an empty want, and /catalog then shows where the agent stands', async (t) => {
   const f = await setup(t)
   assert.equal((await enroll(f, 'tok')).status, 201)
   const view = await me(f, 'tok')
   assert.deepEqual([view.agent.status, view.agent.kind, view.grants, view.requests], ['idle', 'direct', [], []])
   assert.deepEqual(view.services.notes.read, { state: 'ask' })
-  assert.equal(((await (await f.call('/_speaker/me')).json()) as { error: string }).error, 'enroll')
+  assert.equal(((await (await f.call('/_speaker/catalog')).json()) as { error: string }).error, 'enroll')
 })
 
-test('an open read needs no grant or card, is never listed in /me, and counts as a use', async (t) => {
+test('an open read needs no grant or card, is never listed in /catalog, and counts as a use', async (t) => {
   const f = await setup(t)
   await f.ownerForm('/services/save', {
     id: 'lights',
@@ -584,8 +584,9 @@ test('a card lists groups and loose items, and Approve decides only the items it
     card.html,
     /<legend>Not in a group<\/legend><label class=""><input type="checkbox" name="items" value="extra.read"/,
   )
-  // An item added after the card was rendered is not part of the decision.
+  // A different set of items is a request, and a card, of its own: it is not part of this decision.
   await askFor(f, 'tok', { want: ['extra.full'], reason: 'work' })
+  assert.equal((await f.pending()).length, 2)
   assert.equal(
     (
       await f.decide(card.id, 'approve', {
@@ -595,17 +596,17 @@ test('a card lists groups and loose items, and Approve decides only the items it
     ).status,
     303,
   )
-  const [request] = (await me(f, 'tok')).requests
+  const [request, second] = (await me(f, 'tok')).requests
   assert.deepEqual(
     [request.status, request.granted, request.denied],
-    ['pending', ['notes.read', 'extra.read'], ['notes.full']],
+    ['decided', ['notes.read', 'extra.read'], ['notes.full']],
   )
-  // Deny refuses exactly what the card showed; here that is the one item left.
-  assert.equal((await f.decide(card.id, 'deny', { shown: ['extra.full'] })).status, 303)
-  const [done] = (await me(f, 'tok')).requests
-  assert.deepEqual([done.status, done.denied], ['decided', ['notes.full', 'extra.full']])
-  // A card that shows nothing pending decides nothing.
+  assert.deepEqual([second.status, second.granted, second.denied], ['pending', [], []])
+  // A card that was already decided decides nothing more.
   assert.equal((await f.decide(card.id, 'deny', { shown: ['extra.full'] })).status, 409)
+  assert.equal((await f.decide(second.id, 'deny')).status, 303)
+  const [, done] = (await me(f, 'tok')).requests
+  assert.deepEqual([done.status, done.denied], ['decided', ['extra.full']])
 })
 
 test('the admin pages have no JSON routes', async (t) => {
@@ -713,7 +714,7 @@ test('enrollment refuses the empty-token hash, and 401s say what to do next', as
   const f = await setup(t)
   assert.equal((await enroll(f, '')).status, 400)
   const first = (await (await enroll(f, 'tok')).json()) as { id: string; next: string }
-  assert.equal(first.next, 'GET /_speaker/me')
+  assert.equal(first.next, 'GET /_speaker/catalog')
   const unknown = await f.call('/notes/x', { headers: bearer('nope') })
   assert.equal(unknown.status, 401)
   assert.equal(unknown.headers.get('www-authenticate'), 'Bearer realm="speaker"')
@@ -813,7 +814,7 @@ test('an agent token works only from the address it enrolled from, and X-Forward
   const f = await setup(t)
   await enrolled(f, 'tok', { 'x-forwarded-for': '100.64.0.7' })
   // Bound to the socket address (127.0.0.1); a spoofed header changes nothing.
-  const spoofed = await f.call('/_speaker/me', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  const spoofed = await f.call('/_speaker/catalog', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
   assert.equal(spoofed.status, 200)
 })
 
@@ -821,9 +822,9 @@ test('a trusted proxy names the caller with the last X-Forwarded-For entry', asy
   const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
   const from = (chain: string) => ({ 'x-forwarded-for': chain })
   await enrolled(f, 'tok', from('6.6.6.6, 100.64.0.7'))
-  const home = await f.call('/_speaker/me', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
+  const home = await f.call('/_speaker/catalog', { headers: { ...bearer('tok'), ...from('9.9.9.9, 100.64.0.7') } })
   assert.equal(home.status, 200)
-  const away = await f.call('/_speaker/me', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
+  const away = await f.call('/_speaker/catalog', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
   assert.equal(away.status, 401)
   assert.equal(((await away.json()) as { error: string }).error, 'enroll')
 })
@@ -851,4 +852,121 @@ test('the sign-in page warns about plain HTTP only for a caller that is not on l
   assert.doesNotMatch(await page({}), /unencrypted/)
   assert.match(await page(away), /unencrypted/)
   assert.doesNotMatch(await page({ ...away, 'x-forwarded-proto': 'https' }), /unencrypted/)
+})
+
+test('each request is its own; posting exactly the same items again joins the pending one', async (t) => {
+  const f = await setup(t)
+  await enroll(f, 'tok')
+  const ask = async (want: string[]) => (await (await askFor(f, 'tok', { want, reason: 'work' })).json()) as Outcome
+  const read = await ask(['notes.read'])
+  assert.equal((await ask(['notes.read'])).id, read.id)
+  const full = await ask(['notes.full'])
+  assert.notEqual(full.id, read.id)
+  assert.equal((await ask(['notes.full'])).id, full.id)
+  // Approving one leaves the other waiting, and each reply covers only its own items.
+  assert.equal((await f.decide(read.id, 'approve')).status, 303)
+  const [first, second] = (await me(f, 'tok')).requests
+  assert.deepEqual([first.status, first.granted, first.denied], ['decided', ['notes.read'], []])
+  assert.deepEqual([second.status, second.granted], ['pending', []])
+})
+
+test('names an agent may not ask for are refused with the real ones, before anything reaches the owner', async (t) => {
+  const f = await setup(t, { dev: { items: ['notes.read'] } })
+  await enroll(f, 'st')
+  const refused = async (token: string, want: string[]) => {
+    const response = await askFor(f, token, { want, reason: 'x' })
+    assert.equal(response.status, 400)
+    return (await response.json()) as { error: string; message: string; next: string }
+  }
+  const service = await refused('st', ['notes.read', 'nosuch.read'])
+  assert.equal(service.error, 'invalid')
+  assert.match(
+    service.message,
+    /^nosuch\.read is not something you can ask for\. Services you can ask for: .*notes\.read/,
+  )
+  assert.equal(service.next, 'GET /_speaker/catalog')
+  assert.match((await refused('st', ['group:nope'])).message, /Groups you can ask for: group:dev\./)
+  assert.equal((await me(f, 'st')).requests.length, 0)
+  assert.equal((await f.pending()).length, 0)
+})
+
+test('a sandbox host reports its catalog: unknown ext and mcp ids are refused, and an extension brings its sites', async (t) => {
+  const f = await setup(t)
+  const { agent } = await approvedHost(f, ['site', 'ext', 'mcp'])
+  const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
+    headers: { authorization: 'Bearer host-token' },
+  })
+  t.after(() => ws.terminate())
+  await once(ws, 'open')
+  ws.send(
+    JSON.stringify({
+      type: 'catalog',
+      mcps: [{ id: 'files', label: 'Files', tools: ['read_file'] }],
+      extensions: [
+        {
+          id: 'web',
+          label: 'Web search',
+          description: 'Search the web',
+          tools: ['web_search'],
+          sites: ['search.example', '*.cdn.example'],
+        },
+      ],
+    }),
+  )
+  const catalog = async () =>
+    (await (await f.call('/_speaker/catalog', { headers: bearer(agent.token) })).json()) as {
+      extensions: Record<string, object>
+      mcp: Record<string, object>
+      text: string
+    }
+  for (let i = 0; i < 100 && !Object.keys((await catalog()).extensions).length; i++) await sleep(20)
+  const listed = await catalog()
+  assert.deepEqual(listed.extensions.web, {
+    label: 'Web search',
+    description: 'Search the web',
+    tools: ['web_search'],
+    sites: ['search.example', '*.cdn.example'],
+    state: 'ask',
+  })
+  assert.deepEqual(listed.mcp.files, { label: 'Files', tools: ['read_file'], state: 'ask' })
+  assert.match(listed.text, /^- site:<any hostname> — any website; ask for the exact hostname\.$/m)
+  assert.match(listed.text, /^- ext:web — Web search: Search the web/m)
+  assert.doesNotMatch(listed.text, /\/me\b|curl/)
+  const refused = async (want: string[]) => {
+    const response = await askFor(f, agent.token, { want, reason: 'x' })
+    assert.equal(response.status, 400)
+    return ((await response.json()) as { message: string }).message
+  }
+  assert.equal(
+    await refused(['ext:nope']),
+    'ext:nope is not something you can ask for. Extensions you can ask for: web.',
+  )
+  assert.match(await refused(['mcp:nope']), /MCP servers you can ask for: files\./)
+
+  const made = (await (await askFor(f, agent.token, { want: ['ext:web'], reason: 'search' })).json()) as Outcome
+  const [card] = await f.pending()
+  for (const item of ['ext:web', 'site:search.example', 'site:*.cdn.example'])
+    assert.ok(card.html.includes(`value="${item}"`), `the card lists ${item}`)
+  assert.equal((await f.decide(made.id, 'approve')).status, 303)
+  assert.deepEqual((await f.grants()).map((g) => g.item).sort(), [
+    'ext:web',
+    'site:*.cdn.example',
+    'site:search.example',
+  ])
+  // Closing the host's connection clears what it reported.
+  ws.close()
+  for (let i = 0; i < 100 && Object.keys((await catalog()).extensions).length; i++) await sleep(20)
+  assert.deepEqual((await catalog()).extensions, {})
+})
+
+test('/_speaker/me answers 404 and points to the catalog', async (t) => {
+  const f = await setup(t)
+  await enroll(f, 'tok')
+  const response = await f.call('/_speaker/me', { headers: bearer('tok') })
+  assert.equal(response.status, 404)
+  assert.deepEqual(await response.json(), {
+    error: 'invalid',
+    message: '/_speaker/me is now /_speaker/catalog',
+    next: 'GET /_speaker/catalog',
+  })
 })
