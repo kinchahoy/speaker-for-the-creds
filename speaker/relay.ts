@@ -27,7 +27,7 @@ if (import.meta.main) {
   let state: 'running' | 'finished' = 'running'
   // One line on standard error for every refusal or ended session.
   const stop = (message: string): never => {
-    process.stderr.write(`speaker: ${message}. Check GET /_speaker/me\n`)
+    process.stderr.write(`speaker: ${message}. Check GET /_speaker/catalog\n`)
     child?.kill()
     process.exit(1)
   }
@@ -75,7 +75,7 @@ if (import.meta.main) {
       log: (op, path) => say({ type: 'file', op, path }),
       refused(message) {
         say({ type: 'refused', message })
-        process.stderr.write(`speaker: refused: ${message}. Check GET /_speaker/me\n`)
+        process.stderr.write(`speaker: refused: ${message}. Check GET /_speaker/catalog\n`)
       },
     }).then(
       () => finish(0),

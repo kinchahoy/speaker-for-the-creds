@@ -139,7 +139,7 @@ export function createProxy(hooks: ProxyHooks): Server {
     }
     const secrets = hooks.secrets(agent).filter(({ hosts }) => hosts.some((pattern) => covers(pattern, host)))
     if (!secrets.length)
-      return answer(403, `speaker: your access to ${host} ended (revoked or expired). Check GET /_speaker/me.`)
+      return answer(403, `speaker: your access to ${host} ended (revoked or expired). Check GET /_speaker/catalog.`)
     const headers: OutgoingHttpHeaders = { ...req.headers, host: port === '443' ? host : `${host}:${port}` }
     for (const name of ['connection', 'proxy-connection', 'proxy-authorization', 'keep-alive', 'upgrade'])
       delete headers[name]
@@ -191,7 +191,7 @@ export function createProxy(hooks: ProxyHooks): Server {
       if (!hooks.secrets(agent).some(({ hosts }) => hosts.some((pattern) => covers(pattern, host))))
         throw new Refusal(
           403,
-          `speaker: no secret grant of yours covers ${host}; speaker is not a general proxy. Ask the owner for the secret with POST /_speaker/requests (see GET /_speaker/me).`,
+          `speaker: no secret grant of yours covers ${host}; speaker is not a general proxy. Ask the owner for the secret with POST /_speaker/requests (see GET /_speaker/catalog).`,
         )
       const { key, cert } = await leaf(host)
       const tunnel = createHttpsServer({ key, cert }, tunnelHandler(agent, host, port))

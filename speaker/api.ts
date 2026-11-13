@@ -30,7 +30,6 @@ import { Refusal } from './proxy.ts'
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const {
     skill,
-    help,
     config,
     services,
     groups,
@@ -42,6 +41,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     sockets,
     applied,
     hostShares,
+    hostCatalog,
     jump,
     credentialOf,
     audit,
@@ -83,7 +83,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       return c.json({ error: 'locked', tell_user: `Speaker restarted: sign in at ${baseOf(c)}/admin to unlock` }, 503)
     await next()
   }
-  const enrollNext = 'Enroll again with a new token: GET /_speaker/help'
+  const enrollNext = 'Enroll again with a new token: read "Set up" in GET /_speaker/help'
   // Resolves a bearer token to an approved sandbox host or an agent.
   const auth: MiddlewareHandler<Env> = async (c, next) => {
     const token = /^Bearer +(\S+) *$/i.exec(c.req.header('authorization') ?? '')?.[1]
@@ -133,22 +133,82 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     Object.entries(groups).filter(([, group]) =>
       group.items.every((item) => allowedKinds(agent).includes(kindOf(item) ?? '')),
     )
-  // Expands groups and checks every item may be asked for by this agent.
+  const catalogHint = 'GET /_speaker/catalog'
+  const list = (names: string[], none: string) => (names.length ? names.join(', ') : none)
+  // Expands groups, adds the sites of each extension, and refuses any name this agent may not ask for: the whole call
+  // fails with the names it may use (never shares or targets), before anything reaches the owner.
   function resolveItems(want: string[], agent: Agent) {
+    const catalog = hostCatalog.get(agent.host ?? '')
     const items = want.flatMap((item) => {
       if (kindOf(item) !== 'group') return [item]
       const group = offered(agent).find(([name]) => `group:${name}` === item)
-      if (!group) throw invalid(`Unknown group ${item}`, [...offered(agent).map(([name]) => `group:${name}`)])
+      if (!group)
+        throw invalid(
+          `${item} is not something you can ask for. Groups you can ask for: ${list(
+            offered(agent).map(([name]) => `group:${name}`),
+            'none',
+          )}.`,
+          undefined,
+          400,
+          catalogHint,
+        )
       return group[1].items
     })
+    const refuse = (item: string, real: string[], what: string, none: string) =>
+      invalid(
+        `${item} is not something you can ask for. ${what} you can ask for: ${list(real, none)}.`,
+        undefined,
+        400,
+        catalogHint,
+      )
     for (const item of items) {
       const kind = kindOf(item) ?? ''
-      if (!allowedKinds(agent).includes(kind)) throw invalid(`${item} is not available to this agent`, itemForms)
+      if (!allowedKinds(agent).includes(kind))
+        throw invalid(`${item} is not available to this agent`, itemForms, 400, catalogHint)
       const target = serviceItem(item)
       if (target && (!Object.hasOwn(services, target.id) || credentialOf(target.id) === undefined))
-        throw invalid(`Unknown service ${target.id}`)
+        throw refuse(
+          item,
+          Object.keys(services)
+            .filter((id) => credentialOf(id) !== undefined)
+            .flatMap((id) => [`${id}.read`, `${id}.full`]),
+          'Services',
+          'none',
+        )
+      if (kind === 'secret') {
+        const names = Object.keys(core.store?.vault.secrets ?? {})
+        if (!names.includes(item.slice('secret:'.length))) throw refuse(item, names, 'Secrets', 'none')
+      }
+      if (kind === 'ext' && !catalog?.extensions.some(({ id }) => `ext:${id}` === item))
+        throw refuse(
+          item,
+          (catalog?.extensions ?? []).map(({ id }) => id),
+          'Extensions',
+          'none',
+        )
+      if (kind === 'mcp' && !catalog?.mcps.some(({ id }) => `mcp:${id}` === item))
+        throw refuse(
+          item,
+          (catalog?.mcps ?? []).map(({ id }) => id),
+          'MCP servers',
+          'none',
+        )
+      const unknown = jump.unknownName(item)
+      if (unknown)
+        throw invalid(
+          unknown,
+          undefined,
+          400,
+          'Use the exact name your task or the owner gave you; read "Folders and SSH" in GET /_speaker/help',
+        )
     }
-    return union(items)
+    // An extension brings the sites it needs, so one approval covers both.
+    const sites = items.flatMap((item) =>
+      kindOf(item) === 'ext'
+        ? (catalog?.extensions.find(({ id }) => `ext:${id}` === item)?.sites ?? []).map((host) => `site:${host}`)
+        : [],
+    )
+    return union(items, sites)
   }
   // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
   const applying = (request: Request) =>
@@ -186,18 +246,23 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   }
   // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
+    const items = resolveItems(input.want, agent)
     // A newer key replaces the older one.
     if (input.sshKey) {
       agent.sshKey = input.sshKey
       syncJump()
     }
-    const items = resolveItems(input.want, agent)
     // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
     if (
       !agent.sshKey &&
       items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
     )
-      throw invalid('ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)')
+      throw invalid(
+        'ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)',
+        undefined,
+        400,
+        'Send "sshKey"; read "Folders and SSH" in GET /_speaker/help',
+      )
     const request = createRequest(agent, items, input.want, input.reason, input.duration)
     // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
     await hold(
@@ -232,7 +297,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   app.use('/skill.md', etag())
   app.use('/_speaker/help', etag())
   app.get('/skill.md', (c) => c.text(withAddress(c, skill), 200, markdown))
-  app.get('/_speaker/help', (c) => c.text(withAddress(c, help), 200, markdown))
+  app.get('/_speaker/help', (c) => c.text(withAddress(c, skill), 200, markdown))
   app.get('/', (c) =>
     c.req.header('accept')?.includes('text/html')
       ? c.html(
@@ -264,7 +329,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const result = want.length ? await ask(c, agent, { want, reason: reason ?? '', duration, sshKey }) : undefined
     if (!result && sshKey) agent.sshKey = sshKey
     return c.json(
-      { id: agent.id, ...(result ? { request: result } : { next: 'GET /_speaker/me' }) },
+      { id: agent.id, ...(result ? { request: result } : { next: 'GET /_speaker/catalog' }) },
       created ? 201 : 200,
     )
   })
@@ -306,6 +371,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           sockets.set(id, ws)
           applied.delete(id)
           hostShares.delete(id)
+          hostCatalog.delete(id)
           ws.send(JSON.stringify(snapshot(id)))
         },
         onMessage: (event, ws) => {
@@ -317,12 +383,29 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
                 type: z.literal('shares'),
                 shares: z.array(z.object({ name: idSchema, mount: z.boolean() })),
               }),
+              z.object({
+                type: z.literal('catalog'),
+                mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
+                extensions: z.array(
+                  z.object({
+                    id: idSchema,
+                    label: z.string(),
+                    description: z.string(),
+                    tools: z.array(z.string()),
+                    // Each site becomes a `site:` item, so it must be a valid one.
+                    sites: z.array(z.string().refine((host) => kindOf(`site:${host}`) === 'site', 'Not a site name')),
+                  }),
+                ),
+              }),
             ])
             .parse(JSON.parse(String(event.data)))
           if (message.type === 'shares') {
             hostShares.set(id, message.shares)
             audit('host_shares', { host: id, shares: message.shares })
             push() // a share's delivery (VM mount or over SSH) follows this report
+          } else if (message.type === 'catalog') {
+            hostCatalog.set(id, { mcps: message.mcps, extensions: message.extensions })
+            audit('host_catalog', { host: id, mcps: message.mcps.length, extensions: message.extensions.length })
           } else applied.set(id, new Set(message.grantIds))
         },
         onClose: (_event, ws) => {
@@ -330,6 +413,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           sockets.delete(id)
           applied.delete(id)
           hostShares.delete(id)
+          hostCatalog.delete(id)
         },
       }
     }),
@@ -369,37 +453,116 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       hosts.some((host) => /(^|\.)github\.com$/.test(host))
         ? { git: 'Run `gh auth setup-git` once so git takes its credentials from gh.' }
         : {}
+    const granted = new Map(secretGrants(agent.id).map((secret) => [secret.name, secret]))
     return Object.fromEntries(
-      secretGrants(agent.id).map(({ name, env, placeholder, hosts, until }) => [
-        name,
-        agent.host
-          ? {
-              until,
-              hosts,
-              placeholder,
-              environment: { [env]: placeholder },
-              ...gitHint(hosts),
-              note: "Set the variable on the command that needs it, for example GH_TOKEN=... gh pr list. You need no proxy settings or certificate: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
-            }
-          : {
-              until,
-              hosts,
-              placeholder,
-              environment: {
-                [env]: placeholder,
-                HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
-                SSL_CERT_FILE: ca,
+      Object.entries(core.store?.vault.secrets ?? {}).map(([name, { hosts, env }]) => {
+        const grant = granted.get(name)
+        if (!grant) return [name, { hosts, env, state: 'ask' }]
+        const { placeholder, until } = grant
+        return [
+          name,
+          agent.host
+            ? {
+                hosts,
+                env,
+                state: 'granted',
+                until,
+                placeholder,
+                environment: { [env]: placeholder },
+                ...gitHint(hosts),
+                note: "Set the variable on the command that needs it, for example GH_TOKEN=... gh pr list. You need no proxy settings or certificate: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
+              }
+            : {
+                hosts,
+                env,
+                state: 'granted',
+                until,
+                placeholder,
+                environment: {
+                  [env]: placeholder,
+                  HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
+                  SSL_CERT_FILE: ca,
+                },
+                token: '<token> is the part after "Bearer " in your header file; do not print it',
+                certificate: `Run once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh. For git, set GIT_SSL_CAINFO to the same file, or run git config --global http.sslCAInfo "${ca}".`,
+                ...gitHint(hosts),
+                note: 'Set these only on the command that needs them, for example HTTPS_PROXY=... gh pr list. The proxy refuses every host except these.',
               },
-              token: '<token> is the part after "Bearer " in your header file; do not print it',
-              certificate: `Run once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh. For git, set GIT_SSL_CAINFO to the same file, or run git config --global http.sslCAInfo "${ca}".`,
-              ...gitHint(hosts),
-              note: 'Set these only on the command that needs them, for example HTTPS_PROXY=... gh pr list. The proxy refuses every host except these.',
-            },
-      ]),
+        ]
+      }),
     )
   }
-  // Everything an agent needs to know about where it stands. Open services, targets and shares are never listed.
-  app.get('/_speaker/me', (c) => {
+  type Held = { state: string; until?: string | null }
+  const heldText = ({ state, until }: Held) =>
+    state === 'granted'
+      ? until
+        ? `Granted until ${until} (UTC).`
+        : 'Granted, with no end.'
+      : state === 'never'
+        ? 'The owner never grants this.'
+        : 'Not granted.'
+  // The catalog as plain markdown for a weak model; the sandbox tool pastes it into its own description, so it names no
+  // routes and assumes nothing else was read.
+  function catalogText(input: {
+    services: { id: string; mcp: boolean; read: Held; full: Held }[]
+    secrets: Record<string, { hosts: string[]; env: string } & Held>
+    groups: Record<string, { description?: string; items: string[]; also?: string }>
+    sandboxed: boolean
+    extensions: Record<string, { label: string; description: string; tools: string[]; sites: string[] } & Held>
+    mcp: Record<string, { label: string; tools: string[] } & Held>
+  }) {
+    const section = (title: string, lines: string[]) => (lines.length ? ['', `${title}:`, ...lines] : [])
+    const tools = (names: string[]) => (names.length ? ` Tools: ${names.join(', ')}.` : '')
+    return [
+      'Things you can ask the owner for, and where each stands now. Name them exactly as written.',
+      ...section(
+        'Services',
+        input.services.map(
+          ({ id, mcp, read, full }) =>
+            `- ${id}.read — read${mcp ? ' (remote MCP server)' : ''}. ${heldText(read)} ${id}.full — read and change. ${heldText(full)}`,
+        ),
+      ),
+      ...section(
+        'Secrets (you use them without seeing them)',
+        Object.entries(input.secrets).map(
+          ([name, { hosts, env, ...held }]) =>
+            `- secret:${name} — for ${hosts.join(', ')} (set ${env}). ${heldText(held)}`,
+        ),
+      ),
+      ...section(
+        'Websites',
+        input.sandboxed ? ['- site:<any hostname> — any website; ask for the exact hostname.'] : [],
+      ),
+      ...section('Folders and SSH', [
+        '- folder:<share> and ssh:<target> — names are not listed; use the exact name your task or the owner gave you.',
+      ]),
+      ...section(
+        'Groups (one decision for several items)',
+        Object.entries(input.groups).map(
+          ([name, { description, items, also }]) =>
+            `- group:${name} — ${description ? `${description}. ` : ''}Contains: ${[...items, ...(also ? [also] : [])].join(', ')}.`,
+        ),
+      ),
+      ...section(
+        'Extensions',
+        Object.entries(input.extensions).map(
+          ([id, { label, description, tools: names, sites, ...held }]) =>
+            `- ext:${id} — ${label}: ${description}${tools(names)}${sites.length ? ` Needs sites: ${sites.join(', ')}.` : ''} ${heldText(held)}`,
+        ),
+      ),
+      ...section(
+        'MCP servers',
+        Object.entries(input.mcp).map(
+          ([id, { label, tools: names, ...held }]) => `- mcp:${id} — ${label}.${tools(names)} ${heldText(held)}`,
+        ),
+      ),
+    ].join('\n')
+  }
+  app.get('/_speaker/me', (c) =>
+    c.json({ error: 'invalid', message: '/_speaker/me is now /_speaker/catalog', next: 'GET /_speaker/catalog' }, 404),
+  )
+  // Everything an agent may ask for and where it stands. Open services, targets and shares are never listed.
+  app.get('/_speaker/catalog', (c) => {
     const agent = agentCaller(c)
     const mine = [...grants.values()].filter((grant) => grant.agentId === agent.id && live(grant))
     const state = (id: string, write: boolean) => {
@@ -411,6 +574,42 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           ? { state: 'granted', until: grant.expiresAt }
           : { state: 'ask' }
     }
+    const listed = Object.entries(services).filter(
+      ([id, service]) => credentialOf(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
+    )
+    const secrets = config.PROXY_PORT ? secretsView(c, agent) : {}
+    const groupsView = Object.fromEntries(
+      offered(agent).map(([name, group]) => {
+        // Targets and shares are never named to agents, not even inside a group: only a count shows.
+        const hidden = (kind: string) => group.items.filter((item) => kindOf(item) === kind).length
+        const also = [
+          hidden('ssh') && plural(hidden('ssh'), 'SSH target', 'SSH targets'),
+          hidden('folder') && plural(hidden('folder'), 'folder', 'folders'),
+        ].filter(Boolean)
+        return [
+          name,
+          also.length
+            ? {
+                ...group,
+                items: group.items.filter((item) => !['ssh', 'folder'].includes(kindOf(item) ?? '')),
+                also: also.join(', '),
+              }
+            : group,
+        ]
+      }),
+    )
+    // The host's in-VM MCP servers and Pi extensions, each with this agent's state.
+    const hostEntry = (item: string) => {
+      const grant = mine.find((held) => held.item === item)
+      return grant ? { state: 'granted', until: grant.expiresAt } : { state: 'ask' }
+    }
+    const reported = hostCatalog.get(agent.host ?? '')
+    const extensions = Object.fromEntries(
+      (reported?.extensions ?? []).map(({ id, ...rest }) => [id, { ...rest, ...hostEntry(`ext:${id}`) }]),
+    )
+    const mcp = Object.fromEntries(
+      (reported?.mcps ?? []).map(({ id, ...rest }) => [id, { ...rest, ...hostEntry(`mcp:${id}`) }]),
+    )
     return c.json({
       agent: {
         id: agent.id,
@@ -425,44 +624,21 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             : 'idle',
       },
       services: Object.fromEntries(
-        Object.entries(services)
-          .filter(
-            ([id, service]) =>
-              credentialOf(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
-          )
-          .map(([id, service]) => [
-            id,
-            { read: state(id, false), full: state(id, true), ...(service.mcp ? { mcp: true } : {}) },
-          ]),
+        listed.map(([id, service]) => [
+          id,
+          { read: state(id, false), full: state(id, true), ...(service.mcp ? { mcp: true } : {}) },
+        ]),
       ),
       grants: mine.map((grant) => ({
         item: grant.item,
         expiresAt: grant.expiresAt,
         ...(grantState(grant) === 'active' ? {} : { applying: true }),
       })),
-      ...(config.PROXY_PORT ? { secrets: secretsView(c, agent) } : {}),
+      secrets,
+      ...(agent.host ? { extensions, mcp } : {}),
       // Complete command lines for the agent's SSH and folder grants.
       ssh: jump.commands(agent.id, new URL(baseOf(c)).hostname.replace(/^\[|\]$/g, '')),
-      // Targets and shares are never named to agents, not even inside a group: only a count shows.
-      groups: Object.fromEntries(
-        offered(agent).map(([name, group]) => {
-          const hidden = (kind: string) => group.items.filter((item) => kindOf(item) === kind).length
-          const also = [
-            hidden('ssh') && plural(hidden('ssh'), 'SSH target', 'SSH targets'),
-            hidden('folder') && plural(hidden('folder'), 'folder', 'folders'),
-          ].filter(Boolean)
-          return [
-            name,
-            also.length
-              ? {
-                  ...group,
-                  items: group.items.filter((item) => !['ssh', 'folder'].includes(kindOf(item) ?? '')),
-                  also: also.join(', '),
-                }
-              : group,
-          ]
-        }),
-      ),
+      groups: groupsView,
       requests: [...requests.values()]
         .filter((request) => request.agentId === agent.id)
         .map((request) => ({
@@ -470,6 +646,19 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           want: request.want,
           reason: request.reason,
         })),
+      text: catalogText({
+        services: listed.map(([id, service]) => ({
+          id,
+          mcp: Boolean(service.mcp),
+          read: state(id, false),
+          full: state(id, true),
+        })),
+        secrets,
+        groups: groupsView,
+        sandboxed: Boolean(agent.host),
+        extensions,
+        mcp,
+      }),
     })
   })
   app.post('/_speaker/requests', async (c) => {
@@ -520,12 +709,14 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     ]
     return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
   })
-  app.all('/_speaker/*', (c) => c.json({ error: 'invalid', message: 'Unknown route; see GET /_speaker/help' }, 404))
+  app.all('/_speaker/*', (c) =>
+    c.json({ error: 'invalid', message: 'Unknown route', next: 'Read "Asking" in GET /_speaker/help' }, 404),
+  )
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url),
       [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
     if (!Object.hasOwn(services, serviceId))
-      return c.json({ error: 'invalid', message: 'Unknown service', next: 'GET /_speaker/me' }, 404)
+      return c.json({ error: 'invalid', message: 'Unknown service', next: 'GET /_speaker/catalog' }, 404)
     const service = services[serviceId],
       agent = agentCaller(c),
       method = c.req.method,

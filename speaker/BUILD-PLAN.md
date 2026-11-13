@@ -18,7 +18,7 @@ How the design in [DESIGN.md](DESIGN.md) gets built. The design is the specifica
 
 | # | Phase | Contents | Depends on |
 | --- | --- | --- | --- |
-| 1 | Core model | New names everywhere; items as strings with `want` lists; per-item decisions; memory-only state; open / ask / never; `.full`; POST read paths; `Speaker-Wait` up to 120 s; `/me`; error codes; three denials per item; bottle-school's speaker client moved to the new API | — |
+| 1 | Core model | New names everywhere; items as strings with `want` lists; per-item decisions; memory-only state; open / ask / never; `.full`; POST read paths; `Speaker-Wait` up to 120 s; `/catalog`; error codes; three denials per item; bottle-school's speaker client moved to the new API | — |
 | 2 | Keys and sign-in | One encrypted store (service keys, sandbox secrets, speaker's SSH key); unlock at sign-in; password form; `locked` state and push; sandbox secrets move from bottle-school into speaker | 1 |
 | 3 | Cards and admin | Checkbox per group, member and item; groups as rows; tint for powerful items; Extend and Revoke; End for SSH sessions; Log as an in-memory buffer | 1 |
 | 4 | SSH and folders | Jump server (stock OpenSSH) and relay; one key per agent; targets and shares in Setup; folder limits on file transfer; `scp`, `sftp`, `sshfs`; replaces the SSH certificate feature | 1, 2 |
@@ -79,7 +79,7 @@ Calls made where the design left room; each can be revisited.
 **Phase 4 (SSH and folders)**
 - The login name in agents' SSH commands is the account speaker runs as (`node` in the image), not `s`: a non-root `sshd` can only log in its own user.
 - No maintained library parses SFTP from a plain stream, so `speaker/sftp.ts` is a small parser for the SFTP v3 packets clients use; the target's own `sftp-server -d <path> [-R]` does the file work.
-- Command lines pin the jump server's host key through a `known_hosts` file the agent saves once from `/me` (`knownHosts`), so nothing prompts; older `sshfs` rejects `KnownHostsCommand`.
+- Command lines pin the jump server's host key through a `known_hosts` file the agent saves once from `/catalog` (`knownHosts`), so nothing prompts; older `sshfs` rejects `KnownHostsCommand`.
 - On an `ssh:` grant, `scp`/`sftp` paths are `<target>/<absolute path>` with no folder limit; a share with the same name as a target takes precedence.
 - Refusal messages reach `ssh` command sessions; in `sftp`/`scp` sessions a refusal shows as "permission denied" and in the Log. Path operations are logged; reads and writes on open files are not logged one by one.
 - The jump server's runtime files live in a private temporary directory (public keys, the ssh-agent socket, its per-start host key); speaker's private key goes straight into `ssh-agent`.
@@ -96,7 +96,7 @@ Calls made where the design left room; each can be revisited.
 
 **Phase 5b (bottle-school)**
 - Secret route: for a secret's hosts, bottle-school's egress proxy (and its model door, for hosted providers) opens the upstream connection as a `CONNECT` tunnel to speaker's proxy, authenticated as the task's agent; speaker inserts the value. If the proxy is unconfigured, locked or unreachable, the request is refused, never sent directly.
-- The guest gets no `HTTPS_PROXY` and no extra certificate; Pi reads the placeholder from `/me` and sets the variable on the one command that needs it (DESIGN.md's worked example now says so).
+- The guest gets no `HTTPS_PROXY` and no extra certificate; Pi reads the placeholder from `/catalog` and sets the variable on the one command that needs it (DESIGN.md's worked example now says so).
 - `secrets.env` and `BROKER_SECRET_*` are gone; bottle-school refuses to start while either is still present. Hosted model keys are speaker secrets too.
 - `catalog.json` holds only MCP servers that run inside the VM; remote ones are speaker services (keyless Context7 and Parallel Search ship as examples). Pi calls them at `$SPEAKER_URL/<service>`.
 - Templates: `want`, `label`, `duration` (shipped templates use `group:<id>` for 1 day); an old `bundle` key fails loudly.
@@ -106,7 +106,7 @@ Calls made where the design left room; each can be revisited.
 - Not yet verified in a real VM: `gh`/`git` through the secret route, hosted-model keys, Pi with the new instructions.
 
 **Phase 6 (skill and help)**
-- The core skill is about 250 tokens and is served at `/` and `/skill.md`; the one help page (`skill/help.md`, about 1,350 tokens) replaces the per-topic pages.
+- The core skill is about 250 tokens and is served at `/` and `/skill.md`; one document (`skill/SKILL.md`, also served at `/_speaker/help`) holds the setup and every topic, with the short part first.
 - Held calls use `Speaker-Wait: 60` with curl's `--max-time 70`.
 - The help page keeps the agent's throwaway SSH key at `$d/ssh_key`, next to the header file, and assumes its sh steps run in one shell.
-- Remote MCP services appear in `/me` with `mcp: true`; the MCP client points at `$SPEAKER_URL/<service>` with the header file's `Authorization`.
+- Remote MCP services appear in `/catalog` with `mcp: true`; the MCP client points at `$SPEAKER_URL/<service>` with the header file's `Authorization`.

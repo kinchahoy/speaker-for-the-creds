@@ -332,6 +332,17 @@ export async function createJump(env: Env) {
   const deliveryOf = (agentId: string, name: string, share: Share) =>
     share.delivery !== 'ssh' && env.mountable(agentId, name) ? 'vm' : share.delivery !== 'vm' ? 'ssh' : undefined
   const off = () => (enabled ? undefined : 'SSH is off on this speaker')
+  // Set when an ssh: or folder: item names no target or share. Names are never listed to agents, so this only says no.
+  function unknownName(item: string) {
+    if (!enabled) return undefined // with SSH off, `unavailable` says so
+    const target = targetOf(item)
+    if (target !== undefined && !Object.hasOwn(settings.targets, target))
+      return `There is no SSH target named ${target} that you can use.`
+    const folder = shareOf(item)
+    if (folder && !Object.hasOwn(settings.shares, folder.name))
+      return `There is no folder named ${folder.name} that you can use.`
+    return undefined
+  }
   // Why an ssh: or folder: item cannot be delivered to this agent, or undefined when it can.
   function unavailable(agentId: string, item: string) {
     const target = targetOf(item)
@@ -396,7 +407,7 @@ export async function createJump(env: Env) {
     shares: settings.shares,
   })
 
-  // --- What /me tells an agent ---
+  // --- What /catalog tells an agent ---
   function commands(agentId: string, host: string) {
     if (jump.state === 'off') return []
     const known = `[${host}]:${env.port} ${jump.hostKey}`
@@ -656,6 +667,7 @@ export async function createJump(env: Env) {
     enabled,
     start,
     sync,
+    unknownName,
     unavailable,
     overSsh,
     mounted,
