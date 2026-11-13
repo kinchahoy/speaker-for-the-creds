@@ -146,6 +146,9 @@ export default async function (pi: ExtensionAPI) {
           throw error;
         }
         if (decision.status === "pending") return done(UNDECIDED, decision);
+        // Speaker lists a granted item under `applying` until the sandbox reports it in force (ext: and mcp: stay
+        // there until Pi restarts), so both count as granted here.
+        decision = { ...decision, granted: [...(decision.granted ?? []), ...(decision.applying ?? [])] };
         const granted = decision.granted ?? [];
         // Sites, secrets, folders and services reach the VM within seconds; wait so the reply is true when read.
         // ext: and mcp: items only take effect after a Pi restart, which cannot happen during this call.

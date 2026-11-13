@@ -3,7 +3,7 @@
 /** The part of GET /_speaker/catalog the reply reads. */
 export type CatalogView = {
   text?: string;
-  secrets?: Record<string, { hosts: string[]; env?: string; placeholder?: string; environment?: Record<string, string>; hint?: string }>;
+  secrets?: Record<string, { hosts: string[]; env?: string; placeholder?: string; environment?: Record<string, string>; git?: string }>;
   services?: Record<string, { mcp?: boolean }>;
   ssh?: { item: string; commands: string[] }[];
   grants?: { item: string; applying?: boolean }[];
@@ -11,7 +11,7 @@ export type CatalogView = {
   mcp?: Record<string, { tools: string[] }>;
 };
 /** The part of POST /_speaker/requests the reply reads. */
-export type Decision = { status: string; granted?: string[]; denied?: string[]; expiresAt?: string };
+export type Decision = { status: string; granted?: string[]; applying?: string[]; denied?: string[]; expiresAt?: string };
 
 export const FIXED_GUIDANCE = [
   "Ask the owner for access you do not have: a website, secret, folder, SSH target, service, or extension. The owner approves or denies; you cannot grant yourself anything.",
@@ -56,7 +56,7 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
     return (
       `${head}. Put ${name}=${value} in front of the one command that needs it, for example: ${name}=${value} <command>. ` +
       `That value is a stand-in: speaker swaps in the real token when the request leaves, and only for ${secret.hosts.join(" and ")}. ` +
-      `Do not print it or save it to a file.${secret.hint ? ` ${secret.hint}` : ""}`
+      `Do not print it or save it to a file.${secret.git ? ` ${secret.git}` : ""}`
     );
   }
   if (item.startsWith("folder:")) {

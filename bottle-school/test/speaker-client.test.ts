@@ -298,7 +298,12 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const f = await fixture(t);
   const { token, speaker } = await f.host(["site", "mcp"]);
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
+  // Speaker refuses an mcp: id its sandbox host has not reported, so this host reports one.
+  const catalog = {
+    mcps: { filesystem: { label: "Files", transport: "stdio" as const, command: "/usr/bin/true", args: [], tools: ["read_file"], write: false } },
+    extensions: {},
+  };
+  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message), SPEAKER_LIMITS, catalog);
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
