@@ -121,8 +121,13 @@ export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
 };
 
 /**
+<<<<<<< Updated upstream
  * microsandbox's own home (MSB_HOME, else its default ~/.microsandbox): images, VM disks, and its unix sockets. It does not
  * follow stateRoot: socket paths are capped near 104-108 bytes, and a deep stateRoot would push them over.
+=======
+ * microsandbox's own home (MSB_HOME, else its default ~/.microsandbox): images, VM disks and its unix sockets. It does not
+ * follow stateRoot because socket paths are capped near 104-108 bytes, and a deep stateRoot would push them over.
+>>>>>>> Stashed changes
  */
 export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(homedir(), ".microsandbox");
 

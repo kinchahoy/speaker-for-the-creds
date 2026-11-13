@@ -112,7 +112,11 @@ const msbHome = () => {
 };
 
 /** A private folder for one VM's door sockets, in the short per-user runtime dir so the socket paths fit any stateRoot. */
+<<<<<<< Updated upstream
 const socketFolder = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "bottle-school-"));
+=======
+const doorDir = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "bottle-school-"));
+>>>>>>> Stashed changes
 
 /** What the guest's HTTP proxy does with a host: refuse it, route it through speaker's proxy (a secret host), or go direct. */
 export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof secretRoute>, "allow">, host: string) => {
@@ -341,7 +345,11 @@ export async function boot(
   const { MiB, Sandbox } = await import("microsandbox");
   const name = `bs-${randomBytes(4).toString("hex")}`;
   const dir = paths.work.slice(0, paths.work.lastIndexOf("/"));
+<<<<<<< Updated upstream
   const socketDir = socketFolder();
+=======
+  const doors = doorDir();
+>>>>>>> Stashed changes
   mkdirSync(paths.capture, { recursive: true });
   const route = secretRoute(live, proxy);
   const proxyPort = config.speaker.proxyPort;
@@ -353,17 +361,29 @@ export async function boot(
   const sshPort = config.speaker.sshPort;
   const key = sshPort ? await newSshKey(dir) : undefined;
   const servers = [
+<<<<<<< Updated upstream
     await serveEgress(egress, `${socketDir}/egress.sock`),
     await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.capture)),
     await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key?.public)),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
     ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
+=======
+    await serveEgress(egress, `${doors}/egress.sock`),
+    await listen(`${doors}/model.sock`, modelDoor(config, live, route, paths.capture)),
+    await listen(`${doors}/speaker.sock`, speakerDoor(speaker, key?.public)),
+    await listen(`${doors}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
+    ...(sshPort ? [await serveSsh(`${doors}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
+>>>>>>> Stashed changes
   ];
   let folders: NodeJS.Timeout | undefined;
   const stopDoors = () => {
     clearInterval(folders);
     return Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]).finally(() =>
+<<<<<<< Updated upstream
       rmSync(socketDir, { recursive: true, force: true }),
+=======
+      rmSync(doors, { recursive: true, force: true }),
+>>>>>>> Stashed changes
     );
   };
 
@@ -398,8 +418,13 @@ export async function boot(
       .volume("/work", (mount) => mount.bind(paths.work))
       .volume("/output", (mount) => mount.bind(paths.artifacts))
       .volume("/etc/bottle-school", (mount) => mount.bind(paths.guestConfig).readonly());
+<<<<<<< Updated upstream
     for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${socketDir}/${door}.sock`, port);
     if (key) builder = builder.vsock(`${socketDir}/ssh.sock`, SSH_VSOCK);
+=======
+    for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${doors}/${door}.sock`, port);
+    if (key) builder = builder.vsock(`${doors}/ssh.sock`, SSH_VSOCK);
+>>>>>>> Stashed changes
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);
     sandbox = await builder.create();
     if (ca) await sandbox.fs().write(caPath, ca);
