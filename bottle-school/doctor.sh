@@ -6,7 +6,8 @@ umask 077
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 failed=0
 [ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
-config=${BOTTLE_SCHOOL_CONFIG:-$root/config.json}
+home=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
+config=${BOTTLE_SCHOOL_CONFIG:-$home/config.json}
 cfg() { node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))[process.argv[2]] ?? ''" "$config" "$1" 2>/dev/null; }
 check() { # check <label> <fix> <command...>
 	label=$1 fix=$2
@@ -32,7 +33,7 @@ check "config.json (mise run init bottle-school)" "mise run init bottle-school" 
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
 if [ "$failed" = 0 ]; then
 	image=$(cfg guestImage)
-	export MSB_HOME="${MSB_HOME:-$HOME/.microsandbox}"
+	export MSB_HOME="${MSB_HOME:-$home/microsandbox}"
 	check "guest image $image loaded into microsandbox" "mise run guest-build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
 	check "guest image $image boots and runs a command" "mise run guest-build $image" \
 		sh -c '"$1" run -q --no-net --replace --name pi-doctor "$2" -- true; rc=$?; "$1" rm pi-doctor; exit $rc' sh "$root/node_modules/.bin/msb" "$image"

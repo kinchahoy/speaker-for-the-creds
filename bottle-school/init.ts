@@ -1,21 +1,20 @@
-// `mise run init bottle-school`: checks the host, asks where bottle-school lives and how it reaches speaker and the model,
-// writes config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
+// `mise run init bottle-school`: checks the host, asks how bottle-school reaches speaker and the model, writes
+// ~/.bottle-school/config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { homedir, hostname, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { hostname, platform } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { assertNoHostSecrets, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
+import { bottleHome, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
   yes: { type: "boolean" },
   force: { type: "boolean" },
-  home: { type: "string" },
   "control-port": { type: "string" },
   "guest-port": { type: "string" },
   "speaker-url": { type: "string" },
@@ -23,7 +22,6 @@ export const bottleFlags = {
   model: { type: "string" },
   image: { type: "string" },
   "password-stdin": { type: "boolean" },
-  config: { type: "string" },
   "skip-build": { type: "boolean" },
   "skip-register": { type: "boolean" },
   "skip-smoke": { type: "boolean" },
@@ -209,29 +207,25 @@ async function unlockSpeaker(speakerUrl: string, given: string | undefined, yes:
 export async function initBottleSchool(flags: BottleFlags, ownerPassword?: string) {
   const yes = flags.yes ?? false;
   p.intro("bottle-school setup");
-  const configPath = resolve(flags.config ?? configPathFromEnv());
+  const home = bottleHome();
+  p.log.message(
+    [
+      "bottle-school runs coding agents in disposable VMs. Agents never hold a secret or reach the network on their own:",
+      "each access (a secret, a website, a folder) is granted per task by speaker-for-the-creds, which you approve.",
+      `This setup checks this machine, connects to speaker and your model server, and builds the VM image. Everything goes in ${home}.`,
+    ].join("\n"),
+  );
+  // microsandbox keeps unix sockets under the home, and socket paths are capped near 104 bytes.
+  if (home.length > 60) fail(`${home} is too long a path for bottle-school's unix sockets`, "set BOTTLE_SCHOOL_HOME to a shorter folder");
+  const configPath = configPathFromEnv();
   const previous = readPrevious(configPath);
-  let updating = previous !== undefined && (await confirmUpdate(`${configPath} already exists`, "keep using it, or pass --force to replace it", flags.force ?? false, yes));
+  if (previous !== undefined) await confirmUpdate(`bottle-school is already set up (${configPath})`, "keep using it, or pass --force to replace its config", flags.force ?? false, yes);
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
-  const defaultHome = previous?.configRoot ? dirname(previous.configRoot) : join(homedir(), ".local", "share", "bottle-school");
-  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: `Where should bottle-school keep its config, state, and output? (Enter keeps ${defaultHome})`, placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
-  for (const old of [join(home, "config.json"), join(home, "config", "config.json")])
-    if (existsSync(old) && !updating) updating = await confirmUpdate(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it", flags.force ?? false, yes);
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
   for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  // bottle-school will not start with a leftover secret on this host, so settle that before the questions.
-  await untilFixed(async () => {
-    try {
-      assertNoHostSecrets({ configRoot });
-      return undefined;
-    } catch (error) {
-      return (error as Error).message;
-    }
-  }, "add each secret in speaker's Setup, then delete the file or unset the variables", yes);
-  // The guest image and VM disks live in microsandbox's own home (MSB_HOME, else ~/.microsandbox), not under --home. It refuses
-  // a storage folder with a group- or world-writable ancestor, so check both now, before the other questions.
+  // The guest image and VM disks need room, and microsandbox refuses a folder with a group- or world-writable ancestor.
   const msbHome = microsandboxHome();
   const disk = statfsSync(existingAncestor(msbHome));
   const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
@@ -253,7 +247,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
 
   const oldUrl = previous?.speaker?.url;
-  const speakerUrl = (await ask(flags["speaker-url"], yes, oldUrl, () => p.text({ message: oldUrl ? `Speaker's URL as the VMs see it (Enter keeps ${oldUrl})` : "Speaker's URL as the VMs see it", placeholder: oldUrl ?? "http://192.168.1.10:3000", defaultValue: oldUrl, validate: (v) => (v || !oldUrl ? speakerUrlProblem(v ?? "") : undefined) })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
+  const speakerUrl = (await ask(flags["speaker-url"], yes, oldUrl, () => p.text({ message: `Speaker's URL as the VMs see it; bottle-school asks speaker before granting any access${oldUrl ? ` (Enter keeps ${oldUrl})` : ""}`, placeholder: oldUrl ?? "http://192.168.1.10:3000", defaultValue: oldUrl, validate: (v) => (v || !oldUrl ? speakerUrlProblem(v ?? "") : undefined) })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
   const urlProblem = speakerUrlProblem(speakerUrl);
   if (urlProblem) fail(`speaker URL ${speakerUrl} is not usable`, urlProblem);
   const healthy = await fetch(`${speakerUrl}/_speaker/health`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.ok, () => false);
@@ -261,11 +255,11 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   ok(`Speaker answers at ${speakerUrl}.`);
 
   const oldEndpoint = previous?.localModel?.upstream;
-  const endpoint = (await ask(flags["model-endpoint"], yes, oldEndpoint, () => p.text({ message: `Model server: host:port of an OpenAI-compatible server (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`, placeholder: oldEndpoint, defaultValue: oldEndpoint, validate: (v) => (v?.trim() || oldEndpoint ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
+  const endpoint = (await ask(flags["model-endpoint"], yes, oldEndpoint, () => p.text({ message: `Model server the agents think with: host:port of an OpenAI-compatible server (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`, placeholder: oldEndpoint, defaultValue: oldEndpoint, validate: (v) => (v?.trim() || oldEndpoint ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
   const model = await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
 
   const oldImage = previous?.guestImage ?? "bottle-school-guest";
-  const image = await ask(flags.image, yes, oldImage, () => p.text({ message: `Guest image tag (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }));
+  const image = await ask(flags.image, yes, oldImage, () => p.text({ message: `Guest image: the Linux system each agent's VM boots (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }));
   const config = {
     ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
     bindHost: "127.0.0.1",
@@ -301,6 +295,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const loaded = loadConfig(configPath);
   if (!flags["skip-register"]) {
+    p.log.message("Next, this machine registers with speaker as a sandbox host. You approve it once; after that speaker answers its access requests.");
     // After a restart speaker is locked until the owner signs in; registering needs it open.
     const isLocked = () => fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
     let password = ownerPassword ?? (flags["password-stdin"] ? await readStdin() : undefined);
@@ -320,7 +315,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const imageLoaded = spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
   if (!flags["skip-smoke"] && !imageLoaded) p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run guest-build ${image}`);
-  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && imageLoaded && (yes || answered(await p.confirm({ message: "Start bottle-school and run a smoke-test task?", initialValue: true })));
+  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && imageLoaded && (yes || answered(await p.confirm({ message: "Start bottle-school and run one small test task to check it all works?", initialValue: true })));
   if (smoke) {
     const logFile = join(home, "bottle-school.log");
     const server = startDetached(logFile, env);

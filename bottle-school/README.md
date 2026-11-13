@@ -23,17 +23,31 @@ From the repository root, run `mise trust && mise install` once, then:
 mise run init bottle-school
 ```
 
-The setup needs 20 GiB free on the chosen home. The default home is `~/.local/share/bottle-school`, and everything in it is created private (mode 700). The control and guest ports default to 7001 and 7002. The setup checks the host, asks its questions, writes `bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. It asks, in order: the home directory, the control port, the guest port, the model server (`host:port`), the model (a filterable list when the server has several), the guest image tag (default `bottle-school-guest`), whether to build the image, and whether to run the smoke test. It stops if the chosen home already has a config (or `bottle-school/config.json` exists) unless you pass `--force`. If speaker is locked when it registers, it asks for the owner password to unlock it. With the password (typed, piped in, or passed on from `init speaker`), `init` also approves this sandbox host itself. If you press Enter instead, it prints the `/admin` link and waits for you to approve the host there. The model server question has no default: give the host:port of your OpenAI-compatible server. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init bottle-school -- --help` lists them.
+The setup checks the host, asks its questions, writes `~/.bottle-school/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle-school and run a smoke-test task. It asks, in order: the control port, the guest port, speaker's URL, the model server (`host:port`), the model (a filterable list when the server has several), the guest image tag (default `bottle-school-guest`), whether to build the image, and whether to run the smoke test. It needs 20 GiB free for the guest image and VMs. Running it again on a set-up machine asks whether to update the install, with your current answers as the defaults; under `--yes` that needs `--force`. If speaker is locked when it registers, it asks for the owner password to unlock it. With the password (typed, piped in, or passed on from `init speaker`), `init` also approves this sandbox host itself. If you press Enter instead, it prints the `/admin` link and waits for you to approve the host there. The model server question has no default the first time: give the host:port of your OpenAI-compatible server. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init bottle-school -- --help` lists them.
+
+Everything bottle-school keeps lives in one private folder (mode 700), `~/.bottle-school`, or `$BOTTLE_SCHOOL_HOME` if set (at most 60 characters, because microsandbox keeps unix sockets under it):
+
+| Path | Holds |
+|---|---|
+| `config.json` | the settings `init` writes |
+| `config/` | `templates.json` and `catalog.json` |
+| `state/` | `speaker.token` (this host's login to speaker) and each running task's work folder |
+| `output/` | one archive folder per finished task |
+| `share/documents/` | a folder you can share into tasks |
+| `microsandbox/` | the guest image, VM disks, and microsandbox's database (`MSB_HOME` overrides it) |
+| `bottle-school.log` | output of a bottle-school that `init` started |
+
+The repository holds only code. Each running VM also gets a few short-lived sockets in a private folder under `$XDG_RUNTIME_DIR`, removed when it stops.
 {.ai}
 
 ```sh
 mise run init bottle-school --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model
 ```
 
-The other flags are `--home`, `--control-port`, `--guest-port`, `--image`, `--config`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle-school` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run doctor` rechecks the host later.
+The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle-school` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run doctor` rechecks the host later.
 {.ai}
 
-To configure by hand, copy `config.example.json` to `config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`.
+To configure by hand, copy `config.example.json` to `~/.bottle-school/config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`.
 {.ai}
 
 - `bindHost`: an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts any peer that can reach it, so keep this listener private.
@@ -42,7 +56,7 @@ To configure by hand, copy `config.example.json` to `config.json`. Set `configRo
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
 - `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
-- `BOTTLE_SCHOOL_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `bottle-school/config.json`. The older names `PI_V2_CONFIG` and `BOTTLE_CONFIG` still work for one release and print a deprecation note.
+- `BOTTLE_SCHOOL_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `~/.bottle-school/config.json`. The older names `PI_V2_CONFIG` and `BOTTLE_CONFIG` still work for one release and print a deprecation note.
 
 <!-- author: ai -->
 
@@ -96,7 +110,7 @@ An attended task loads the ask-user-question extension (the `ask_user_question` 
 Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi. The extensions stay pinned, and everything else takes the latest release.
 {.ai}
 
-`guest-build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into microsandbox's own home (`MSB_HOME`, else `~/.microsandbox`). It needs `config.json`, so run `mise run init bottle-school` first. Builds need internet access and about 10 GiB of disk space.
+`guest-build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into `~/.bottle-school/microsandbox` (or `MSB_HOME`). It needs `config.json`, so run `mise run init bottle-school` first. Builds need internet access and about 10 GiB of disk space.
 {.ai}
 
 The image holds:
@@ -112,7 +126,7 @@ You can use any OCI image instead, however you build it. It must hold Node, Pi, 
 {.ai}
 
 ```sh
-docker save <image> | msb load --tag <guestImage>   # into MSB_HOME, else ~/.microsandbox
+docker save <image> | msb load --tag <guestImage>   # into ~/.bottle-school/microsandbox, or MSB_HOME
 ```
 
 `msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder. Set `"guestImage"` to the tag.
@@ -151,7 +165,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
   - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
   - A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
-- Storage: microsandbox keeps images, VM disks, and its sockets in its own home, `MSB_HOME` or by default `~/.microsandbox`, created with mode 700. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle-school's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder). No socket lives under `stateRoot`, so unix socket path limits (104-108 bytes) do not constrain where you put the home.
+- Storage: microsandbox keeps images, VM disks, and its sockets in `~/.bottle-school/microsandbox`. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle-school's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder).
 
 <!-- author: ai -->
 
@@ -185,7 +199,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
 
 <sub>AI-written</sub>
 
-bottle-school never holds a secret. `secrets.env` and the `BROKER_SECRET_*` variables are retired, and startup stops with a message while either is present. You add each secret once in speaker's Setup, with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`). A task asks for `secret:<NAME>`, and the card shows the hosts.
+bottle-school never holds a secret. You add each secret once in speaker's Setup, with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`). A task asks for `secret:<NAME>`, and the card shows the hosts.
 {.ai}
 
 The grant snapshot for a secret carries the secret's hosts, not its value. bottle-school's egress proxy sends every request the VM makes to those hosts through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README) as a CONNECT tunnel authenticated as the task's agent. bottle-school holds that token; the guest has only a placeholder. The guest's TLS for those hosts ends at speaker's proxy, whose certificate the guest trusts (see the Egress bullet under The VM). [speaker's DESIGN.md](../speaker/DESIGN.md#secrets-speaker-inserts-them) covers what speaker does next. bottle-school drops the route when its grant goes. Pi gets the placeholder from `GET /_speaker/me` and sets the variable on the command that needs it. If speaker's proxy is unreachable, bottle-school refuses the request and never sends it directly.
@@ -220,6 +234,7 @@ The `loop` template is unattended. It runs at most 24 hours and 300 model reques
 
 <sub>AI-written</sub>
 
+- One folder: an install from before `~/.bottle-school` kept its config in `bottle-school/config.json`, its files under the home you chose (by default `~/.local/share/bottle-school`), and microsandbox in `~/.microsandbox`. Run `mise run init bottle-school` again, move any `output/` archives you want to keep into `~/.bottle-school/output`, and delete the old folders.
 - Secrets move to speaker: add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees). Delete `secrets.env` and the `BROKER_SECRET_*` variables. Register again, which learns speaker's `PROXY_PORT`, and publish that port. In old groups, a grant for `secret:<NAME>@host` becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now name a speaker secret.
 - Config files: the `templates/` and `catalog/` directories became `templates.json` and `catalog.json`. Copy the new files into `configRoot`.
 - Templates: `bundle` becomes `want: ["group:<name>"]`, and `bundleDuration` becomes `duration`. The old keys fail validation. Edit your `templates.json` or copy the new one.

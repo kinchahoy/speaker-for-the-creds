@@ -113,30 +113,17 @@ export const validateConfig = (data: unknown): Config => {
 /** Parse the owner-owned file before the service ever opens a network listener. */
 export const loadConfig = (path: string): Config => validateConfig(JSON.parse(readFileSync(path, "utf8")));
 
-/** The config file path: BOTTLE_SCHOOL_CONFIG, else the legacy PI_V2_CONFIG or BOTTLE_CONFIG (deprecated for one release). */
+/** Everything bottle-school keeps lives in one folder: BOTTLE_SCHOOL_HOME, else ~/.bottle-school. */
+export const bottleHome = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_SCHOOL_HOME || join(homedir(), ".bottle-school");
+
+/** The config file path: BOTTLE_SCHOOL_CONFIG, else the legacy PI_V2_CONFIG or BOTTLE_CONFIG (deprecated for one release), else <home>/config.json. */
 export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
   const old = ["PI_V2_CONFIG", "BOTTLE_CONFIG"].find((name) => env[name]);
   if (!env.BOTTLE_SCHOOL_CONFIG && old) console.error(`note: ${old} is deprecated; use BOTTLE_SCHOOL_CONFIG.`);
-  return env.BOTTLE_SCHOOL_CONFIG || (old && env[old]) || `${import.meta.dirname}/../config.json`;
+  return env.BOTTLE_SCHOOL_CONFIG || (old && env[old]) || join(bottleHome(env), "config.json");
 };
 
-/**
- * microsandbox's own home (MSB_HOME, else its default ~/.microsandbox): images, VM disks, and its unix sockets. It does not
- * follow stateRoot: socket paths are capped near 104-108 bytes, and a deep stateRoot would push them over.
- */
-export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(homedir(), ".microsandbox");
+/** microsandbox's own folder (images, VM disks, its unix sockets): MSB_HOME, else <home>/microsandbox. */
+export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(bottleHome(env), "microsandbox");
 
 export const controlOrigin = (config: Config) => `http://${config.bindHost}:${config.controlPort}`;
-
-/**
- * Secrets live in speaker; bottle-school never holds one. A leftover secrets.env or BROKER_SECRET_* variable would be a
- * real secret on this host that nothing uses, so startup stops until it is moved into speaker's Setup and removed.
- */
-export const assertNoHostSecrets = (config: Pick<Config, "configRoot">, env: NodeJS.ProcessEnv = process.env) => {
-  const file = `${config.configRoot}/secrets.env`;
-  const variables = Object.keys(env).filter((name) => name.startsWith("BROKER_SECRET_"));
-  if (existsSync(file) || variables.length)
-    throw new Error(
-      `bottle-school no longer holds secrets: add ${existsSync(file) ? file : variables.join(", ")} to speaker's Setup as a secret (with its allowed hosts), then delete it here`,
-    );
-};

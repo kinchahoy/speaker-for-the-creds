@@ -58,7 +58,7 @@ Then:
 5. To stop, run `mise run bottle-cli stop <id>` for each task. `run` prints the archive folder, and `ls` lists the last finished tasks with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}
 
-If speaker's address changes later, run `mise run init bottle-school --force`.
+If speaker's address changes later, run `mise run init bottle-school` again; it keeps your other answers.
 {.ai}
 
 Pi needs a model server. `init` asks for an OpenAI-compatible one. To use a hosted model instead, see [Hosted model providers](bottle-school/README.md#hosted-model-providers).
