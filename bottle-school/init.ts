@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
+import { assertNoHostSecrets, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
@@ -190,6 +190,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     if (existsSync(old) && !flags.force) fail(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it");
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
   for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertNoHostSecrets({ configRoot }); // bottle-school will not start with one, so say so before the questions
   // The guest image and VM disks live in microsandbox's own home (MSB_HOME, else ~/.microsandbox), not under --home. It refuses
   // a storage folder with a group- or world-writable ancestor, so check both now, before the other questions.
   const msbHome = microsandboxHome();
@@ -241,7 +242,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const env = { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath };
   if (!flags["skip-build"]) {
-    const build = yes || answered(await p.confirm({ message: `Build the guest image "${image}" now? It needs about 10 GiB under ${stateRoot} and several minutes the first time.`, initialValue: true }));
+    const build = yes || answered(await p.confirm({ message: `Build the guest image "${image}" now? It needs about 10 GiB under ${msbHome} and several minutes the first time.`, initialValue: true }));
     if (build) {
       const status = await new Promise<number | null>((done) => spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done));
       if (status !== 0) fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run guest-build ${image}`);
@@ -268,12 +269,18 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     }
   } else p.log.info("Register later with: mise run bottle-cli register");
 
-  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && (yes || answered(await p.confirm({ message: "Start bottle-school and run a smoke-test task?", initialValue: true })));
+  const imageLoaded = spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
+  if (!flags["skip-smoke"] && !imageLoaded) p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run guest-build ${image}`);
+  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && imageLoaded && (yes || answered(await p.confirm({ message: "Start bottle-school and run a smoke-test task?", initialValue: true })));
   if (smoke) {
     const logFile = join(home, "bottle-school.log");
     const server = startDetached(logFile, env);
+    let exited: number | null | undefined;
+    server.once("exit", (code) => (exited = code));
     const control = `http://127.0.0.1:${controlPort}`;
-    await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () => fetch(`${control}/api/state`).then((r) => r.ok, () => false));
+    await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () =>
+      exited !== undefined ? fail(`bottle-school exited (code ${exited}) before it answered`, `read ${logFile}`) : fetch(`${control}/api/state`).then((r) => r.ok, () => false),
+    );
     p.log.info(`bottle-school runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
     const created = await fetch(`${control}/api/tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT }) });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
