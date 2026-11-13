@@ -233,7 +233,12 @@ Anyone who can reach speaker can enroll as an agent, so a list shown to agents i
 | Sites | nothing to list: any hostname may be asked for | same | — |
 | In-VM MCP servers and Pi extensions | do not apply | every catalog entry | the sandbox host's catalog, not speaker |
 
-Two inconsistencies remain open. A sandboxed agent sees every secret name but a direct agent sees none it has not been granted. And a name that does not exist is handled differently by kind: an unknown service or group is refused at once (an unknown group with the list of real ones), while an unknown secret, share or target goes to the owner as a normal request. The intended rule is that the list an agent can see up front is also the only thing an error may name, and that both treat every kind alike.
+Decided, not yet built:
+
+- **Secret names are listed to every agent**, direct ones too, as they already are to sandboxed agents. A name reveals little: an agent only ever holds a placeholder, and speaker sends the real value only to the hosts the owner bound it to.
+- **Folders and SSH targets stay hidden from every agent.** An agent uses the names its task or the owner gives it.
+- **One list, one name.** `/_speaker/me` becomes `/_speaker/catalog`: everything the agent may ask for, each entry with the agent's state (granted until a time, ask, or never), plus its requests. A sandbox host also passes its in-VM MCP servers and extensions to speaker so they appear there. The `request_capability` tool shows the same text in its description. `/_speaker/me` then answers 404 with `next` pointing to `/_speaker/catalog`.
+- **Unknown names are refused the same way for every kind** (`<name> is not something you can ask for`), naming only what the catalog lists. For folders and SSH targets that means no list: `There is no folder named <share> that you can use.`
 
 ## Routes
 
