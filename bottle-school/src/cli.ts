@@ -113,9 +113,7 @@ const plain = (message: string): string => {
     return message;
   }
   if (!Array.isArray(issues)) return message;
-  return issues
-    .map((issue: { path?: unknown[]; message: string }) => `${issue.path?.join(".") ?? ""} ${issue.message}`.trim())
-    .join("; ");
+  return issues.map((issue: { path?: unknown[]; message: string }) => `${issue.path?.join(".") ?? ""} ${issue.message}`.trim()).join("; ");
 };
 
 const age = (startedAt: string): string => {
@@ -136,7 +134,17 @@ const report = async (pane: string, task: Task) => {
   const message = task.done ? "done" : task.summary;
   const source = "custom:bottle-school";
   await run("herdr", ["pane", "report-agent", pane, "--source", source, "--agent", "pi", "--state", state, "--message", message]);
-  await run("herdr", ["pane", "report-metadata", pane, "--source", source, "--title", task.name, "--state-label", `${state}=${task.pendingRequests.length} pending${task.done ? ", done" : ""}`]);
+  await run("herdr", [
+    "pane",
+    "report-metadata",
+    pane,
+    "--source",
+    source,
+    "--title",
+    task.name,
+    "--state-label",
+    `${state}=${task.pendingRequests.length} pending${task.done ? ", done" : ""}`,
+  ]);
 };
 
 const loadCliConfig = (): Config => {
@@ -175,13 +183,10 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     if (!wanted.trim()) throw new UsageError(`${command} expects a task id. See \`${SELF} ls\``);
     const all = await tasks();
     const exact = all.filter((task) => task.id === wanted || task.name === wanted);
-    const matches =
-      exact.length > 0 ? exact : all.filter((task) => task.id.startsWith(wanted) || task.name.startsWith(wanted));
+    const matches = exact.length > 0 ? exact : all.filter((task) => task.id.startsWith(wanted) || task.name.startsWith(wanted));
     if (matches.length === 1) return matches[0]!;
     if (matches.length === 0) throw new Error(`no task matches "${wanted}". See \`${SELF} ls\``);
-    throw new Error(
-      `"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}). Use a longer id`,
-    );
+    throw new Error(`"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}). Use a longer id`);
   };
 
   if (command === "register") {
@@ -195,8 +200,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     let hoursValue: number | undefined;
     if (hours !== undefined) {
       hoursValue = Number(hours);
-      if (!Number.isFinite(hoursValue) || hoursValue <= 0)
-        throw new UsageError(`--hours must be a positive number of hours, got "${hours}"`);
+      if (!Number.isFinite(hoursValue) || hoursValue <= 0) throw new UsageError(`--hours must be a positive number of hours, got "${hours}"`);
     }
     const { id, outputDir } = await api<{ id: string; outputDir: string }>("POST", `${control}/api/tasks`, {
       name,
@@ -212,7 +216,9 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       await run("herdr", ["pane", "run", JSON.parse(stdout).result.pane.pane_id, attach]);
     } else {
       const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
-      console.log(`Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`);
+      console.log(
+        `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
+      );
     }
   } else if (command === "ls") {
     const list = await tasks();
@@ -230,7 +236,11 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     ]);
     if (list.length > 0) {
       const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
-      const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column]!)).join("  ").trimEnd();
+      const line = (cells: string[]) =>
+        cells
+          .map((cell, column) => cell.padEnd(widths[column]!))
+          .join("  ")
+          .trimEnd();
       console.log(line(header));
       list.forEach((task, index) => {
         console.log(line(rows[index]!));
@@ -239,14 +249,18 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       });
     }
     // Finished tasks leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.
-    const finished = readdirSync(config.outputRoot).sort().reverse().flatMap((folder) => {
-      try {
-        const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "task.json"), "utf8")) as { state: string };
-        return [`${state.padEnd(15)}${join(config.outputRoot, folder)}`];
-      } catch {
-        return []; // a live task's folder has no task.json yet
-      }
-    }).slice(0, FINISHED_SHOWN);
+    const finished = readdirSync(config.outputRoot)
+      .sort()
+      .reverse()
+      .flatMap((folder) => {
+        try {
+          const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "task.json"), "utf8")) as { state: string };
+          return [`${state.padEnd(15)}${join(config.outputRoot, folder)}`];
+        } catch {
+          return []; // a live task's folder has no task.json yet
+        }
+      })
+      .slice(0, FINISHED_SHOWN);
     if (finished.length > 0) console.log(`\nLast finished tasks (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
     const task = await resolveTask(positionals[0]!);

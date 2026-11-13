@@ -106,8 +106,7 @@ export const speakerClient = (config: Config, token: string) => {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok)
-      throw new Error(`speaker ${method} ${path} returned ${response.status}: ${await response.text()}`);
+    if (!response.ok) throw new Error(`speaker ${method} ${path} returned ${response.status}: ${await response.text()}`);
     return response.json();
   };
   return {
@@ -141,8 +140,7 @@ export const speakerProxy = async (config: Config, agentToken: string) => {
   if (!proxyPort)
     throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle-cli register` again to learn it");
   const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
-  if (!response.ok)
-    throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
+  if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
   return new ProxyAgent({
     uri: `http://${new URL(config.speaker.url).hostname}:${proxyPort}`,
     token: `Basic ${Buffer.from(`agent:${agentToken}`).toString("base64")}`,
@@ -269,12 +267,15 @@ export const watchLeases = (
       void retry();
     };
   };
-  const dropTimer = setInterval(() => {
-    if (dropped || Date.now() - lastHeard < limits.dropMs) return;
-    dropped = true;
-    console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
-    onSnapshot({ leases: [], requests: [] });
-  }, Math.min(1_000, limits.dropMs / 4)).unref();
+  const dropTimer = setInterval(
+    () => {
+      if (dropped || Date.now() - lastHeard < limits.dropMs) return;
+      dropped = true;
+      console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
+      onSnapshot({ leases: [], requests: [] });
+    },
+    Math.min(1_000, limits.dropMs / 4),
+  ).unref();
   open();
   const report = (leaseIds: string[]) => {
     const next = JSON.stringify([...leaseIds].sort());

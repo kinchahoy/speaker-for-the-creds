@@ -60,7 +60,9 @@ const SESSION = "/work/.pi-session/task.jsonl";
 export const CLI_TOOLS = `
   rg ctags jq sqlite3 git gh curl wget tree file shellcheck uv gcc make node pnpm cmake pandoc
   pdftotext qpdf tesseract magick dot ffmpeg hyperfine tmux
-`.trim().split(/\s+/);
+`
+  .trim()
+  .split(/\s+/);
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 
 /** Hosted providers listed in models.json work once their key, a speaker secret, is granted to the task. */
@@ -105,16 +107,8 @@ const modelsJson = (config: Config, keys: Map<string, string>) => ({
   },
 });
 
-export const systemNote = (
-  task: { name: string; prompt?: string; attended: boolean },
-  leases: Lease[],
-  catalog: Catalog,
-  extensionIds: string[],
-) => {
-  const rows = unexpired(leases).map(
-    (lease) =>
-      `${lease.kind} ${lease.ref} (${lease.expiresAt ? `expires ${lease.expiresAt}` : "permanent"})`,
-  );
+export const systemNote = (task: { name: string; prompt?: string; attended: boolean }, leases: Lease[], catalog: Catalog, extensionIds: string[]) => {
+  const rows = unexpired(leases).map((lease) => `${lease.kind} ${lease.ref} (${lease.expiresAt ? `expires ${lease.expiresAt}` : "permanent"})`);
   const notes = extensionIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
     return note ? ["", `## Extension ${id}`, "", note] : [];
@@ -226,13 +220,9 @@ export const writeGuestConfig = (
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
-  copyFileSync(
-    `${import.meta.dirname}/../guest/extensions/request-capability.ts`,
-    `${directory}/extensions/request-capability.ts`,
-  );
+  copyFileSync(`${import.meta.dirname}/../guest/extensions/request-capability.ts`, `${directory}/extensions/request-capability.ts`);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
-  const writeJson = (name: string, value: unknown) =>
-    writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
+  const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config, keys));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
   writeJson("web-search.json", webSearchJson);
@@ -243,9 +233,7 @@ export const writeGuestConfig = (
   // `--tools` filters MCP tools only when it names them, so each leased tool is listed by its Pi name.
   // Pi replaces every character other than letters, digits, and `_` with `_` in that name.
   const piName = (text: string) => text.replace(/[^A-Za-z0-9_]/g, "_");
-  const mcpTools = mcpIds.flatMap((id) =>
-    catalog.mcps[id]!.tools.map((tool) => `mcp__${piName(id)}__${piName(tool)}`),
-  );
+  const mcpTools = mcpIds.flatMap((id) => catalog.mcps[id]!.tools.map((tool) => `mcp__${piName(id)}__${piName(tool)}`));
   const extensions = [
     ...(task.attended ? [ASK_USER_EXTENSION] : []),
     ...extensionIds.map((id) => {
@@ -283,10 +271,7 @@ export const writeGuestConfig = (
 type CommandResult = Awaited<ReturnType<Guest["exec"]>>;
 const checked = async (operation: string, promise: Promise<CommandResult>) => {
   const result = await promise;
-  if (result.exitCode !== 0)
-    throw new Error(
-      `${operation} failed (${result.exitCode}): ${result.stderr || result.stdout}`.trim(),
-    );
+  if (result.exitCode !== 0) throw new Error(`${operation} failed (${result.exitCode}): ${result.stderr || result.stdout}`.trim());
   return result;
 };
 
@@ -299,10 +284,7 @@ export const pi = {
   abort: (guest: Guest) => guest.exec(keys("\\033")),
   /** Restarting re-reads the regenerated args, and Pi resumes the same task-local session file. */
   restart: (guest: Guest) =>
-    checked(
-      "Pi restart",
-      guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`),
-    ),
+    checked("Pi restart", guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`)),
   quit: (guest: Guest) => guest.exec(keys("/quit\\r")),
   running: async (guest: Guest) => (await guest.exec(alive)).exitCode === 0,
   kill: (guest: Guest) => guest.exec("pkill -x pi || true"),

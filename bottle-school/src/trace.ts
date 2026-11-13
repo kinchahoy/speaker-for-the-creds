@@ -53,8 +53,7 @@ const capturedHeaders = new Set([
   "x-request-id",
   "request-id",
 ]);
-const safeHeaders = (headers: Headers) =>
-  Object.fromEntries([...headers].filter(([name]) => capturedHeaders.has(name)));
+const safeHeaders = (headers: Headers) => Object.fromEntries([...headers].filter(([name]) => capturedHeaders.has(name)));
 
 /**
  * Records one finished request in `live.httpResponses` for trace.jsonl: text and model bodies are saved as blobs in
@@ -87,13 +86,7 @@ export const recordHttp = (
     incomplete = false,
   ): CapturedBody | undefined => {
     if (!totalBytes) return;
-    if (
-      !isModel &&
-      !contentType?.match(
-        /^(text\/|application\/(json|[^;]+\+json|xml|javascript|x-www-form-urlencoded)|application\/.*\+xml)/i,
-      )
-    )
-      return;
+    if (!isModel && !contentType?.match(/^(text\/|application\/(json|[^;]+\+json|xml|javascript|x-www-form-urlencoded)|application\/.*\+xml)/i)) return;
     const name = `${randomUUID()}.${direction}.bin`;
     writeFileSync(`${captureDir}/${name}`, body, { flag: "wx" });
     live.httpBodyBytes += body.length;
@@ -108,13 +101,7 @@ export const recordHttp = (
   };
   const requestBytes = Math.max(info.requestBytes ?? 0, requestBody.length);
   const responseBytes = Math.max(info.bytes ?? 0, responseBody.length);
-  const requestCapture = saveBody(
-    "request",
-    requestBody,
-    requestBytes,
-    info.requestLimit ?? 0,
-    request.headers.get("content-type"),
-  );
+  const requestCapture = saveBody("request", requestBody, requestBytes, info.requestLimit ?? 0, request.headers.get("content-type"));
   const responseCapture = saveBody(
     "response",
     responseBody,
@@ -124,13 +111,7 @@ export const recordHttp = (
     !info.complete,
   );
   const captureStatus = (total: number, body?: CapturedBody) =>
-    !total
-      ? ("empty" as const)
-      : !body
-        ? ("metadata_only" as const)
-        : body.truncated
-          ? ("truncated" as const)
-          : ("complete" as const);
+    !total ? ("empty" as const) : !body ? ("metadata_only" as const) : body.truncated ? ("truncated" as const) : ("complete" as const);
   if (live.httpResponses.length === 1_000) {
     const removed = live.httpResponses.shift()!;
     for (const body of [removed.requestBody, removed.responseBody])
@@ -157,7 +138,6 @@ export const recordHttp = (
     ...(responseCapture ? { responseBody: responseCapture } : {}),
   });
 };
-
 
 type NativeRecord = Record<string, any>;
 type Run = Record<string, any>;
@@ -196,19 +176,13 @@ const piTools = (records: NativeRecord[]): ToolEntry[] =>
           inputs: block.arguments,
           record,
         }));
-    if (message?.role === "toolResult")
-      return [{ id: message.toolCallId, result: message, record }];
+    if (message?.role === "toolResult") return [{ id: message.toolCallId, result: message, record }];
     return [];
   });
 
-export const createToolRuns = (
-  records: NativeRecord[],
-  context: { sessionId?: string; taskId: string; traceId: string; parentRunId: string },
-) => {
+export const createToolRuns = (records: NativeRecord[], context: { sessionId?: string; taskId: string; traceId: string; parentRunId: string }) => {
   const entries = piTools(records);
-  const calls = new Map(
-    entries.filter((entry) => entry.name && entry.id).map((entry) => [entry.id, entry]),
-  );
+  const calls = new Map(entries.filter((entry) => entry.name && entry.id).map((entry) => [entry.id, entry]));
   const runs: Run[] = [];
   const consumed = new Set<NativeRecord>();
   for (const entry of entries) {
@@ -284,25 +258,13 @@ export const assembleStream = (text: string) => {
   return message;
 };
 
-export const createModelRuns = (
-  responses: NativeRecord[],
-  context: { modelOrigins: Set<string>; model: string; taskId: string; traceId: string },
-) =>
+export const createModelRuns = (responses: NativeRecord[], context: { modelOrigins: Set<string>; model: string; taskId: string; traceId: string }) =>
   responses.flatMap((response, index) => {
     if (!context.modelOrigins.has(response.destination)) return [];
     const end = timestamp(response.at);
-    const httpStatus =
-      response.complete && response.status < 400
-        ? "complete"
-        : response.complete
-          ? "http_error"
-          : "incomplete";
+    const httpStatus = response.complete && response.status < 400 ? "complete" : response.complete ? "http_error" : "incomplete";
     const captureStatus =
-      httpStatus !== "complete"
-        ? httpStatus
-        : response.requestCapture === "truncated" || response.responseCapture === "truncated"
-          ? "truncated"
-          : "complete";
+      httpStatus !== "complete" ? httpStatus : response.requestCapture === "truncated" || response.responseCapture === "truncated" ? "truncated" : "complete";
     const run: Run = {
       id: randomUUID(),
       name: context.model,
@@ -390,7 +352,10 @@ export function writeArchive(task: Archived, modelOrigins: Set<string>, status: 
   const transcript = `${task.workDir}/transcript.html`;
   const hasSession = existsSync(session);
   const nativeRecords: NativeRecord[] = hasSession
-    ? readFileSync(session, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    ? readFileSync(session, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line))
     : [];
   if (hasSession) copyFileSync(session, `${control}/pi-session.jsonl`);
   else note(task.live, "Pi session file was unavailable during archival");
@@ -435,19 +400,31 @@ export function writeArchive(task: Archived, modelOrigins: Set<string>, status: 
     outputs,
     extra: { metadata: { thread_id: task.id, broker: { schema_version: 1, ...metadata } } },
   });
-  const projectRun = run(traceId, task.name, {}, { close_status: status }, {
-    source: "broker",
-    capture_status: "native_and_http_runs",
-    http_body_bytes: task.live.httpBodyBytes,
-    http_responses: httpRecords((destination) => !modelOrigins.has(destination)),
-    http_responses_omitted: task.live.httpResponsesOmitted,
-  });
-  const harnessRun = run(harnessRunId, "pi", { parent_run_id: traceId }, { native_record_count: nativeRecords.length }, {
-    source: "harness",
-    harness: "pi",
-    capture_status: hasSession ? "source_file_present" : "source_file_missing",
-    native_records: toolTrace.unassignedRecords,
-  });
+  const projectRun = run(
+    traceId,
+    task.name,
+    {},
+    { close_status: status },
+    {
+      source: "broker",
+      capture_status: "native_and_http_runs",
+      http_body_bytes: task.live.httpBodyBytes,
+      http_responses: httpRecords((destination) => !modelOrigins.has(destination)),
+      http_responses_omitted: task.live.httpResponsesOmitted,
+    },
+  );
+  const harnessRun = run(
+    harnessRunId,
+    "pi",
+    { parent_run_id: traceId },
+    { native_record_count: nativeRecords.length },
+    {
+      source: "harness",
+      harness: "pi",
+      capture_status: hasSession ? "source_file_present" : "source_file_missing",
+      native_records: toolTrace.unassignedRecords,
+    },
+  );
   const lines = (records: object[]) => records.map((record) => JSON.stringify(record)).join("\n");
   writeFileSync(`${control}/trace.jsonl`, `${lines([projectRun, harnessRun, ...modelRuns, ...toolTrace.runs])}\n`);
   const { id, name, slug, templateId, attended, subjectId, model, startedAt, deadline } = task;
