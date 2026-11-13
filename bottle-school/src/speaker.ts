@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { ProxyAgent } from "undici";
 import { z } from "zod";
 import type { Config } from "./config.ts";
+import type { Catalog } from "./pi.ts";
 
 /** Speaker's items are strings (`site:x`, `folder:s:rw`, `ext:id`, `obsidian.read`); the rest of bottle-school speaks kind and ref. */
 const itemKinds: Record<string, string> = { site: "site", secret: "secret", folder: "folder", mcp: "mcp", ext: "extension" };
@@ -89,7 +90,7 @@ export const registerHost = async (config: Config, configPath: string, name: str
 
 /** Whether the owner has approved this host: speaker answers 401 `approval_required` to a pending or unknown token. */
 export const hostApproved = async (config: Config) => {
-  const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+  const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
     headers: { authorization: `Bearer ${readHostToken(config)}` },
     signal: AbortSignal.timeout(10_000),
   });
@@ -113,13 +114,13 @@ export const speakerClient = (config: Config, token: string) => {
     createAgent: async (label: string, agent: string) => Agent.parse(await call("POST", "hosts/agents", { label, agent })),
     deleteAgent: (id: string) => call("DELETE", `hosts/agents/${id}`),
     request: async (body: RequestBody) => RequestStatus.parse(await call("POST", "requests", body)),
-    /** The placeholder speaker issued this agent for a secret it holds (what `/me` shows); only the agent's own token can ask. */
+    /** The placeholder speaker issued this agent for a secret it holds (what `/catalog` shows); only the agent's own token can ask. */
     placeholder: async (agentToken: string, secret: string) => {
-      const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+      const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
         headers: { authorization: `Bearer ${agentToken}` },
         signal: AbortSignal.timeout(10_000),
       });
-      if (!response.ok) throw new Error(`speaker GET me returned ${response.status}: ${await response.text()}`);
+      if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}: ${await response.text()}`);
       const { secrets = {} } = Me.parse(await response.json());
       const placeholder = secrets[secret]?.placeholder;
       if (!placeholder) throw new Error(`speaker shows no active grant of secret ${secret} for this task`);
@@ -152,6 +153,12 @@ export const speakerProxy = async (config: Config, agentToken: string) => {
 /** The shares this host holds, for speaker's choice of delivery: the guest has no VM mount, its folders arrive over SSH. */
 export const shareReport = (config: Config) => Object.keys(config.shareRoots).map((name) => ({ name, mount: false }));
 
+/** What this host's catalog offers, for speaker's list of what an agent may ask for and its checks of `mcp:` and `ext:` items. */
+export const catalogReport = (catalog: Catalog) => ({
+  mcps: Object.entries(catalog.mcps).map(([id, { label, tools }]) => ({ id, label, tools })),
+  extensions: Object.entries(catalog.extensions).map(([id, { label, description, tools, sites }]) => ({ id, label, description, tools, sites })),
+});
+
 /**
  * How long the service may run without reaching speaker: at startup, and after losing it. After `dropMs` without
  * speaker's snapshots the agents' grants are dropped until it is back.
@@ -165,7 +172,7 @@ export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, re
 const probeSpeaker = async (config: Config, token: string) => {
   try {
     // A sandbox host has no agent view: speaker answers an approved host token with 403 and an unknown one with 401.
-    const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+    const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5_000),
     });
@@ -199,6 +206,7 @@ export const watchLeases = (
   onSnapshot: (snapshot: Snapshot) => void,
   onFatal: (message: string) => void,
   limits = SPEAKER_LIMITS,
+  catalog: Catalog = { mcps: {}, extensions: {} },
 ) => {
   const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -243,6 +251,7 @@ export const watchLeases = (
       backoff = limits.retryMs;
       lastHeard = Date.now();
       send({ type: "shares", shares: shareReport(config) });
+      send({ type: "catalog", ...catalogReport(catalog) });
       send({ type: "applied", grantIds: JSON.parse(applied) });
     };
     socket.onmessage = (event) => {

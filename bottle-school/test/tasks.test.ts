@@ -172,6 +172,6 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
   assert.equal(existsSync(`${f.config.stateRoot}/tasks/${task.id}`), false, "the work tree is removed");
   assert.equal(existsSync(`${control}/blobs`), false);
   // The task's agent is gone from speaker.
-  const response = await fetch(`${f.url}/_speaker/me`, { headers: { authorization: `Bearer ${task.speakerToken}` } });
+  const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.speakerToken}` } });
   assert.equal(response.status, 403);
 });

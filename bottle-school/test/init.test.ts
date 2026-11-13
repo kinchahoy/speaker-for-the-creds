@@ -96,7 +96,7 @@ test("init bottle-school refuses a home too long for microsandbox's unix sockets
 });
 
 // A speaker that is locked until /admin/signin gets the owner password. A registered host stays pending (401 on
-// /_speaker/me) until the signed-in owner posts the approval, as the admin page does.
+// /_speaker/catalog) until the signed-in owner posts the approval, as the admin page does.
 const lockedSpeaker = async (t: TestContext, owner: string) => {
   let unlocked = false;
   let approved = false;
@@ -113,7 +113,7 @@ const lockedSpeaker = async (t: TestContext, owner: string) => {
       const signedIn = request.headers.cookie === "speaker_session=s1" && request.headers.origin === `http://${request.headers.host}`;
       approved ||= signedIn;
       response.writeHead(signedIn ? 303 : 401).end();
-    } else if (url === "/_speaker/me" && request.headers.authorization && !approved) response.writeHead(401).end("{}");
+    } else if (url === "/_speaker/catalog" && request.headers.authorization && !approved) response.writeHead(401).end("{}");
     else if (!unlocked && url.startsWith("/_speaker/") && !url.endsWith("/health")) response.writeHead(503).end("{}");
     else if (request.method === "POST" && url === "/_speaker/hosts") response.writeHead(201).end('{"id":"h1"}');
     else response.end('{"ok":true}');

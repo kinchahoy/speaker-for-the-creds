@@ -70,6 +70,7 @@ describe("egress proxy decision", () => {
     client.write("GET http://evil.test/ HTTP/1.1\r\nHost: evil.test\r\n\r\n");
     const [reply] = await once(client, "data");
     assert.match(String(reply), /^HTTP\/1\.1 403 /);
+    assert.match(String(reply), /evil\.test is not approved for this task\. To get access, call request_capability with site:evil\.test\./);
     client.destroy();
     server.close();
   });
@@ -176,7 +177,7 @@ describe("folders over SSH", () => {
     const door = await listen(socket, speakerDoor({ url, token: "t" }, "ssh-ed25519 AAAA"));
     const client = new Client("http://speaker.internal", { socketPath: socket });
     await (await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })).body.dump();
-    await (await client.request({ method: "GET", path: "/_speaker/me" })).body.dump();
+    await (await client.request({ method: "GET", path: "/_speaker/catalog" })).body.dump();
     assert.deepEqual(JSON.parse(seen[0]!.body), { want: ["folder:docs"], sshKey: "ssh-ed25519 AAAA" });
     assert.deepEqual([seen[1]!.method, seen[1]!.body], ["GET", ""]);
     await client.close();
