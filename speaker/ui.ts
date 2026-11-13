@@ -23,15 +23,12 @@ export type Setup = {
 // Open Props (colours, shadows, borders, sizes, fonts) is served separately; the colour roles below pick from its palette per scheme.
 const css = `
 :root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);
---bg:light-dark(var(--gray-0),var(--gray-10));--surface:light-dark(#fff,var(--gray-9));--sunk:light-dark(var(--gray-2),var(--gray-11));
---ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),var(--gray-8));--field:var(--gray-6);
---brand:light-dark(var(--indigo-10),var(--indigo-12));--accent:light-dark(var(--indigo-8),var(--indigo-3));--on-accent:light-dark(#fff,var(--indigo-12));
---region:light-dark(var(--indigo-0),var(--indigo-12));--ticket:light-dark(#fff,var(--indigo-11));--perf:light-dark(var(--indigo-3),var(--indigo-9));
---go:light-dark(var(--green-8),var(--green-4));--on-go:light-dark(#fff,var(--green-12));--good:light-dark(var(--green-10),var(--green-3));--good-bg:light-dark(var(--green-1),var(--green-11));
---warn:light-dark(var(--yellow-12),var(--yellow-3));--warn-bg:light-dark(var(--yellow-2),var(--yellow-12));--bad:light-dark(var(--red-9),var(--red-3));--bad-bg:light-dark(var(--red-0),var(--red-12))}
+--bg:light-dark(var(--gray-0),var(--gray-10));--surface:light-dark(#fff,var(--gray-9));--ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),var(--gray-8));
+--accent:light-dark(var(--indigo-8),var(--indigo-3));--on-accent:light-dark(#fff,var(--indigo-12));--region:light-dark(var(--indigo-0),var(--gray-9));--ticket:light-dark(#fff,var(--gray-8));--perf:light-dark(var(--indigo-3),var(--gray-6));
+--good:light-dark(var(--green-10),var(--green-3));--good-bg:light-dark(var(--green-1),var(--green-11));--warn:light-dark(var(--yellow-12),var(--yellow-3));--warn-bg:light-dark(var(--yellow-2),var(--yellow-12));--bad:light-dark(var(--red-9),var(--red-3));--bad-bg:light-dark(var(--red-0),var(--red-12))}
 *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:320px;background:var(--bg);color:var(--ink)}
 .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
-.top{position:sticky;top:0;z-index:10;background:var(--brand);color:#fff}.top .in{max-width:1120px;margin:auto;padding:10px 20px 0}
+.top{position:sticky;top:0;z-index:10;background:light-dark(var(--indigo-10),var(--indigo-12));color:#fff}.top .in{max-width:1120px;margin:auto;padding:10px 20px 0}
 .bar{display:flex;align-items:center;gap:12px;min-height:44px}.bar a{color:#fff;font-size:.88rem}.bar small{margin-left:auto;color:var(--indigo-1)}.bar small::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green-4);margin-right:7px}
 .logo{display:grid;place-items:center;width:34px;height:34px;border-radius:var(--radius-3);background:#fff;color:var(--indigo-10)}
 h1{font-size:1.45rem;line-height:1.2;font-weight:800;letter-spacing:-.03em;margin:0}h1 em{font-weight:700}
@@ -42,48 +39,47 @@ h2{display:flex;align-items:baseline;gap:10px;font-size:1.3rem;line-height:1.25;
 small{color:var(--dim);font-size:.86rem}h2 small{font-size:.8rem;font-weight:700}a{color:var(--accent);text-underline-offset:3px}code{font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-3);padding:18px 20px;margin-bottom:22px}.panel.region{background:var(--region);border:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:14px;align-items:start}
-article{margin:0}article>footer{padding-bottom:12px}.region article{background:var(--ticket);border-radius:var(--radius-3);box-shadow:var(--shadow-3);padding:18px 18px 0}
+article>footer{padding-bottom:12px}.region article{background:var(--ticket);border-radius:var(--radius-3);box-shadow:var(--shadow-3);padding:18px 18px 0}
 article>header{display:block;margin-bottom:8px}article>header strong{font-size:1.12rem;font-weight:750}article>header small{display:block}
 .stub{position:relative;margin:14px -18px 0;padding:14px 18px 18px;border-top:2px dashed var(--perf)}.stub::before,.stub::after{content:"";position:absolute;top:-9px;width:16px;height:16px;border-radius:50%;background:var(--region)}.stub::before{left:-8px}.stub::after{right:-8px}
 #active article{border-top:1px solid var(--line);padding:12px 0}#active .cards{display:block}#active article>header{display:flex;gap:12px;align-items:center;margin:0}#active article>header>span:not(.mark){flex:1;min-width:0}#active article>header small{display:inline}
 ul.rows{list-style:none;margin:0;padding:0}ul.rows>li{padding:12px 0;border-top:1px solid var(--line)}ul.rows>li:first-child{border-top:0}#active ul.rows{margin-left:46px}#active ul.rows>li{padding:8px 0}
 li.row{display:flex;gap:12px;align-items:center}li.row>div:first-of-type{flex:1;min-width:0;overflow-wrap:anywhere}
-.mark{--m:var(--indigo-7);display:grid;place-items:center;width:34px;height:34px;border-radius:var(--radius-3);background:color-mix(in oklch,var(--m) 18%,transparent);color:var(--m);flex:none}.chips .mark{width:24px;height:24px}.chips .mark .ic{width:14px;height:14px}
-.k-service{--m:var(--orange-7)}.k-secret{--m:var(--pink-7)}.k-site{--m:var(--cyan-7)}.k-folder{--m:var(--green-7)}.k-ssh{--m:var(--lime-8)}.k-mcp{--m:var(--violet-7)}.k-ext{--m:var(--red-7)}.k-host{--m:var(--blue-7)}.k-agent{--m:var(--teal-7)}
+.mark{--h:268;--m:light-dark(oklch(56% .19 var(--h)),oklch(78% .13 var(--h)));display:grid;place-items:center;width:34px;height:34px;border-radius:var(--radius-3);background:color-mix(in oklch,var(--m) 18%,transparent);color:var(--m);flex:none}.chips .mark{width:24px;height:24px}.chips .mark .ic{width:14px;height:14px}
 mark{display:inline-block;padding:1px 9px;border-radius:var(--radius-round);font-size:.78rem;font-weight:700;background:var(--warn-bg);color:var(--warn)}.chip{padding:2px 9px;border-radius:var(--radius-round);font-size:.78rem;font-weight:700}.chip.good{background:var(--good-bg);color:var(--good)}.chip.bad{background:var(--bad-bg);color:var(--bad)}
 .warn{color:var(--bad)}p.warn{padding:10px 14px;border-radius:var(--radius-3);background:var(--bad-bg);font-weight:600}
-label{display:block;font-size:.82rem;font-weight:600;color:var(--dim)}form{margin:0}
-input:not([type=checkbox],[type=radio]),select,textarea{display:block;width:100%;min-height:44px;margin:5px 0 12px;padding:9px 12px;border:1px solid var(--field);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font:inherit;font-size:.95rem}textarea{font-family:var(--font-monospace-code)}
+label{display:block;font-size:.82rem;font-weight:600;color:var(--dim)}
+input:not([type=checkbox],[type=radio]),select,textarea{display:block;width:100%;min-height:44px;margin:5px 0 12px;padding:9px 12px;border:1px solid var(--gray-6);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font:inherit;font-size:.95rem}textarea{font-family:var(--font-monospace-code)}
 input[type=checkbox]{width:22px;height:22px;margin:0;flex:none}fieldset{border:0;margin:0 0 6px;padding:0;display:grid;gap:8px}legend{padding:0;margin-bottom:8px}
 fieldset label{display:flex;gap:10px;align-items:center;padding:4px 8px;border-radius:var(--radius-2);font-size:1rem;font-weight:400;color:var(--ink)}fieldset label small{display:block;line-height:1.2}fieldset label code{font-weight:650}label.risky{background:var(--warn-bg)}
 button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:1px solid transparent;border-radius:var(--radius-2);background:var(--accent);color:var(--on-accent);font:inherit;font-size:.92rem;font-weight:650;cursor:pointer;white-space:nowrap}button:hover{filter:brightness(1.1)}
-button.approve{background:var(--go);color:var(--on-go);font-weight:750}button.secondary{background:transparent;color:var(--ink);border-color:var(--line)}button.deny,form[hx-confirm] button{background:transparent;color:var(--bad);border-color:var(--bad)}form[hx-confirm] button{border-color:var(--line)}
-.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions form,.actions button{margin:0}.stub button{flex:1;min-height:52px;font-size:1.02rem}.stub button:first-child{flex:1.7}.actions a{padding:0 10px;font-weight:600}
-.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:18px}.chips input[type=text]{flex:1 1 200px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--field);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer}
+button.approve{background:var(--green-9);color:#fff;font-weight:750}button.secondary{background:transparent;color:var(--ink);border-color:var(--line)}button.deny,form[hx-confirm] button{background:transparent;color:var(--bad);border-color:var(--bad)}form[hx-confirm] button{border-color:var(--line)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.stub button{flex:1;min-height:52px;font-size:1.02rem}.stub button:first-child{flex:1.7}.actions a{padding:0 10px;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:18px}.chips input[type=text]{flex:1 1 200px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--gray-6);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer}
 .chips label:has(:checked){background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.chips label input{position:absolute;opacity:0}
-details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;color:var(--accent);font-weight:650}summary::-webkit-details-marker{display:none}summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}details[open]>summary::after{transform:rotate(225deg)}
+details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;color:var(--accent);font-weight:650}summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}details[open]>summary::after{transform:rotate(225deg)}
 .panel>details{border-top:1px solid var(--line);margin-top:8px}
-.meter{display:inline-block;vertical-align:middle;width:110px;height:8px;margin-right:6px;border-radius:var(--radius-round);background:var(--sunk);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}.meter i{display:block;height:100%;background:var(--go)}
+.meter{display:inline-block;vertical-align:middle;width:110px;height:8px;margin-right:6px;border-radius:var(--radius-round);background:var(--line);overflow:hidden}.meter i{display:block;height:100%;background:var(--green-9)}
 table{width:100%;border-collapse:collapse;font-size:.9rem}th{text-align:left;color:var(--dim)}th,td{padding:6px 10px 6px 0;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}.log-filter select{margin-bottom:0}
 .auth{max-width:420px;margin:48px auto}.auth button{width:100%}.auth h2{align-items:center}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}.top :focus-visible{outline-color:#fff}
 @media(max-width:560px){.top .in{padding:6px 12px 0}h1{font-size:1.25rem}.bar a{display:none}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:14px 14px 0}.stub{margin:14px -14px 0;padding:14px}.panel.region{padding:12px}#active ul.rows{margin-left:0}#active article>header{flex-wrap:wrap}#active article>header>span:not(.mark){flex-basis:calc(100% - 50px)}#active article>header>form{margin-left:46px}}
 `
-// Each kind of item and its Lucide icon; admin.ts builds the served sprite from these (symbol ids become i-<kind>).
-export const icons: Record<string, string> = {
-  brand: 'key-round',
-  service: 'key-round',
-  secret: 'lock',
-  site: 'globe',
-  folder: 'folder',
-  mcp: 'plug',
-  ext: 'puzzle',
-  host: 'shield-check',
-  agent: 'bot',
-  ssh: 'square-terminal',
+// Each kind of item: its Lucide icon and colour hue; admin.ts builds the served sprite from these (symbol ids become i-<kind>).
+export const icons: Record<string, [icon: string, hue: number]> = {
+  brand: ['key-round', 268],
+  service: ['key-round', 70],
+  secret: ['lock', 335],
+  site: ['globe', 205],
+  folder: ['folder', 135],
+  mcp: ['plug', 295],
+  ext: ['puzzle', 25],
+  host: ['shield-check', 250],
+  agent: ['bot', 180],
+  ssh: ['square-terminal', 95],
 }
 const mark = (kind: string) =>
-  html`<span class="mark k-${kind}" aria-hidden="true"><svg class="ic"><use href="/admin/assets/icons.svg#i-${kind}"></use></svg></span>`
+  html`<span class="mark" style="--h:${icons[kind][1]}" aria-hidden="true"><svg class="ic"><use href="/admin/assets/icons.svg#i-${kind}"></use></svg></span>`
 // The page's only script (htmx is loaded without eval): a ticked group box ticks its members; the filter bar hides
 // cards and rows by kind and text; times show in the viewer's zone, with a live countdown where data-left is set.
 // Filtering and times are re-applied after every swap and then every second.
