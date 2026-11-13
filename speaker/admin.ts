@@ -19,7 +19,7 @@ import {
 } from './core.ts'
 import { hostTable, transition } from './lifecycle.ts'
 import { WrongPassword } from './store.ts'
-import { active, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
+import { active, icons, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
 
 export function adminApp(core: Core) {
   const {
@@ -62,6 +62,7 @@ export function adminApp(core: Core) {
       contentSecurityPolicy: {
         defaultSrc: ["'none'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'"],
         scriptSrc: ["'self'", NONCE],
         connectSrc: ["'self'"],
         formAction: ["'self'"],
@@ -96,6 +97,20 @@ export function adminApp(core: Core) {
   admin.get('/assets/htmx.js', (c) =>
     c.body(htmx, 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' }),
   )
+  // Open Props' colour, shadow, border, size and font tokens, and a Lucide sprite cut down to the icons in ui.ts, both from installed packages.
+  const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
+  const props = ['colors', 'shadows', 'borders', 'sizes', 'fonts'].map((f) => asset(`open-props/${f}.min.css`)).join('')
+  const lucide = asset('lucide-static/sprite.svg')
+  const symbols = Object.entries(icons).map(([kind, name]) => {
+    const symbol = lucide.match(new RegExp(`<symbol id="${name}"[\\s\\S]*?</symbol>`))?.[0]
+    if (symbol === undefined) throw new Error(`Lucide has no icon named ${name}`)
+    return symbol.replace(`id="${name}"`, `id="i-${kind}"`)
+  })
+  const sprite = `<svg xmlns="http://www.w3.org/2000/svg"><defs>${symbols.join('')}</defs></svg>`
+  const cached = (type: string, body: string) => (c: Context) =>
+    c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
+  admin.get('/assets/open-props.css', cached('text/css', props))
+  admin.get('/assets/icons.svg', cached('image/svg+xml', sprite))
   // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'

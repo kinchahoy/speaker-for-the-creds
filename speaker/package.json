@@ -9,6 +9,8 @@
     "hono": "^4.13.16",
     "hono-rate-limiter": "0.5.4",
     "htmx.org": "2.0.11",
+    "lucide-static": "^1.72.0",
+    "open-props": "^1.7.23",
     "reflect-metadata": "^0.2.2",
     "write-file-atomic": "^8.0.0",
     "ws": "^8.22.1",

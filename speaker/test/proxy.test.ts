@@ -619,6 +619,12 @@ test('the admin pages have no JSON routes', async (t) => {
   await enroll(f, 'poll-token', { want: ['notes.read'], reason: 'poll' })
   assert.match(await (await f.call(poll, { headers: f.ownerHeaders })).text(), /<article id="request-/)
   assert.equal((await f.call('/admin/assets/htmx.js')).status, 200)
+  const css = await f.call('/admin/assets/open-props.css')
+  assert.match(css.headers.get('content-type') ?? '', /text\/css/)
+  assert.match(await css.text(), /--indigo-7:/)
+  const icons = await f.call('/admin/assets/icons.svg')
+  assert.match(icons.headers.get('content-type') ?? '', /image\/svg/)
+  assert.match(await icons.text(), /<symbol id="i-secret"/)
 })
 
 test('a service set to never answers denied at once, and a POST read path counts as a read', async (t) => {
