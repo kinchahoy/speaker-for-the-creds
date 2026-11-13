@@ -71,7 +71,7 @@ Each service has a rule for read and one for write:
 
 - **ask** (default): each agent needs a grant.
 - **never**: never granted; requests are answered `denied`.
-- **open** (read only): any agent may read without a grant or a card. Open services are not listed to agents; an agent uses one only when the owner has told it the name. Enrollment is open to anyone who can reach speaker, so open means readable by anyone on the owner's network through speaker: meant for harmless state such as whether the lights are on.
+- **open** (read only): any agent may read without a grant or a card. Open services are not listed to agents (see What an agent can see). Enrollment is open to anyone who can reach speaker, so open means readable by anyone on the owner's network through speaker: meant for harmless state such as whether the lights are on.
 
 ## Lifecycles
 
@@ -128,7 +128,7 @@ Speaker runs an SSH jump server in its container (see The jump server and relay)
 
 ### Knowing where it stands
 
-`GET /_speaker/me` returns the agent's status, the services it may use with read and write state and end times, its own SSH and folder grants with the exact commands to use, the groups it may ask for (with description and items; `ssh:` and `folder:` members appear only as a count, such as "1 folder"), and its requests with per-item outcomes.
+`GET /_speaker/me` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force), the secrets granted to it with the placeholder to use, the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. What it leaves out, and why, is in What an agent can see.
 
 ### Errors
 
@@ -219,7 +219,21 @@ A sandbox host registers with a name and the item kinds it can enforce; the owne
 - `GET /_speaker/help`: one page with setup (sh and PowerShell), asking and groups, SSH and folders, and sandbox notes.
 - `GET /_speaker/help/<service>`: that service's notes plus the caller's current state.
 
-Services, rules and groups stay behind authentication. Targets and shares are never listed to agents at all, not even to approved ones: an agent knows only the names the owner gives it and the grants it holds.
+### What an agent can see
+
+Anyone who can reach speaker can enroll as an agent, so a list shown to agents is a list shown to anything on the owner's network. Speaker therefore lists only names that reveal little and that an agent needs in order to ask well. Everything else the agent learns only from the owner, its task, or a grant it already holds. Help and service notes need no token; everything in this table does.
+
+| Kind | Direct agent | Sandboxed agent | Where |
+| --- | --- | --- | --- |
+| Services that need a grant (`ask` or `never`) | listed, with its state | listed, with its state | `/me` |
+| Services anyone may read (`open`) | not listed; usable if the agent knows the name | same | — |
+| Groups the agent may ask for | listed, with description and items | same | `/me` |
+| Secrets | only those granted to it | every secret: name, the variable to set, the hosts it goes to | `/me`; for sandboxes, the sandbox host passes speaker's list into the task |
+| Folders (shares) and SSH targets | not listed; only its own grants, with commands | same | `/me` (grants only); inside a group, only a count such as "1 folder" |
+| Sites | nothing to list: any hostname may be asked for | same | — |
+| In-VM MCP servers and Pi extensions | do not apply | every catalog entry | the sandbox host's catalog, not speaker |
+
+Two inconsistencies remain open. A sandboxed agent sees every secret name but a direct agent sees none it has not been granted. And a name that does not exist is handled differently by kind: an unknown service or group is refused at once (an unknown group with the list of real ones), while an unknown secret, share or target goes to the owner as a normal request. The intended rule is that the list an agent can see up front is also the only thing an error may name, and that both treat every kind alike.
 
 ## Routes
 
