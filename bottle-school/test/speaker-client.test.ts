@@ -174,7 +174,7 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
     (message) => fatal.push(message),
   );
   await until(() => fatal.length === 1);
-  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-cli register/);
+  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-school:cli register/);
 
   const snapshots: Snapshot[] = [];
   const reportApplied = watchLeases(

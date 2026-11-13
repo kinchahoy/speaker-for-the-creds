@@ -95,7 +95,7 @@ export const startControl = (config: Config, tasks: Tasks) => {
             <h1>bottle-school</h1>
             <p>
               Read-only status page. Launch a task with
-              <code>mise run bottle-cli run --template &lt;id&gt; --prompt "..."</code>. Raw state: <a href="/api/state">/api/state</a>
+              <code>mise run bottle-school:cli run --template &lt;id&gt; --prompt "..."</code>. Raw state: <a href="/api/state">/api/state</a>
             </p>
             <table>
               <thead>

@@ -310,7 +310,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
           (r) => (r.ok ? `bottle-school is running on port ${running}` : undefined),
           () => undefined,
         ),
-      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle)",
+      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle-school)",
       yes,
     );
   const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", previous?.controlPort ?? 7001, []);
@@ -391,9 +391,9 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
         spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done),
       );
       if (status !== 0)
-        fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run guest-build ${image}`);
+        fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run bottle-school:guest-build ${image}`);
       ok(`Guest image ${image} is built and loaded.`);
-    } else p.log.info(`Build it later with: mise run guest-build ${image}`);
+    } else p.log.info(`Build it later with: mise run bottle-school:guest-build ${image}`);
   }
 
   const loaded = loadConfig(configPath);
@@ -416,12 +416,12 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
         hostApproved(loaded),
       );
     }
-  } else p.log.info("Register later with: mise run bottle-cli register");
+  } else p.log.info("Register later with: mise run bottle-school:cli register");
 
   const imageLoaded =
     spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
   if (!flags["skip-smoke"] && !imageLoaded)
-    p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run guest-build ${image}`);
+    p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run bottle-school:guest-build ${image}`);
   const smoke =
     !flags["skip-smoke"] &&
     !flags["skip-register"] &&
@@ -452,7 +452,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     await waitFor(
       `Smoke-test task ${id} is running ("${SMOKE_PROMPT}")`,
       `Task ${id} archived.`,
-      `task ${id} did not finish. See: mise run bottle-cli ls`,
+      `task ${id} did not finish. See: mise run bottle-school:cli ls`,
       async () => {
         const { tasks } = (await (await fetch(`${control}/api/state`)).json()) as { tasks: { id: string; state: string }[] };
         const task = tasks.find((entry) => entry.id === id);
@@ -465,6 +465,6 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     const result = join(outputRoot, archive, "artifacts", "hello.txt");
     if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
-  } else p.log.info("Start it with: mise run bottle");
-  p.outro('bottle-school is set up. Launch work with: mise run bottle-cli run --template offline --prompt "..."');
+  } else p.log.info("Start it with: mise run bottle-school");
+  p.outro('bottle-school is set up. Launch work with: mise run bottle-school:cli run --template offline --prompt "..."');
 }

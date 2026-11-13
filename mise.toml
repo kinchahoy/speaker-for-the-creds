@@ -40,28 +40,28 @@ description = "Run speaker with live reload"
 dir = "speaker"
 run = "node --watch --env-file-if-exists=.env server.ts"
 
-[tasks.bottle]
+[tasks.bottle-school]
 description = "Run the bottle-school service"
 dir = "bottle-school"
 run = "./start.sh"
 
-[tasks.guest-build]
-description = "Build the guest image and load it into microsandbox: mise run guest-build bottle-school-guest"
+[tasks."bottle-school:guest-build"]
+description = "Build the guest image and load it into microsandbox: mise run bottle-school:guest-build bottle-school-guest"
 dir = "bottle-school"
 run = "guest/build.sh"
 
 
-[tasks.bottle-cli]
-description = "Run the bottle CLI: mise run bottle-cli register|run|ls|attach|stop"
+[tasks."bottle-school:cli"]
+description = "Run the bottle-school CLI: mise run bottle-school:cli register|run|ls|attach|stop"
 dir = "bottle-school"
 run = "node src/cli.ts"
 
-[tasks.doctor]
+[tasks."bottle-school:doctor"]
 description = "Check this host for bottle-school prerequisites (Linux or macOS)"
 dir = "bottle-school"
 run = "./doctor.sh"
 
-[tasks.speaker-up]
+[tasks."speaker:up"]
 description = "Build and run speaker in its hardened container (needs speaker/.env)"
 dir = "speaker"
 run = "docker compose up -d --build"

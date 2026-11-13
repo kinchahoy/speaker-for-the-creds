@@ -138,7 +138,7 @@ export type Speaker = ReturnType<typeof speakerClient>;
 export const speakerProxy = async (config: Config, agentToken: string) => {
   const { proxyPort } = config.speaker;
   if (!proxyPort)
-    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle-cli register` again to learn it");
+    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle-school:cli register` again to learn it");
   const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
   return new ProxyAgent({
@@ -181,7 +181,7 @@ const probeSpeaker = async (config: Config, token: string) => {
         message:
           `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it is not ` +
           `approved yet, was removed, or speaker's data was reset. Approve the sandbox host in speaker /admin, or run ` +
-          `"mise run bottle-cli register" again.`,
+          `"mise run bottle-school:cli register" again.`,
       };
     return { fatal: false, message: `speaker answered HTTP ${response.status}` };
   } catch (error) {

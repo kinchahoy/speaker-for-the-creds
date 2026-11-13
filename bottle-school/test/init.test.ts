@@ -151,7 +151,7 @@ test("init bottle-school stops when --password-stdin carries the wrong password"
 });
 
 // The CLI reads the control API of a bottle-school that is not running: a fake that serves no live tasks.
-test("bottle-cli run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
+test("bottle-school:cli run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));

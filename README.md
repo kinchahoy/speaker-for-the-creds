@@ -54,8 +54,8 @@ Then:
    - an SSH target: first put the line Setup shows into that account's `authorized_keys`
    - a share on that target (`VM mount`, `over SSH`, or both)
 3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
-4. To launch a sandboxed task, run `mise run bottle-cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template grants nothing up front, but the agent can still request items mid-task, and each request appears as a card. The task waits silently until you approve; `run` and `bottle-cli ls` print the `/admin` link when something is pending. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle`.
-5. To stop, run `mise run bottle-cli stop <id>` for each task. `run` prints the archive folder, and `ls` lists the last finished tasks with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
+4. To launch a sandboxed task, run `mise run bottle-school:cli run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template grants nothing up front, but the agent can still request items mid-task, and each request appears as a card. The task waits silently until you approve; `run` and `ls` print the `/admin` link when something is pending. Once you approve it, the VM can use it. Revoke stops it within seconds. If `init` did not leave bottle-school running, start it first with `mise run bottle-school`.
+5. To stop, run `mise run bottle-school:cli stop <id>` for each task. `run` prints the archive folder, and `ls` lists the last finished tasks with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle-school and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}
 
 If speaker's address changes later, run `mise run init bottle-school` again; it keeps your other answers.
@@ -87,13 +87,13 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | `mise run test` | Run both packages' tests |
 | `mise run format` | Format speaker |
 | `mise run speaker` | Run speaker with live reload |
-| `mise run bottle` | Run the bottle-school service |
-| `mise run bottle-cli register` | Register the sandbox host again; approve it in speaker |
-| `mise run bottle-cli run --template offline` | Launch a sandbox task |
-| `mise run bottle-cli ls` | List tasks |
-| `mise run bottle-cli attach <id>` | Join Pi in a running guest |
-| `mise run bottle-cli stop <id>` | Stop and archive a task |
-| `mise run guest-build bottle-school-guest` | Build the guest image and load it into microsandbox |
+| `mise run bottle-school` | Run the bottle-school service |
+| `mise run bottle-school:cli register` | Register the sandbox host again; approve it in speaker |
+| `mise run bottle-school:cli run --template offline` | Launch a sandbox task |
+| `mise run bottle-school:cli ls` | List tasks |
+| `mise run bottle-school:cli attach <id>` | Join Pi in a running guest |
+| `mise run bottle-school:cli stop <id>` | Stop and archive a task |
+| `mise run bottle-school:guest-build bottle-school-guest` | Build the guest image and load it into microsandbox |
 
 <!-- author: ai -->
 

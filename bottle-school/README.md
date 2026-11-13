@@ -44,7 +44,7 @@ The repository holds only code. Each running VM also gets a few short-lived sock
 mise run init bottle-school --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model
 ```
 
-The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle-school` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run doctor` rechecks the host later.
+The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle-school` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run bottle-school:doctor` rechecks the host later.
 {.ai}
 
 To configure by hand, copy `config.example.json` to `~/.bottle-school/config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle-school/templates.json` and `bottle-school/catalog.json` into `configRoot`.
@@ -52,7 +52,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle-school/config.jso
 
 - `bindHost`: an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts any peer that can reach it, so keep this listener private.
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
-- `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-cli register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
+- `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle-school:cli register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
 - `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
@@ -67,21 +67,21 @@ To configure by hand, copy `config.example.json` to `~/.bottle-school/config.jso
 `mise run init bottle-school` builds the guest image, registers the host, and can start the service. To do these steps by hand:
 
 ```sh
-mise run guest-build bottle-school-guest
-mise run bottle-cli register   # prints the approve link; approve the sandbox host in speaker /admin
-mise run bottle
+mise run bottle-school:guest-build bottle-school-guest
+mise run bottle-school:cli register   # prints the approve link; approve the sandbox host in speaker /admin
+mise run bottle-school
 ```
 
 From another terminal, launch and inspect a task:
 {.ai}
 
 ```sh
-mise run bottle-cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
-mise run bottle-cli run --template research --attended   # you stay at the terminal; Pi may ask you questions
-mise run bottle-cli ls               # live tasks, then the last few finished ones with their archive folders
-mise run bottle-cli attach <id>      # id, unique id prefix, or name
-mise run bottle-cli stop <id>
-mise run bottle-cli help run         # per-command usage (mise intercepts --help after the task name)
+mise run bottle-school:cli run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
+mise run bottle-school:cli run --template research --attended   # you stay at the terminal; Pi may ask you questions
+mise run bottle-school:cli ls               # live tasks, then the last few finished ones with their archive folders
+mise run bottle-school:cli attach <id>      # id, unique id prefix, or name
+mise run bottle-school:cli stop <id>
+mise run bottle-school:cli help run         # per-command usage (mise intercepts --help after the task name)
 ```
 
 `ls` shows each task's state, mode (attended or unattended), pending speaker approvals (with the request ID), age, model, name, and Pi's latest message. `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
@@ -138,7 +138,7 @@ docker save <image> | msb load --tag <guestImage>   # into ~/.bottle-school/micr
 
 <sub>AI-written</sub>
 
-Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. `mise run doctor` checks that the guest image loads and boots.
+Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. `mise run bottle-school:doctor` checks that the guest image loads and boots.
 {.ai}
 
 The guest has no network device. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
@@ -158,7 +158,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
 - Egress: one `proxy-chain` server per task decides every request from the live lease view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle-school does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: it fetches the certificate from `/_speaker/proxy/ca.pem` at boot, installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
 - Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
 - Speaker: the speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
-- Terminal: `bottle-cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
+- Terminal: `bottle-school:cli attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
 - Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle-school reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
   - Each task gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle-school adds it to the task's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
   - While a folder grant is active, bottle-school (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle-school unmounts the share.

@@ -7,7 +7,7 @@ import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
-/** The owner's terminal client: `mise run bottle-cli register | run | ls | attach | stop`. */
+/** The owner's terminal client: `mise run bottle-school:cli register | run | ls | attach | stop`. */
 type Task = {
   id: string;
   name: string;
@@ -21,7 +21,7 @@ type Task = {
   summary: string;
 };
 
-const SELF = "mise run bottle-cli";
+const SELF = "mise run bottle-school:cli";
 const FINISHED_SHOWN = 5;
 const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
