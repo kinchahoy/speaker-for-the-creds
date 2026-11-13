@@ -116,12 +116,8 @@ export const loadConfig = (path: string): Config => validateConfig(JSON.parse(re
 /** Everything bottle-school keeps lives in one folder: BOTTLE_SCHOOL_HOME, else ~/.bottle-school. */
 export const bottleHome = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_SCHOOL_HOME || join(homedir(), ".bottle-school");
 
-/** The config file path: BOTTLE_SCHOOL_CONFIG, else the legacy PI_V2_CONFIG or BOTTLE_CONFIG (deprecated for one release), else <home>/config.json. */
-export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => {
-  const old = ["PI_V2_CONFIG", "BOTTLE_CONFIG"].find((name) => env[name]);
-  if (!env.BOTTLE_SCHOOL_CONFIG && old) console.error(`note: ${old} is deprecated; use BOTTLE_SCHOOL_CONFIG.`);
-  return env.BOTTLE_SCHOOL_CONFIG || (old && env[old]) || join(bottleHome(env), "config.json");
-};
+/** The config file path: BOTTLE_SCHOOL_CONFIG, else <home>/config.json. */
+export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_SCHOOL_CONFIG || join(bottleHome(env), "config.json");
 
 /** microsandbox's own folder (images, VM disks, its unix sockets): MSB_HOME, else <home>/microsandbox. */
 export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(bottleHome(env), "microsandbox");

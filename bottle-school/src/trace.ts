@@ -334,7 +334,7 @@ export const createModelRuns = (
           thread_id: context.taskId,
           broker: {
             schema_version: 1,
-            source: "gondolin-http",
+            source: "bottle-school-http",
             capture_status: captureStatus,
             http_response_index: index,
             request_capture: response.requestCapture,

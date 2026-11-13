@@ -56,7 +56,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle-school/config.jso
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
 - `shareRoots`: bottle-school reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
-- `BOTTLE_SCHOOL_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `~/.bottle-school/config.json`. The older names `PI_V2_CONFIG` and `BOTTLE_CONFIG` still work for one release and print a deprecation note.
+- `BOTTLE_SCHOOL_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `~/.bottle-school/config.json`.
 
 <!-- author: ai -->
 
@@ -229,16 +229,6 @@ The `loop` template is unattended. It runs at most 24 hours and 300 model reques
 {.ai}
 
 <!-- author: ai -->
-
-## Upgrading an existing install
-
-<sub>AI-written</sub>
-
-- One folder: an install from before `~/.bottle-school` kept its config in `bottle-school/config.json`, its files under the home you chose (by default `~/.local/share/bottle-school`), and microsandbox in `~/.microsandbox`. Run `mise run init bottle-school` again, move any `output/` archives you want to keep into `~/.bottle-school/output`, and delete the old folders.
-- Secrets move to speaker: add each `BROKER_SECRET_<NAME>` from `secrets.env` in speaker's Setup (name, value, allowed hosts, the variable the agent sees). Delete `secrets.env` and the `BROKER_SECRET_*` variables. Register again, which learns speaker's `PROXY_PORT`, and publish that port. In old groups, a grant for `secret:<NAME>@host` becomes `secret:<NAME>`: the hosts come from the secret's Setup entry. Hosted model providers keep their `credential` name, which must now name a speaker secret.
-- Config files: the `templates/` and `catalog/` directories became `templates.json` and `catalog.json`. Copy the new files into `configRoot`.
-- Templates: `bundle` becomes `want: ["group:<name>"]`, and `bundleDuration` becomes `duration`. The old keys fail validation. Edit your `templates.json` or copy the new one.
-- Catalog: remove remote MCP entries from `catalog.json`; `mcps` keeps only servers that run inside the VM. Add the remote ones in speaker's Setup as services (tick "MCP server"), and replace `mcp:<id>` in groups and templates with `<service>.read`. See `speaker/services.example.json` and `speaker/groups.example.json`.
 
 <!-- author: ai -->
 

@@ -9,7 +9,6 @@ set -eu
 IMAGE=${1:-bottle-school-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 MSB=${MSB:-"$ROOT/node_modules/.bin/msb"}
-[ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
 HOME_DIR=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
 CONFIG=${BOTTLE_SCHOOL_CONFIG:-"$HOME_DIR/config.json"}
 

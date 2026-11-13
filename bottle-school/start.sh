@@ -10,7 +10,6 @@ for dir in /opt/homebrew/opt/util-linux/bin /usr/local/opt/util-linux/bin; do
 	command -v setsid >/dev/null 2>&1 || [ ! -x "$dir/setsid" ] || PATH="$dir:$PATH"
 done
 command -v setsid >/dev/null || { echo "setsid is missing. Fix: sudo apt install util-linux (macOS: brew install util-linux)" >&2; exit 1; }
-[ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
 home=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
 config="${BOTTLE_SCHOOL_CONFIG:-$home/config.json}"
 export MSB_HOME="${MSB_HOME:-$home/microsandbox}"

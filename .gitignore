@@ -6,7 +6,6 @@ node_modules/
 speaker/data/
 bottle-school/volumes/
 bottle-school/config.json
-bottle-school/secrets.env
 
 # Local-only personal configuration and historical material.
 /personal/
