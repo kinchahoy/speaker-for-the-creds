@@ -57,6 +57,35 @@ const isFree = (port: number, host: string) =>
     probe.listen(port, host, () => probe.close(() => done(true)));
   });
 const command = (cmd: string, args: string[]) => spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
+const stop = (message: string): never => {
+  p.cancel(message);
+  process.exit(1);
+};
+/** At a terminal, asks to update an existing install; under --yes it needs --force. Returns true when it asked. */
+const confirmUpdate = async (what: string, fix: string, force: boolean, yes: boolean) => {
+  if (force) return false;
+  if (yes) fail(what, fix);
+  const update = answered(await p.confirm({ message: `${what}. Update it? Your current settings become the defaults; state, output, and images are kept.`, initialValue: true }));
+  return update || stop("Nothing was changed.");
+};
+/** Repeats the check until it passes: at a terminal it asks you to fix the problem and try again; under --yes it fails. */
+const untilFixed = async (problem: () => Promise<string | undefined>, fix: string, yes: boolean) => {
+  for (let found = await problem(); found !== undefined; found = await problem()) {
+    if (yes) fail(found, fix);
+    p.log.warn(`${found}. Fix: ${fix}`);
+    if (!answered(await p.confirm({ message: "Fixed it? Check again", active: "Check again", inactive: "Quit", initialValue: true }))) stop("Nothing more was changed.");
+  }
+};
+/** The parts of an existing config.json that become the defaults when updating it. */
+type Previous = { configRoot?: string; controlPort?: number; guestPort?: number; guestImage?: string; speaker?: { url?: string }; localModel?: { upstream?: string; models?: { id: string }[] } };
+const readPrevious = (path: string): Previous | undefined => {
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as Previous;
+  } catch (error) {
+    return fail(`${path} is not valid JSON (${(error as Error).message})`, "fix it, or delete it to start over");
+  }
+};
 
 const checkHost = (needDocker: boolean) => {
   if (platform() === "darwin") {
@@ -102,7 +131,7 @@ const speakerUrlProblem = (value: string) => {
 
 const Models = z.object({ data: z.array(z.object({ id: z.string() })) });
 
-async function pickModel(endpoint: string, wanted: string | undefined, yes: boolean) {
+async function pickModel(endpoint: string, wanted: string | undefined, yes: boolean, previous: string | undefined) {
   const url = `http://${endpoint}/v1/models`;
   const listed = await fetch(url, { signal: AbortSignal.timeout(5_000) })
     .then(async (response) => Models.parse(await response.json()).data.map((entry) => entry.id))
@@ -110,8 +139,9 @@ async function pickModel(endpoint: string, wanted: string | undefined, yes: bool
   if (listed.length === 0) fail(`${url} lists no models`, "load a model on that server");
   if (wanted !== undefined) return listed.includes(wanted) ? wanted : fail(`${endpoint} does not serve model ${wanted}`, `use one of: ${listed.join(", ")}`);
   if (listed.length === 1) return listed[0]!;
+  if (yes && previous !== undefined && listed.includes(previous)) return previous;
   if (yes) fail(`${endpoint} serves several models (${listed.join(", ")})`, "pass --model <id>");
-  return answered(await p.autocomplete({ message: `Model (${listed.length} available; type to filter, arrows move, Enter picks the highlighted one)`, maxItems: 8, options: listed.map((id) => ({ value: id, label: id })) }));
+  return answered(await p.autocomplete({ message: `Model (${listed.length} available; type to filter, arrows move, Enter picks the highlighted one)`, maxItems: 8, initialValue: previous, options: listed.map((id) => ({ value: id, label: id })) }));
 }
 
 /** Runs start.sh detached with its output in a log file. */
@@ -180,17 +210,26 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   const yes = flags.yes ?? false;
   p.intro("bottle-school setup");
   const configPath = resolve(flags.config ?? configPathFromEnv());
-  if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "keep using it, or pass --force to replace it");
+  const previous = readPrevious(configPath);
+  let updating = previous !== undefined && (await confirmUpdate(`${configPath} already exists`, "keep using it, or pass --force to replace it", flags.force ?? false, yes));
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
-  const defaultHome = join(homedir(), ".local", "share", "bottle-school");
+  const defaultHome = previous?.configRoot ? dirname(previous.configRoot) : join(homedir(), ".local", "share", "bottle-school");
   const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: `Where should bottle-school keep its config, state, and output? (Enter keeps ${defaultHome})`, placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
   for (const old of [join(home, "config.json"), join(home, "config", "config.json")])
-    if (existsSync(old) && !flags.force) fail(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it");
+    if (existsSync(old) && !updating) updating = await confirmUpdate(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it", flags.force ?? false, yes);
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
   for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  assertNoHostSecrets({ configRoot }); // bottle-school will not start with one, so say so before the questions
+  // bottle-school will not start with a leftover secret on this host, so settle that before the questions.
+  await untilFixed(async () => {
+    try {
+      assertNoHostSecrets({ configRoot });
+      return undefined;
+    } catch (error) {
+      return (error as Error).message;
+    }
+  }, "add each secret in speaker's Setup, then delete the file or unset the variables", yes);
   // The guest image and VM disks live in microsandbox's own home (MSB_HOME, else ~/.microsandbox), not under --home. It refuses
   // a storage folder with a group- or world-writable ancestor, so check both now, before the other questions.
   const msbHome = microsandboxHome();
@@ -203,20 +242,30 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     if (directory === dirname(directory)) break;
   }
 
-  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", 7001, []);
-  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", 7002, [controlPort]);
+  const running = previous?.controlPort;
+  if (running !== undefined)
+    await untilFixed(
+      () => fetch(`http://127.0.0.1:${running}/api/state`, { signal: AbortSignal.timeout(2_000) }).then((r) => (r.ok ? `bottle-school is running on port ${running}` : undefined), () => undefined),
+      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle)",
+      yes,
+    );
+  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", previous?.controlPort ?? 7001, []);
+  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
 
-  const speakerUrl = (await ask(flags["speaker-url"], yes, undefined, () => p.text({ message: "Speaker's URL as the VMs see it", placeholder: "http://192.168.1.10:3000", validate: (v) => speakerUrlProblem(v ?? "") })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
+  const oldUrl = previous?.speaker?.url;
+  const speakerUrl = (await ask(flags["speaker-url"], yes, oldUrl, () => p.text({ message: oldUrl ? `Speaker's URL as the VMs see it (Enter keeps ${oldUrl})` : "Speaker's URL as the VMs see it", placeholder: oldUrl ?? "http://192.168.1.10:3000", defaultValue: oldUrl, validate: (v) => (v || !oldUrl ? speakerUrlProblem(v ?? "") : undefined) })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
   const urlProblem = speakerUrlProblem(speakerUrl);
   if (urlProblem) fail(`speaker URL ${speakerUrl} is not usable`, urlProblem);
   const healthy = await fetch(`${speakerUrl}/_speaker/health`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.ok, () => false);
   if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker), or correct the URL");
   ok(`Speaker answers at ${speakerUrl}.`);
 
-  const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server: host:port of an OpenAI-compatible server (for example 192.168.1.20:8080)", validate: (v) => (v?.trim() ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
-  const model = await pickModel(endpoint, flags.model, yes);
+  const oldEndpoint = previous?.localModel?.upstream;
+  const endpoint = (await ask(flags["model-endpoint"], yes, oldEndpoint, () => p.text({ message: `Model server: host:port of an OpenAI-compatible server (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`, placeholder: oldEndpoint, defaultValue: oldEndpoint, validate: (v) => (v?.trim() || oldEndpoint ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
+  const model = await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
 
-  const image = await ask(flags.image, yes, "bottle-school-guest", () => p.text({ message: "Guest image tag (Enter keeps bottle-school-guest)", placeholder: "bottle-school-guest", defaultValue: "bottle-school-guest" }));
+  const oldImage = previous?.guestImage ?? "bottle-school-guest";
+  const image = await ask(flags.image, yes, oldImage, () => p.text({ message: `Guest image tag (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }));
   const config = {
     ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
     bindHost: "127.0.0.1",
