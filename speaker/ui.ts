@@ -239,7 +239,7 @@ const uses = (n: number, query: string) =>
 // One line of counts: what the agent asked, what was decided, and what speaker turned away (warned when non-zero).
 const tallies = ({ counts: c }: View['agents'][number]) => {
   const warn = (n: number, word: string) => (n ? html`<span class="warn">${n} ${word}</span>` : `${n} ${word}`)
-  return html`<br><small title="${c.lastRefusal ?? ''}">${c.requests} requests · ${c.granted} granted · ${c.denied} denied · ${warn(c.refused, 'refused')} · ${warn(c.blocked, 'blocked')}</small>`
+  return html`<br><small title="${c.lastRefusal ?? ''}">${c.requests} ${c.requests === 1 ? 'request' : 'requests'} · ${c.granted} granted · ${c.denied} denied · ${warn(c.refused, 'refused')} · ${warn(c.blocked, 'blocked')}</small>`
 }
 const span = (ms: number) =>
   ms % 86_400_000 === 0

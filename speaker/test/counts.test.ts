@@ -49,7 +49,7 @@ test("the admin page counts an agent's refused requests, blocked calls and grant
   const page = await (await call('/admin?section=active', { headers: { cookie } })).text()
   assert.match(
     page,
-    /<small title="[^"]*">1 requests · 1 granted · 0 denied · <span class="warn">1 refused<\/span> · <span class="warn">1 blocked<\/span><\/small>/,
+    /<small title="[^"]*">1 request · 1 granted · 0 denied · <span class="warn">1 refused<\/span> · <span class="warn">1 blocked<\/span><\/small>/,
   )
   assert.match(page, /title="[^"]*no grant for demo\.full/)
 })
