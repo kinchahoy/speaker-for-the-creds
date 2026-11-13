@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { BlockList, isIPv4 } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { isAbsolute, join } from "node:path";

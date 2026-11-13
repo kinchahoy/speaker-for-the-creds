@@ -462,7 +462,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Per secret grant, everything the agent needs to use it through the proxy (the value is never shown).
   const secretsView = (c: Context, agent: Agent) => {
     const base = baseOf(c),
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell path the agent runs as written
       ca = '${XDG_STATE_HOME:-$HOME/.local/state}/speaker/ca.pem'
     // The gh/git hint only makes sense for a secret that GitHub hosts accept.
     const gitHint = (hosts: string[]) =>

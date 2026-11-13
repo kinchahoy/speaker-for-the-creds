@@ -2,8 +2,8 @@
   "name": "bottle-school",
   "version": "3.0.0",
   "private": true,
-  "type": "module",
   "description": "microsandbox micro-VMs for local agents, enforcing speaker-for-the-creds leases.",
+  "type": "module",
   "dependencies": {
     "@clack/prompts": "^1.9.0",
     "@hono/node-server": "^2.1.5",
@@ -15,6 +15,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
     "typescript": "^7.0.2"
   },
   "packageManager": "pnpm@12.16.1"

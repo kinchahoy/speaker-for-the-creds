@@ -115,7 +115,7 @@ async function pickPort(given: string | undefined, yes: boolean, label: string, 
 
 const loopback = (url: string) => {
   const host = new URL(url).hostname;
-  return host === "localhost" || host === "0.0.0.0" || host === "[::1]" || /^127\./.test(host);
+  return host === "localhost" || host === "0.0.0.0" || host === "[::1]" || host.startsWith("127.");
 };
 
 const speakerUrlProblem = (value: string) => {
