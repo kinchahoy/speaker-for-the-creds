@@ -99,8 +99,11 @@ export function adminApp(core: Core) {
     c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
   const props = ['colors', 'shadows', 'borders', 'sizes', 'fonts'].map((f) => asset(`open-props/${f}.min.css`)).join('')
   const lucide = asset('lucide-static/sprite.svg')
-  const symbol = ([kind, [icon]]: [string, [string, number]]) =>
-    lucide.match(new RegExp(`<symbol id="${icon}"[\\s\\S]*?</symbol>`))![0].replace(`"${icon}"`, `"i-${kind}"`)
+  const symbol = ([kind, [icon]]: [string, [string, number]]) => {
+    const found = lucide.match(new RegExp(`<symbol id="${icon}"[\\s\\S]*?</symbol>`))
+    if (!found) throw new Error(`lucide-static has no icon named ${icon} (used for ${kind} in ui.ts)`)
+    return found[0].replace(`"${icon}"`, `"i-${kind}"`)
+  }
   const sprite = `<svg xmlns="http://www.w3.org/2000/svg"><defs>${Object.entries(icons).map(symbol).join('')}</defs></svg>`
   admin.get('/assets/htmx.js', cached('text/javascript', asset('htmx.org/dist/htmx.min.js')))
   admin.get('/assets/open-props.css', cached('text/css', props))
