@@ -147,6 +147,7 @@ NTFY_TOKEN=your-publish-token
 
 - Speaker sends one ntfy push for each new sandbox host and request. A push carries labels and a link to `/admin`. It holds no keys and gives no approval authority.
 - Set `NTFY_URL` and `NTFY_TOPIC` together. The token is optional.
+- Each agent in `/admin` Active has a line of counts (requests, granted, denied, refused, blocked). Refused (rejected before reaching you, such as an unknown name) and blocked (a call refused for lack of a grant) turn red when non-zero; hover for the latest message. Counts reset when speaker restarts.
 - The Inbox and Active panels in `/admin` refresh every 5 seconds. Pending requests expire after 2 hours.
 - A card names the agent, where it came from, and "key" followed by the first 8 characters of the fingerprint (hash) of its agent token. Two agents that call themselves the same thing have different keys, so use it to tell them apart.
 - Self-hosted ntfy needs its [upstream push relay](https://docs.ntfy.sh/config/#ios-instant-notifications) for instant iOS delivery.

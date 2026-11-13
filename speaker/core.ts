@@ -200,7 +200,19 @@ export type Group = z.infer<typeof groupsSchema>[string]
 export type Host = z.infer<typeof hostSchema>
 export type Duration = z.infer<typeof adminDurationSchema>
 export type Usage = { uses: number; lastUsedAt: number | null }
+// What the owner sees at a glance: requests that reached them, items decided, and what speaker turned away (a request
+// refused before the owner saw it, a call blocked for lack of a grant), with the latest such message.
+export type Counts = {
+  requests: number
+  granted: number
+  denied: number
+  refused: number
+  blocked: number
+  lastRefusal?: string
+}
+export const noCounts = (): Counts => ({ requests: 0, granted: 0, denied: 0, refused: 0, blocked: 0 })
 export type Agent = Usage & {
+  counts: Counts
   id: string
   tokenHash: string
   label: string
@@ -310,6 +322,7 @@ export const invalid = (message: string, accepted?: string[], status: 400 | 404 
       { error: 'invalid', message, ...(accepted ? { accepted } : {}), ...(next ? { next } : {}) },
       { status },
     ),
+    message,
   })
 
 export async function createCore(config: ReturnType<typeof readConfig>) {
@@ -402,7 +415,14 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       ...(who ? { label: who.label, agentName: who.agent } : {}),
     }
     console.log(JSON.stringify(entry))
+    // SSH, folder and secrets-proxy refusals are logged by their own modules; each names the agent it turned away.
+    if (['ssh_refused', 'secret_proxy_refused'].includes(event) && who)
+      tally(who, 'blocked', String(fields.why ?? fields.reason))
     if (logged.unshift(entry) > 500) logged.pop()
+  }
+  const tally = (agent: Agent, field: 'refused' | 'blocked', message: string) => {
+    agent.counts[field]++
+    agent.counts.lastRefusal = message
   }
   let version = 0
   const rid = () => randomBytes(16).toString('hex')
@@ -729,6 +749,11 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         strikes.set(strikeKey(request.agentId, item), [...recentStrikes(strikeKey(request.agentId, item)), Date.now()])
       request.granted.push(...yes)
       request.denied.push(...no)
+      const owner = agents.get(request.agentId)
+      if (owner) {
+        owner.counts.granted += yes.length
+        owner.counts.denied += no.length
+      }
       request.items = request.items.filter((item) => !seen.has(item))
       if (yes.length) request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
       if (!request.items.length) {
@@ -825,6 +850,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     request.denied = union(request.denied, outcome.denied)
     if (reason) Object.assign(request, { reason, duration })
     requests.set(request.id, request)
+    if (outcome.ask.length) agent.counts.requests++
+    agent.counts.granted += outcome.granted.length
+    agent.counts.denied += outcome.denied.length
     push()
     audit('request_created', { request: request.id, agent: agent.id, items, reason, trigger })
     if (request.items.length) {
@@ -988,6 +1016,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     secretGrants,
     certificateAuthority,
     useOf,
+    tally,
     revokeGrants,
     lockedUntil,
     retryAfter,

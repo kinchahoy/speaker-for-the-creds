@@ -236,6 +236,11 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
 const chips = { active: '', granted: 'granted, not yet applied', waiting: 'waiting for sandbox host' }
 const uses = (n: number, query: string) =>
   n ? html`<a href="/admin/log?${query}">${plural(n, 'use', 'uses')}</a>` : 'unused'
+// One line of counts: what the agent asked, what was decided, and what speaker turned away (warned when non-zero).
+const tallies = ({ counts: c }: View['agents'][number]) => {
+  const warn = (n: number, word: string) => (n ? html`<span class="warn">${n} ${word}</span>` : `${n} ${word}`)
+  return html`<br><small title="${c.lastRefusal ?? ''}">${c.requests} requests · ${c.granted} granted · ${c.denied} denied · ${warn(c.refused, 'refused')} · ${warn(c.blocked, 'blocked')}</small>`
+}
 const span = (ms: number) =>
   ms % 86_400_000 === 0
     ? `${ms / 86_400_000}d`
@@ -254,7 +259,7 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
     .map((a) => {
       const mine = grants.filter((g) => g.agentId === a.id).sort((x, y) => end(x) - end(y))
       const open = sessions.filter((s) => s.agent === a.id)
-      return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header class="actions"><span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small></span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li data-kind="ssh"><code>${s.what}</code> <small>SSH session open since ${local(s.started)}</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
+      return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header class="actions"><span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li data-kind="ssh"><code>${s.what}</code> <small>SSH session open since ${local(s.started)}</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
     })
   const hostBlocks = hosts
     .filter((h) => h.status === 'approved')
