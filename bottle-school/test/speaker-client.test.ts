@@ -298,7 +298,12 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const f = await fixture(t);
   const { token, speaker } = await f.host(["site", "mcp"]);
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
+  // Speaker refuses an mcp: id its sandbox host has not reported, so this host reports one.
+  const catalog = {
+    mcps: { filesystem: { label: "Files", transport: "stdio" as const, command: "/usr/bin/true", args: [], tools: ["read_file"], write: false } },
+    extensions: {},
+  };
+  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message), SPEAKER_LIMITS, catalog);
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
@@ -307,7 +312,7 @@ test("a grant counts as decided for the agent only once the sandbox host reports
       body: JSON.stringify({ want, reason: "docs", duration: "30m" }),
     }).then((response) => response.json() as Promise<{ status: string; granted: string[]; applying?: string[]; next?: string }>);
   const me = async () =>
-    (await (await fetch(`${f.url}/_speaker/me`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
+    (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
       grants: { item: string; applying?: boolean }[];
     };
 
@@ -373,7 +378,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.deepEqual(secrets, [{ name: "GITHUB_TOKEN", hosts: ["localhost"], env: "GH_TOKEN" }]);
 
   // What the agent is told: the variable to set to a placeholder, and no proxy settings (the sandbox route is built in).
-  const me = (await (await fetch(`${f.url}/_speaker/me`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
+  const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
     secrets: Record<string, { environment: Record<string, string>; hosts: string[] }>;
   };
   const placeholder = await speaker.placeholder(agent.token, "GITHUB_TOKEN");
@@ -402,7 +407,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   // task's live view, or the guest configuration it wrote.
   const guest = await mkdtemp(join(tmpdir(), "bottle-guest-"));
   t.after(() => rm(guest, { recursive: true, force: true }));
-  writeGuestConfig(guest, { ...f.config, localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] }, hostedProviders: [] } as Config, Catalog.parse({ mcps: {}, extensions: {} }), { name: "t", model: "local/m", attended: false }, new Map(), leases, [], [], secrets);
+  writeGuestConfig(guest, { ...f.config, localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] }, hostedProviders: [] } as Config, Catalog.parse({ mcps: {}, extensions: {} }), { name: "t", model: "local/m", attended: false }, new Map(), leases, [], []);
   const written = readdirSync(guest, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));

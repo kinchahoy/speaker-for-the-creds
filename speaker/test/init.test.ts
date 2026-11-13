@@ -109,7 +109,7 @@ test('init speaker --start signs in once with the owner password, so speaker is 
   if (pid) t.after(() => process.kill(pid))
   assert.equal(result.status, 0, result.stderr + result.stdout)
   // Locked speaker answers 503 to every API call; an unlocked one asks for credentials instead.
-  const me = await fetch(`http://127.0.0.1:${port}/_speaker/me`)
+  const me = await fetch(`http://127.0.0.1:${port}/_speaker/catalog`)
   assert.notEqual(me.status, 503)
 })
 

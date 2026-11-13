@@ -109,7 +109,7 @@ Speaker adds the source address and a token fingerprint to the card itself. The 
 
 ### Waiting for the owner
 
-There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on any call, with curl's `--max-time` a little above it. On a service call without access, speaker files a request (or joins the agent's pending one; `Speaker-Reason: <one sentence>` gives the reason), holds the call until the owner decides or the time passes, then forwards it or answers with what to do next. On `POST /_speaker/requests` and on enrollment it holds the reply until the decision. Repeating a call later joins the same pending request. Any reverse proxy in front of speaker must allow requests this long (many default to 60 seconds).
+There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on any call, with curl's `--max-time` a little above it. On a service call without access, speaker files a request (or joins the agent's pending one for the same item; `Speaker-Reason: <one sentence>` gives the reason), holds the call until the owner decides or the time passes, then forwards it or answers with what to do next. On `POST /_speaker/requests` and on enrollment it holds the reply until the decision. Repeating a call later joins the same pending request. Any reverse proxy in front of speaker must allow requests this long (many default to 60 seconds).
 
 ### Requesting access
 
@@ -117,22 +117,22 @@ There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on 
 
 > Ask for the minimum the task needs. If you need three or more items from one group, ask for the group: it is one decision for the owner. Otherwise ask for exactly those items (`site:google.com`), even when a larger group contains them.
 
-The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"…"}`. The agent works with what was granted and does not ask again for what was denied. A request for a target or share that does not exist, or cannot be delivered to that agent, is answered `denied` at once and recorded in the Log (so the owner can spot a typo such as `nass`); it never becomes a card. The owner approves exactly the items shown on the card when tapping Approve; anything an agent adds to a pending request afterwards stays pending.
+The decision comes back per item: `{"granted":[…],"denied":[…],"expiresAt":"…"}`. The agent works with what was granted and does not ask again for what was denied. Every POST is a request of its own, with its own card and its own reply. The one exception is a POST naming exactly the same items (after group expansion) as that agent's pending request: it joins that request, which is how a caller waits by posting again. A name the agent may not ask for fails the whole POST with 400 `invalid`, names the real ones, and creates nothing (see What an agent can see). An item that exists but cannot be delivered to that agent (for example a share not offered over SSH) is answered `denied` at once and recorded in the Log; it never becomes a card. When a request includes `ext:<id>` and the sandbox host's catalog gives that extension `sites`, speaker adds a `site:<host>` item for each to the same request, so the card shows them and one approval covers both. The owner approves exactly the items shown on the card when tapping Approve.
 
 ### Using SSH and folders over SSH
 
-Speaker runs an SSH jump server in its container (see The jump server and relay). It listens only while at least one SSH or over-SSH folder grant is active, on one unusual port chosen at install. `/me` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The login name (`<account>` below) is the account speaker runs as. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
+Speaker runs an SSH jump server in its container (see The jump server and relay). It listens only while at least one SSH or over-SSH folder grant is active, on one unusual port chosen at install. `/catalog` gives the agent the complete command line, including `-o IdentitiesOnly=yes -o BatchMode=yes` and the server's pinned host key, so nothing prompts or hangs. The login name (`<account>` below) is the account speaker runs as. The agent's key identifies the agent; the target or share is named in the command or path, and speaker checks that the agent holds a grant for it.
 
 - **Commands** (`ssh:<target>`): `ssh … <account>@<speaker> <target> '<command>'`; for anything multi-line, `ssh … <account>@<speaker> <target> 'sh -s' <<'EOF'`. The grant also allows `scp` and `sftp` as that account. No interactive terminal: every action is one command, so nothing secret is ever typed into a session. Speaker runs the command on the target as its agent account, exactly as given, and returns the output.
-- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> <account>@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> <account>@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/me` offers `sshfs` first, so the agent works on the share in place rather than copying files around; `scp` and `sftp` are for a one-off copy. `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
+- **Files** (`folder:<share>`): `scp -P <port> -i <key> <file> <account>@<speaker>:<share>/<path>`, `sftp`, or `sshfs -p <port> -o IdentityFile=<key> <account>@<speaker>:<share> <mountpoint>`. The first part of every path names the share. `/catalog` offers `sshfs` first, so the agent works on the share in place rather than copying files around; `scp` and `sftp` are for a one-off copy. `sshfs` needs FUSE (macFUSE on a Mac). Commands, `rsync` and legacy `scp -O` are refused on folder grants with a message to use `sftp`. When a grant ends, an `sshfs` mount stops working; the message gives the unmount command.
 
 ### Knowing where it stands
 
-`GET /_speaker/me` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force), the secrets granted to it with the placeholder to use, the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. What it leaves out, and why, is in What an agent can see.
+`GET /_speaker/catalog` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force), every secret the owner set up (name, hosts, variable, and `state` `granted` or `ask`; the placeholder and setup hints only once granted), the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. For a sandboxed agent it also lists `extensions` and `mcp` from its sandbox host's catalog, each with its state. `text` is the same list as plain markdown for a weak model, with one line per item; the `request_capability` tool pastes it into its description, so it names no routes. What it leaves out, and why, is in What an agent can see. `GET /_speaker/me`, its old name, answers 404 with `next` pointing here.
 
 ### Errors
 
-Every error is JSON with `error`, and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
+Every error is JSON with `error`, and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; when it sends the agent to the docs it names a section, for example `read "Folders and SSH" in GET /_speaker/help`; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
 
 Error codes: `locked` (speaker waits for the owner to sign in), `enroll` (unknown, expired or wrongly placed token: run setup again; the cause is not disclosed), `approval_required`, `denied` (with `retry_after` only after three denials), `invalid` (malformed input; lists the accepted values), `rate_limited`.
 
@@ -182,7 +182,7 @@ Each share lists how it may be delivered: **VM mount** (by a sandbox host that h
 - a sandboxed agent whose sandbox host has the share, where the share allows VM mounts, gets a VM mount (fast, enforced by the VM boundary); the host's share report (`mount: true`), not its registered kinds, says whether it has the share;
 - every other agent, including every direct agent, gets it over SSH, if the share allows that; otherwise the item is answered like a denial.
 
-The card, `/me` and the Active list label each folder grant **VM mount** or **over SSH**, so the owner always sees which one is in use. Over SSH, a sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is much slower than a VM mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
+The card, `/catalog` and the Active list label each folder grant **VM mount** or **over SSH**, so the owner always sees which one is in use. Over SSH, a sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is much slower than a VM mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
 
 ### What is logged
 
@@ -215,8 +215,7 @@ A sandbox host registers with a name and the item kinds it can enforce; the owne
 
 ## Discovery and instructions
 
-- `GET /` and `GET /skill.md`: the core instructions (a few lines: what speaker is, the call form, `Speaker-Wait`, follow `next`, where `/help` is). Browsers get a three-line page.
-- `GET /_speaker/help`: one page with setup (sh and PowerShell), asking and groups, SSH and folders, and sandbox notes.
+- `GET /`, `GET /skill.md` and `GET /_speaker/help` serve one document, `skill/SKILL.md`. Its top fits one screen (what speaker is, the call form, how to wait, follow `next`, where things are); sections follow for Set up (sh and PowerShell), What you can ask for, Asking, Folders and SSH, Secrets, Remote MCP servers and Errors. Sandboxed agents get their guidance from the sandbox host's tool instead, which the document points to in one line. Browsers get a three-line page at `/`.
 - `GET /_speaker/help/<service>`: that service's notes plus the caller's current state.
 
 ### What an agent can see
@@ -225,20 +224,20 @@ Anyone who can reach speaker can enroll as an agent, so a list shown to agents i
 
 | Kind | Direct agent | Sandboxed agent | Where |
 | --- | --- | --- | --- |
-| Services that need a grant (`ask` or `never`) | listed, with its state | listed, with its state | `/me` |
+| Services that need a grant (`ask` or `never`) | listed, with its state | listed, with its state | `/catalog` |
 | Services anyone may read (`open`) | not listed; usable if the agent knows the name | same | — |
-| Groups the agent may ask for | listed, with description and items | same | `/me` |
-| Secrets | only those granted to it | every secret: name, the variable to set, the hosts it goes to | `/me`; for sandboxes, the sandbox host passes speaker's list into the task |
-| Folders (shares) and SSH targets | not listed; only its own grants, with commands | same | `/me` (grants only); inside a group, only a count such as "1 folder" |
+| Groups the agent may ask for | listed, with description and items | same | `/catalog` |
+| Secrets | every secret: name, the variable to set, the hosts it goes to, its state | same | `/catalog` |
+| Folders (shares) and SSH targets | not listed; only its own grants, with commands | same | `/catalog` (grants only); inside a group, only a count such as "1 folder" |
 | Sites | nothing to list: any hostname may be asked for | same | — |
-| In-VM MCP servers and Pi extensions | do not apply | every catalog entry | the sandbox host's catalog, not speaker |
+| In-VM MCP servers and Pi extensions | do not apply | every catalog entry, with its sites | `/catalog`, from the sandbox host's report |
 
-Decided, not yet built:
+What the table means in practice:
 
-- **Secret names are listed to every agent**, direct ones too, as they already are to sandboxed agents. A name reveals little: an agent only ever holds a placeholder, and speaker sends the real value only to the hosts the owner bound it to.
+- **Secret names are listed to every agent**, direct ones too. A name reveals little: an agent only ever holds a placeholder, and speaker sends the real value only to the hosts the owner bound it to.
 - **Folders and SSH targets stay hidden from every agent.** An agent uses the names its task or the owner gives it.
-- **One list, one name.** `/_speaker/me` becomes `/_speaker/catalog`: everything the agent may ask for, each entry with the agent's state (granted until a time, ask, or never), plus its requests. A sandbox host also passes its in-VM MCP servers and extensions to speaker so they appear there. The `request_capability` tool shows the same text in its description. `/_speaker/me` then answers 404 with `next` pointing to `/_speaker/catalog`.
-- **Unknown names are refused the same way for every kind** (`<name> is not something you can ask for`), naming only what the catalog lists. For folders and SSH targets that means no list: `There is no folder named <share> that you can use.`
+- **One list, one name.** `GET /_speaker/catalog` is everything the agent may ask for, each entry with the agent's state (granted until a time, `ask`, or `never`), plus its requests. A sandbox host sends its in-VM MCP servers and extensions over its WebSocket as `{"type":"catalog","mcps":[{id,label,tools}],"extensions":[{id,label,description,tools,sites}]}`, kept like its share report and cleared when it disconnects.
+- **Unknown names are refused the same way for every kind**: 400 `invalid` with `<name> is not something you can ask for. <Kind> you can ask for: <real names>.`, before anything reaches the owner. Extensions and MCP servers are checked against the host's catalog. For folders and SSH targets there is no list: `There is no folder named <share> that you can use.`
 
 ## Routes
 
@@ -247,12 +246,12 @@ Decided, not yet built:
 | `GET /`, `GET /skill.md` | anyone | core instructions |
 | `GET /_speaker/help[/<service>]` | anyone (service state needs a token) | full instructions, service notes |
 | `POST /_speaker/agents` | anyone, rate limited | enroll a direct agent with its first request |
-| `GET /_speaker/me` | agent | everything about the caller |
+| `GET /_speaker/catalog` | agent | everything the caller may ask for and where it stands |
 | `POST /_speaker/requests` | agent, sandbox host for its agents | request items and groups |
 | `* /<service>/<path>` | agent | forwarded call, with optional `Speaker-Wait` |
 | SSH on one unusual port | agent with an SSH or folder grant | commands and file transfer, relayed |
 | `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |
-| `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents |
+| `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents; the host reports its shares and catalog |
 | `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
 | `GET /_speaker/health` | anyone | liveness |
 | `/admin/...` | owner | HTML forms only |
@@ -289,10 +288,10 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 **Agents and tokens**
 
 - One header file per user per machine; every agent of that user on that machine shares it, and each request carries its own reason.
-- Enrollment may carry an empty `want`: the agent then reads `/me` and asks once it knows what it needs.
+- Enrollment may carry an empty `want`: the agent then reads `/catalog` and asks once it knows what it needs.
 - An agent may send its `sshKey` with any request; a newer key replaces the older one.
 - After **Revoke agent**, its token answers `denied` with "stop" (not `enroll`) until speaker restarts.
-- Commands and links in `/help` and `/me` use the address the caller used to reach speaker, so `localhost` on a single laptop and the LAN or tailnet name elsewhere both work.
+- Commands and links in `/help` and `/catalog` use the address the caller used to reach speaker, so `localhost` on a single laptop and the LAN or tailnet name elsewhere both work.
 
 **Requests and waiting**
 
@@ -306,19 +305,19 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 
 **SSH**
 
-- On any refusal or ended session, the relay prints one line on standard error saying what happened and to check `GET /_speaker/me`.
+- On any refusal or ended session, the relay prints one line on standard error saying what happened and to check `GET /_speaker/catalog`.
 - In Setup, each target shows the address speaker will appear from (the `from=` value); the owner can edit it or list several.
 
 **Sandboxes**
 
 - A sandbox host authenticates with the token it received at registration; agents it creates need no card of their own.
 - At task start the sandbox host gives the VM speaker's address, the agent's token (as a placeholder), and the skill. Speaker is always reachable from the VM. The template's `want`, `label` and `duration` become the task's first request; the task starts at once and Pi works on whatever needs no new access while it waits.
-- The sandbox host tells each task, in its instructions, the names of the `mcp:` and `ext:` entries in its catalog and the secrets it can use. Groups appear in `/me`.
-- A blocked site gets a reply from the sandbox host naming the item to request (`site:<host>`).
+- The sandbox host tells each task, in its instructions, the names of the `mcp:` and `ext:` entries in its catalog and the secrets it can use. Groups appear in `/catalog`.
+- The sandbox host sends speaker its catalog of `mcp:` and `ext:` entries over its WebSocket. Speaker lists them, with every secret and group, in `/catalog`, and the `request_capability` tool shows that text to the task.
 - A grant for a sandbox-only item counts as decided for the agent once the sandbox host reports it in force.
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
-- A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/me` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
-- A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/me` gives the path.
+- A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
+- A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/catalog` gives the path.
 - A share the sandbox host reported with `mount: false` (or did not report) is delivered to its agents over SSH, and the host mounts it itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
 - After a speaker restart, the sandbox host re-creates the agents of its running tasks and files each task's template request again; the owner sees one card per task.
 
@@ -373,7 +372,7 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 - value: a GitHub fine-grained token limited to the repositories and permissions tasks should have;
 - allowed hosts `api.github.com` and `github.com`.
 
-**At task start.** Nothing is set in the VM: speaker issues the placeholder (`speaker-placeholder-<random, per agent>`) only when the grant exists. The agent reads it from `/me` and sets `GH_TOKEN` on the command that needs it, running `gh auth setup-git` once so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
+**At task start.** Nothing is set in the VM: speaker issues the placeholder (`speaker-placeholder-<random, per agent>`) only when the grant exists. The agent reads it from `/catalog` and sets `GH_TOKEN` on the command that needs it, running `gh auth setup-git` once so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
 
 **The agent asks.** Pi requests `secret:GITHUB_TOKEN` with a reason, for example "open a pull request for the fix". The owner's card shows the secret, its allowed hosts, and the write tint. Granting it also allows the sandbox to reach those two hosts; no separate `site:` items are needed. Speaker tells the sandbox host over its WebSocket that the agent holds `secret:GITHUB_TOKEN` for `api.github.com` and `github.com`, until the grant's end. The value is not sent.
 
@@ -403,4 +402,4 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 
 ### The same for a direct agent
 
-Claude Code holding `secret:GITHUB_TOKEN` runs `gh` with three environment variables from `/me`: `GH_TOKEN=<placeholder>`, `HTTPS_PROXY` pointing at speaker's proxy (with its agent token as the proxy credential), and `SSL_CERT_FILE` naming speaker's certificate authority (fetched once from `/me`). `gh`, and `git` with `gh auth setup-git`, then work exactly as in the sandbox, and the token never reaches the agent's machine. Use it when it is reasonable; an owner may equally give a direct agent its own token.
+Claude Code holding `secret:GITHUB_TOKEN` runs `gh` with three environment variables from `/catalog`: `GH_TOKEN=<placeholder>`, `HTTPS_PROXY` pointing at speaker's proxy (with its agent token as the proxy credential), and `SSL_CERT_FILE` naming speaker's certificate authority (fetched once from `/catalog`). `gh`, and `git` with `gh auth setup-git`, then work exactly as in the sandbox, and the token never reaches the agent's machine. Use it when it is reasonable; an owner may equally give a direct agent its own token.

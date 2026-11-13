@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./leases.ts";
-import type { Lease, SecretInfo } from "./speaker.ts";
+import type { Lease } from "./speaker.ts";
 
 /**
  * An MCP server that runs inside the VM from an image-local command. Remote and hosted MCP servers are not catalog
@@ -33,6 +33,8 @@ export const Catalog = z
           description: z.string().min(1),
           /** The tools the extension registers; `--tools` is an allowlist, so unlisted tools stay hidden. */
           tools: z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)),
+          /** Hosts the extension itself contacts; speaker adds them to a request for it. */
+          sites: z.array(z.string().min(1)),
           /** Guidance appended to the system prompt while the extension is loaded. */
           note: z.string().min(1).optional(),
         })
@@ -108,27 +110,11 @@ export const systemNote = (
   leases: Lease[],
   catalog: Catalog,
   extensionIds: string[],
-  secrets: SecretInfo[] = [],
 ) => {
   const rows = unexpired(leases).map(
     (lease) =>
       `${lease.kind} ${lease.ref} (${lease.expiresAt ? `expires ${lease.expiresAt}` : "permanent"})`,
   );
-  const mcpCatalog =
-    Object.entries(catalog.mcps)
-      .map(
-        ([id, entry]) =>
-          `- mcp:${id}: ${entry.label}; tools: ${entry.tools.join(", ")}; ${entry.write ? "can write" : "read-only"}`,
-      )
-      .join("\n") || "- none";
-  const secretCatalog =
-    secrets
-      .map(({ name, hosts, env }) => `- secret:${name}: set ${env} to its placeholder; used for ${hosts.join(", ")}`)
-      .join("\n") || "- none";
-  const extensionCatalog =
-    Object.entries(catalog.extensions)
-      .map(([id, entry]) => `- ext:${id}: ${entry.label}. ${entry.description}${extensionIds.includes(id) ? " (loaded)" : ""}`)
-      .join("\n") || "- none";
   const notes = extensionIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
     return note ? ["", `## Extension ${id}`, "", note] : [];
@@ -157,8 +143,7 @@ export const systemNote = (
     "- JavaScript work: write TypeScript. Run it with `node file.ts`. Check types with `tsc --noEmit`. Manage packages with pnpm, lint with `oxlint`, and format with `oxfmt`.",
     "- Browser automation: Playwright with headless Chromium is installed.",
     "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (for example GitHub releases) only when no registry package exists.",
-    "- Common `site:` hosts: PyPI `pypi.org`, `files.pythonhosted.org`; npm `registry.npmjs.org`; GitHub `github.com`, `codeload.github.com`, `raw.githubusercontent.com`. For other sites, request the exact hostnames the tool contacts, and check redirects. Prefer a group (`group:<name>`, listed by `GET /_speaker/me`) when it covers three or more of the items you need.",
-    "- For homelab APIs, remote MCP servers, and every other item kind, follow the `access-and-creds` skill.",
+    "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`. Its description lists what you can ask for.",
     "",
     "## Leases at this Pi start",
     "",
@@ -166,33 +151,6 @@ export const systemNote = (
     "",
     "A lease ends at its expiry time. After that, requests it covered return 403 until the owner approves a new one.",
     "A denied HTTP request returns 403. The owner can change leases while you run, so trust the result of the request over this list.",
-    "When a lease blocks work you need, call `request_capability` once, with `want` set to a list of every item you need. It waits for the owner's decision and returns what was granted and denied. Meanwhile, continue independent work.",
-    "Items you can request:",
-    "",
-    "- `site:<host>`: a hostname such as `site:pypi.org`, or `site:*.example.com` (subdomains only). Request several hostnames in one call.",
-    "- `secret:<NAME>`: use one of the owner's secrets (listed below) on the hosts the owner bound it to, without seeing it. Granting it also opens those hosts.",
-    "- `folder:<share>` for read-only access, or `folder:<share>:rw` to write. Once granted, it is at `/input/<share>`.",
-    "- `mcp:<id>`: an MCP server that runs inside this VM, from the MCP catalog below (if any; exact id). It starts after Pi restarts at idle.",
-    "- `ext:<id>`: an extension from the extension catalog below (if any; exact id). Its tools appear after Pi restarts at idle, and this session resumes.",
-    "- `<service>.read` or `<service>.full`: a homelab API or a remote MCP server, which speaker hosts. Call `$SPEAKER_URL/<service>` with `Authorization: Bearer $SPEAKER_TOKEN`. `/me` marks MCP services `mcp: true`; they take Streamable HTTP JSON-RPC (POST). Remote MCP servers are never `mcp:` items.",
-    "",
-    "## Using a secret",
-    "",
-    "After `secret:<NAME>` is granted, `GET $SPEAKER_URL/_speaker/me` shows `secrets.<NAME>`: a variable whose value is a placeholder. Set it on the one command that needs it, for example `GH_TOKEN=<placeholder> gh pr list`. For `git`, run `gh auth setup-git` once. Speaker's proxy swaps in the real value on the way out. Never print the placeholder or your speaker token.",
-    "",
-    "## Secrets you can ask for",
-    "",
-    secretCatalog,
-    "",
-    "## Available MCP catalog (run inside this VM)",
-    "",
-    mcpCatalog,
-    "",
-    "## Available extension catalog",
-    "",
-    extensionCatalog,
-    "",
-    "Request access up front when you know you need it. Otherwise, request `site:<host>` after a fetch returns 403. Use an item only after `request_capability` reports it granted.",
     "The owner decides in a separate trusted surface. Nothing you print to this terminal grants anything.",
     ...notes,
     ...(task.attended ? attendedNote : unattendedNote),
@@ -233,6 +191,9 @@ const webSearchJson = {
   provider: "exa",
   webSearch: { enabled: true, allowedProviders: ["exa"] },
   fetchRouting: { providers: ["http"], allowRemoteHostedProviders: false },
+  // pi-web-access resolves each hostname with node:dns before fetching (its SSRF guard); the guest has no DNS, so that
+  // failed with EAI_AGAIN even for leased hosts. This hands the hostname to HTTPS_PROXY instead; our egress proxy already refuses internal addresses.
+  ssrf: { trustEnvProxy: true },
   allowBrowserCookies: false,
   workflow: "none",
   autoOpenBrowser: false,
@@ -262,7 +223,6 @@ export const writeGuestConfig = (
   leases: Lease[],
   mcpIds: string[],
   extensionIds: string[],
-  secrets: SecretInfo[] = [],
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
@@ -270,15 +230,13 @@ export const writeGuestConfig = (
     `${import.meta.dirname}/../guest/extensions/request-capability.ts`,
     `${directory}/extensions/request-capability.ts`,
   );
-  // The access-and-creds skill is the one agents use anywhere; it lives with speaker and is mounted unchanged. It is the only skill the guest gets.
-  mkdirSync(`${directory}/skills/access-and-creds`, { recursive: true });
-  copyFileSync(`${import.meta.dirname}/../../speaker/skill/SKILL.md`, `${directory}/skills/access-and-creds/SKILL.md`);
+  copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
   const writeJson = (name: string, value: unknown) =>
     writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config, keys));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
   writeJson("web-search.json", webSearchJson);
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds, secrets));
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
   const [provider, ...model] = task.model.split("/");
@@ -311,8 +269,6 @@ export const writeGuestConfig = (
     "--no-themes",
     "--no-context-files",
     "--no-approve",
-    "--skill",
-    "/etc/bottle-school/skills/access-and-creds",
     "--append-system-prompt",
     "/etc/bottle-school/APPEND_SYSTEM.md",
     "-e",

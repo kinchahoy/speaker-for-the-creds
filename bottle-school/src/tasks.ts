@@ -119,6 +119,8 @@ export class Tasks {
         process.exitCode = 1;
         process.kill(process.pid, "SIGTERM");
       },
+      undefined,
+      catalog,
     );
   }
 
@@ -182,7 +184,7 @@ export class Tasks {
     const subject = await this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`);
     let guest: Guest;
     try {
-      writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, keys, [], [], [], this.secrets);
+      writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, keys, [], [], []);
       guest = await this.#boot(
         this.config,
         live,
@@ -356,7 +358,7 @@ export class Tasks {
         const mcpIds = this.#wanted(task, "mcp");
         const extensionIds = this.#wanted(task, "extension");
         try {
-          writeGuestConfig(task.guestConfigDir, this.config, this.catalog, task, task.keys, task.leases, mcpIds, extensionIds, this.secrets);
+          writeGuestConfig(task.guestConfigDir, this.config, this.catalog, task, task.keys, task.leases, mcpIds, extensionIds);
           await pi.restart(task.guest);
         } catch (error) {
           note(task.live, `Pi restart failed: ${(error as Error).message}`);

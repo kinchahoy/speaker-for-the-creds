@@ -161,15 +161,15 @@ async function fixture(t: TestContext) {
     return page
   }
   const me = async () =>
-    (await (await agent('/_speaker/me')).json()) as {
+    (await (await agent('/_speaker/catalog')).json()) as {
       ssh: { item: string; commands: string[]; knownHosts: { line: string } }[]
     }
-  // The command line /me prints for an item, with the agent's own details filled in.
+  // The command line /catalog prints for an item, with the agent's own details filled in.
   async function line(item: string, which: 'ssh' | 'sftp' | 'sshfs' | 'scp', fill: Record<string, string> = {}) {
     const found = (await me()).ssh.find((entry) => entry.item === item)
     const text = found?.commands.find((c) => c.startsWith(which))
-    assert.ok(text, `${item} has a ${which} line in /me`)
-    // The one-time step /me gives: save the jump server's host key line.
+    assert.ok(text, `${item} has a ${which} line in /catalog`)
+    // The one-time step /catalog gives: save the jump server's host key line.
     await writeFile(join(dir, 'known_hosts'), `${found?.knownHosts.line}\n`)
     const filled = { '<key>': join(dir, 'agent_key'), '<known_hosts>': join(dir, 'known_hosts'), ...fill }
     return Object.entries(filled).reduce((l, [k, v]) => l.replaceAll(k, v), text)
@@ -217,7 +217,7 @@ test('a command runs through the jump server as the target account and is logged
   const [code] = (await once(running, 'close')) as [number]
   assert.notEqual(code, 0)
   assert.ok(Date.now() - started < 5000, 'the session ends promptly')
-  assert.match(errors, /speaker: the session ended: its grant ended\. Check GET \/_speaker\/me/)
+  assert.match(errors, /speaker: the session ended: its grant ended\. Check GET \/_speaker\/catalog/)
   assert.deepEqual((await f.me()).ssh, [])
   assert.match(await f.ownerGet('/admin/log'), /ssh session end/)
 })
@@ -286,17 +286,22 @@ test('a folder grant is SFTP inside its share: reads work, other paths, writes o
     assert.ok(log.includes(text), `the log has ${text}`)
 })
 
-test('names that do not exist or cannot be delivered are denied at once, logged, and never become a card', async (t) => {
+test('names that do not exist are refused without listing any real name, and never become a card', async (t) => {
   const f = await fixture(t)
-  const response = await f.enroll(['ssh:nope', 'folder:nope'])
-  const { request } = (await response.json()) as { request: { status: string; granted: string[]; denied: string[] } }
-  assert.deepEqual([request.status, request.granted, request.denied], ['decided', [], ['ssh:nope', 'folder:nope']])
+  for (const [item, message] of [
+    ['ssh:nope', 'There is no SSH target named nope that you can use.'],
+    ['folder:nope', 'There is no folder named nope that you can use.'],
+  ]) {
+    const response = await f.enroll([item])
+    assert.equal(response.status, 400)
+    const body = (await response.json()) as { error: string; message: string; next: string }
+    assert.deepEqual([body.error, body.message], ['invalid', message])
+    assert.match(body.next, /read "Folders and SSH" in GET \/_speaker\/help/)
+    assert.doesNotMatch(JSON.stringify(body), /box|pics|docs/)
+  }
   assert.doesNotMatch(await f.ownerGet('/admin'), /id="request-/)
-  const log = await f.ownerGet('/admin/log')
-  assert.match(log, /request unavailable/)
-  assert.ok(log.includes('there is no target named nope'))
   // An agent that never sent a key cannot ask for SSH at all.
-  assert.equal((await f.enroll(['ssh:nope'], { tokenHash: sha('keyless') })).status, 400)
+  assert.equal((await f.enroll(['ssh:box'], { tokenHash: sha('keyless') })).status, 400)
   // The owner cannot add root as a target by accident.
   const root = await f.ownerForm('/ssh/targets/add', [
     ['alias', 'rooted'],
@@ -306,7 +311,7 @@ test('names that do not exist or cannot be delivered are denied at once, logged,
   ])
   assert.match(decodeURIComponent(root.headers.get('location') ?? ''), /sshError=Refused: root has no limits/)
   // A group naming targets and shares shows the agent only a count, never the names.
-  const { groups } = (await (await f.agent('/_speaker/me')).json()) as { groups: object }
+  const { groups } = (await (await f.agent('/_speaker/catalog')).json()) as { groups: object }
   assert.deepEqual(groups, { ops: { description: 'Ops', items: [], also: '1 SSH target, 2 folders' } })
 })
 
@@ -360,10 +365,10 @@ async function sandboxHost(f: Fixture, t: TestContext, shares: { name: string; m
   assert.ok(grants.length >= 2, 'speaker took the share report')
   return {
     ask: (body: object) => post('/_speaker/requests', token, { reason: 'test', duration: '1h', ...body }),
-    // The items /me offers this agent SSH commands for: its over-SSH grants.
+    // The items /catalog offers this agent SSH commands for: its over-SSH grants.
     overSsh: async () =>
       (
-        (await (await f.agent('/_speaker/me', { headers: { authorization: `Bearer ${token}` } })).json()) as {
+        (await (await f.agent('/_speaker/catalog', { headers: { authorization: `Bearer ${token}` } })).json()) as {
           ssh?: { item: string }[]
         }
       ).ssh?.map((entry) => entry.item) ?? [],
