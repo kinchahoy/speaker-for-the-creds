@@ -14,10 +14,10 @@ raw = true
 run = "node init.ts"
 
 [tasks.check]
-description = "Typecheck both packages (and the init CLI) and lint speaker"
+description = "Typecheck, lint (oxlint), and format-check (oxfmt) both packages"
 run = [
-  "cd speaker && pnpm exec tsc --noEmit && pnpm exec biome check .",
-  "cd bottle-school && pnpm exec tsc --noEmit",
+  "cd speaker && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
+  "cd bottle-school && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
 ]
 
 [tasks.ci]
@@ -25,9 +25,8 @@ description = "Typecheck, lint, and test both packages"
 depends = ["check", "test"]
 
 [tasks.format]
-description = "Format speaker with Biome"
-dir = "speaker"
-run = "pnpm exec biome check --write ."
+description = "Format both packages with oxfmt"
+run = ["cd speaker && pnpm exec oxfmt", "cd bottle-school && pnpm exec oxfmt"]
 
 [tasks.test]
 description = "Run both packages' tests"

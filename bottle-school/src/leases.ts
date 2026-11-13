@@ -38,9 +38,7 @@ export type Template = z.infer<typeof Template>;
 /** The task's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
 export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
   const want = [...new Set([...template.want, ...extra])];
-  return want.length
-    ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration }
-    : undefined;
+  return want.length ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration } : undefined;
 };
 
 /**
@@ -56,21 +54,17 @@ export const attendedFor = (template: Template, input: { prompt?: string; attend
 
 export const loadTemplates = (path: string) => {
   const templates = z.array(Template).parse(JSON.parse(readFileSync(path, "utf8")));
-  if (new Set(templates.map(({ id }) => id)).size !== templates.length)
-    throw new Error("templates repeat an id");
+  if (new Set(templates.map(({ id }) => id)).size !== templates.length) throw new Error("templates repeat an id");
   return new Map(templates.map((template) => [template.id, template]));
 };
 
 /** An entry carries its own expiry; every use compares it with the current time. */
 export type Timed = { expiresAt: string | null };
-export const unexpired = <T extends Timed>(entries: T[]) =>
-  entries.filter((entry) => entry.expiresAt === null || Date.parse(entry.expiresAt) > Date.now());
+export const unexpired = <T extends Timed>(entries: T[]) => entries.filter((entry) => entry.expiresAt === null || Date.parse(entry.expiresAt) > Date.now());
 
 export const hostMatches = (patterns: readonly string[], host: string) => {
   const normalized = host.toLowerCase();
-  return patterns.some((pattern) =>
-    pattern.startsWith("*.") ? normalized.endsWith(pattern.slice(1)) : pattern === normalized,
-  );
+  return patterns.some((pattern) => (pattern.startsWith("*.") ? normalized.endsWith(pattern.slice(1)) : pattern === normalized));
 };
 
 /** Guest egress currently supports IPv4 destinations only. */
@@ -78,7 +72,13 @@ export const ipv4Destination = (ip: string) => isIPv4(ip);
 
 /** Speaker owns approvals; bottle-school owns the syntax and local meaning of refs. */
 const host = z.hostname().refine((value) => value === value.toLowerCase());
-export const siteRef = z.union([host, z.string().startsWith("*.").refine((value) => host.safeParse(value.slice(2)).success)]);
+export const siteRef = z.union([
+  host,
+  z
+    .string()
+    .startsWith("*.")
+    .refine((value) => host.safeParse(value.slice(2)).success),
+]);
 /** A `secret:<NAME>` grant names a secret in speaker and arrives with the hosts the owner bound it to. */
 export const secretRef = z.string().regex(/^[A-Za-z0-9_]+$/);
 export const secretHosts = z.array(siteRef).min(1);
@@ -89,7 +89,6 @@ export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) =>
   if (url.origin !== speaker.origin) return false;
   const path = url.pathname;
   if (path.startsWith("/_speaker/"))
-    return (method === "GET" && /^\/_speaker\/(health|catalog|help(?:\/[a-zA-Z0-9_-]+)?)$/.test(path)) ||
-      (method === "POST" && path === "/_speaker/requests");
+    return (method === "GET" && /^\/_speaker\/(health|catalog|help(?:\/[a-zA-Z0-9_-]+)?)$/.test(path)) || (method === "POST" && path === "/_speaker/requests");
   return /^\/[a-zA-Z0-9_-]+(?:\/|$)/.test(path) && !/^\/admin(?:\/|$)/.test(path) && !path.startsWith("/_");
 };

@@ -1,15 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  needsRestart,
-  piToolNames,
-  reply,
-  toolDescription,
-  UNDECIDED,
-  type CatalogView,
-  type Decision,
-} from "./reply.ts";
+import { needsRestart, piToolNames, reply, toolDescription, UNDECIDED, type CatalogView, type Decision } from "./reply.ts";
 
 const control = { url: process.env.BOTTLE_SCHOOL_CONTROL!, token: process.env.BOTTLE_SCHOOL_TOKEN! };
 // SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token (and the task's SSH public key,
@@ -33,14 +25,7 @@ class SpeakerError extends Error {
 }
 
 /** `wait` holds the reply for up to that many seconds (speaker's Speaker-Wait header). */
-const call = async (
-  to: { url: string; token: string },
-  method: "GET" | "POST",
-  path: string,
-  body?: unknown,
-  signal?: AbortSignal,
-  wait?: number,
-) => {
+const call = async (to: { url: string; token: string }, method: "GET" | "POST", path: string, body?: unknown, signal?: AbortSignal, wait?: number) => {
   const response = await fetch(`${to.url}/${path}`, {
     method,
     headers: {
@@ -57,12 +42,8 @@ const call = async (
 };
 
 /** The last assistant text, first 400 characters. The owner sees it in the Tasks view. */
-const lastMessage = (
-  entries: { type: string; message?: { role?: string; content?: unknown } }[],
-) => {
-  const content = entries
-    .filter((entry) => entry.type === "message" && entry.message?.role === "assistant")
-    .at(-1)?.message?.content;
+const lastMessage = (entries: { type: string; message?: { role?: string; content?: unknown } }[]) => {
+  const content = entries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant").at(-1)?.message?.content;
   const text =
     typeof content === "string"
       ? content
@@ -80,21 +61,14 @@ const lastMessage = (
  * approves each request in speaker; nothing here grants access.
  */
 export default async function (pi: ExtensionAPI) {
-  const report = (busy: boolean, summary?: string) =>
-    void call(control, "POST", "guest/status", { busy, summary }).catch(() => undefined);
+  const report = (busy: boolean, summary?: string) => void call(control, "POST", "guest/status", { busy, summary }).catch(() => undefined);
   // A run spans every model and tool step; Pi settles only when it will not continue on its own.
   pi.on("agent_start", () => report(true));
-  pi.on("agent_settled", (_event, ctx) =>
-    report(false, lastMessage(ctx.sessionManager.getBranch())),
-  );
+  pi.on("agent_settled", (_event, ctx) => report(false, lastMessage(ctx.sessionManager.getBranch())));
   pi.on("session_start", (_event, ctx) => {
     report(false);
     // The owner's one-shot prompt starts a fresh session once; a restart resumes without replaying it.
-    if (
-      existsSync(PROMPT) &&
-      !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")
-    )
-      pi.sendUserMessage(readFileSync(PROMPT, "utf8"));
+    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) pi.sendUserMessage(readFileSync(PROMPT, "utf8"));
     // After the restart the agent was told to wait for, say which of those tools are now loaded.
     else if (existsSync(PENDING_TOOLS)) {
       const wanted = JSON.parse(readFileSync(PENDING_TOOLS, "utf8")) as string[];
@@ -138,11 +112,9 @@ export default async function (pi: ExtensionAPI) {
         let decision: Decision;
         try {
           decision = (await call(speaker, "POST", "requests", params, signal, 60)) as Decision;
-          while (decision.status === "pending" && Date.now() < deadline)
-            decision = (await call(speaker, "POST", "requests", params, signal, 60)) as Decision;
+          while (decision.status === "pending" && Date.now() < deadline) decision = (await call(speaker, "POST", "requests", params, signal, 60)) as Decision;
         } catch (error) {
-          if (error instanceof SpeakerError && error.status === 400)
-            return done(`Not requested: ${error.body.message ?? error.message}`);
+          if (error instanceof SpeakerError && error.status === 400) return done(`Not requested: ${error.body.message ?? error.message}`);
           throw error;
         }
         if (decision.status === "pending") return done(UNDECIDED, decision);
@@ -157,7 +129,7 @@ export default async function (pi: ExtensionAPI) {
         const applying = (view: CatalogView) =>
           (view.grants ?? []).filter((grant) => grant.applying && waitFor.includes(grant.item)).map((grant) => grant.item);
         let catalog = await fetchCatalog();
-        for (const start = Date.now(); applying(catalog).length && Date.now() - start < APPLY_MAX_MS; ) {
+        for (const start = Date.now(); applying(catalog).length && Date.now() - start < APPLY_MAX_MS;) {
           await sleep(APPLY_POLL_MS);
           catalog = await fetchCatalog();
         }
@@ -169,8 +141,7 @@ export default async function (pi: ExtensionAPI) {
         }
         let text = reply(decision, catalog, help);
         const late = applying(catalog);
-        if (late.length)
-          text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
+        if (late.length) text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
         const tools = granted.flatMap((item) => piToolNames(item, catalog));
         if (tools.length) {
           mkdirSync("/work/.speaker", { recursive: true });

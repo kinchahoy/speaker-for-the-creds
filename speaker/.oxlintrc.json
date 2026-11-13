@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    // [...map.values()] snapshots the collection before entries are deleted during the loop.
+    "unicorn/no-useless-spread": "off",
+    // `const { connection, ...rest }` deliberately drops a header.
+    "no-unused-vars": ["warn", { "ignoreRestSiblings": true }]
+  }
+}

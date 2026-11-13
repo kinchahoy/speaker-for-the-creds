@@ -80,11 +80,7 @@ const differs = (wanted: string[], running: string[]) => wanted.length !== runni
  */
 export const inForce = (leases: Lease[], running: { mcp: string[]; extensions: string[] }) =>
   unexpired(leases)
-    .filter(
-      (lease) =>
-        (lease.kind !== "mcp" || running.mcp.includes(lease.ref)) &&
-        (lease.kind !== "extension" || running.extensions.includes(lease.ref)),
-    )
+    .filter((lease) => (lease.kind !== "mcp" || running.mcp.includes(lease.ref)) && (lease.kind !== "extension" || running.extensions.includes(lease.ref)))
     .map((lease) => lease.id);
 
 export class Tasks {
@@ -142,8 +138,7 @@ export class Tasks {
 
   async create(input: { name?: string; template: string; model?: string; prompt?: string; attended?: boolean; hours?: number }): Promise<Task> {
     // Closed and failed-archive tasks stay listed for the owner but no longer hold a slot.
-    if (this.list().filter((task) => !closed(task)).length >= this.config.maxTasks)
-      throw new Error(`already running ${this.config.maxTasks} tasks`);
+    if (this.list().filter((task) => !closed(task)).length >= this.config.maxTasks) throw new Error(`already running ${this.config.maxTasks} tasks`);
     const template = this.templates.get(input.template);
     if (!template) throw new Error(`no template ${input.template}`);
     const attended = attendedFor(template, input);
@@ -152,9 +147,11 @@ export class Tasks {
     const models = availableModels(this.config).map((entry) => entry.id);
     if (!models.includes(model)) throw new Error(`model ${model} is not configured; use one of: ${models.join(", ")}`);
     const hours = input.hours ?? template.limits.maxRuntimeHours;
-    if (hours > template.limits.maxRuntimeHours)
-      throw new Error(`template ${template.id} limits a task to ${template.limits.maxRuntimeHours} hours`);
-    for (const [root, GiB, label] of [[this.config.stateRoot, template.limits.workGiB, "state"], [this.config.outputRoot, 1, "output"]] as const) {
+    if (hours > template.limits.maxRuntimeHours) throw new Error(`template ${template.id} limits a task to ${template.limits.maxRuntimeHours} hours`);
+    for (const [root, GiB, label] of [
+      [this.config.stateRoot, template.limits.workGiB, "state"],
+      [this.config.outputRoot, 1, "output"],
+    ] as const) {
       const disk = await statfs(root);
       if (disk.bavail * disk.bsize < GiB * 1024 ** 3) throw new Error(`the ${label} filesystem has less than ${GiB} GiB free`);
     }

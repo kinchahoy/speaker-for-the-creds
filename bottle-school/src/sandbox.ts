@@ -70,7 +70,11 @@ export const countModelRequest = (live: Live) => {
  */
 export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: () => Promise<Dispatcher>) => {
   let viaSpeaker: Dispatcher | undefined;
-  const covered = (host: string) => hostMatches(unexpired(live.secretHosts).flatMap((entry) => entry.hosts), host);
+  const covered = (host: string) =>
+    hostMatches(
+      unexpired(live.secretHosts).flatMap((entry) => entry.hosts),
+      host,
+    );
   return {
     allow: async (host: string) => {
       if (!covered(host)) return undefined;
@@ -93,7 +97,16 @@ export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: (
 };
 
 const internal = new BlockList();
-for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16], ["255.0.0.0", 8]] as const)
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+  ["255.0.0.0", 8],
+] as const)
   internal.addSubnet(network, prefix, "ipv4");
 internal.addAddress("::1", "ipv6");
 export const isInternalIp = (ip: string) => internal.check(ip, ip.includes(":") ? "ipv6" : "ipv4");
@@ -122,7 +135,13 @@ export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof s
   }
   const viaSpeaker = await route.allow(host);
   if (viaSpeaker !== undefined) return viaSpeaker ? ("speaker" as const) : ("refuse" as const);
-  if (hostMatches(unexpired(live.hosts).map((entry) => entry.host), host)) return "direct" as const;
+  if (
+    hostMatches(
+      unexpired(live.hosts).map((entry) => entry.host),
+      host,
+    )
+  )
+    return "direct" as const;
   note(live, `blocked a request to ${host}`);
   return "refuse" as const;
 };
@@ -139,7 +158,8 @@ export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, s
   new ProxyServer({
     prepareRequestFunction: async ({ hostname }) => {
       const decision = await egressDecision(live, route, hostname);
-      if (decision === "refuse") throw new RequestError(`${hostname} is not approved for this task. To get access, call request_capability with site:${hostname}.`, 403);
+      if (decision === "refuse")
+        throw new RequestError(`${hostname} is not approved for this task. To get access, call request_capability with site:${hostname}.`, 403);
       return decision === "speaker" ? { upstreamProxyUrl: `http://agent:${speaker.token}@${speaker.proxy}` } : { dnsLookup: publicLookup };
     },
   });
@@ -216,7 +236,10 @@ const forward = async (
     if (total < limit) chunks.push(chunk.subarray(0, limit - total));
     total += chunk.length;
   });
-  const complete = await pipeline(upstream.body, res).then(() => true, () => false);
+  const complete = await pipeline(upstream.body, res).then(
+    () => true,
+    () => false,
+  );
   if (options.record)
     recordHttp(
       options.record.live,
@@ -234,17 +257,14 @@ const forward = async (
  * The model endpoint: the local model, or `/hosted/<provider>/...` through speaker's proxy (which holds the key). Each
  * request counts against the task's cap; a refused one gets a 429 that says so.
  */
-export const modelDoor = (config: Config, live: Live, route: ReturnType<typeof secretRoute>, dir: string): RequestListener =>
+export const modelDoor =
+  (config: Config, live: Live, route: ReturnType<typeof secretRoute>, dir: string): RequestListener =>
   async (req, res) => {
     const path = req.url ?? "/";
     const provider = config.hostedProviders.find((entry) => path.startsWith(`/hosted/${entry.id}/`));
-    const target = provider
-      ? new URL(path.slice(`/hosted/${provider.id}`.length), provider.baseUrl)
-      : new URL(path, `http://${config.localModel.upstream}`);
-    if (provider && (await route.allow(provider.host)) !== true)
-      return void reply(res, 403, `the ${provider.credential} secret is not granted to this task`);
-    if (!countModelRequest(live))
-      return void reply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
+    const target = provider ? new URL(path.slice(`/hosted/${provider.id}`.length), provider.baseUrl) : new URL(path, `http://${config.localModel.upstream}`);
+    if (provider && (await route.allow(provider.host)) !== true) return void reply(res, 403, `the ${provider.credential} secret is not granted to this task`);
+    if (!countModelRequest(live)) return void reply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
     const dispatcher = provider ? route.dispatcher(provider.host) : undefined;
     await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, dir } });
   };
@@ -253,16 +273,18 @@ export const modelDoor = (config: Config, live: Live, route: ReturnType<typeof s
  * Speaker's agent API for the guest, with the task's real token added here. The task's SSH public key rides along on
  * its requests, so a `folder:` grant is deliverable over SSH.
  */
-export const speakerDoor = (speaker: { url: string; token: string }, sshKey?: string): RequestListener => async (req, res) => {
-  const target = new URL(req.url ?? "/", speaker.url);
-  if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET"))
-    return void reply(res, 403, "this speaker path is not available to a sandboxed task");
-  const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
-  await forward(req, res, target, {
-    headers: { authorization: `Bearer ${speaker.token}` },
-    ...(sshKey && requests ? { json: { sshKey } } : {}),
-  });
-};
+export const speakerDoor =
+  (speaker: { url: string; token: string }, sshKey?: string): RequestListener =>
+  async (req, res) => {
+    const target = new URL(req.url ?? "/", speaker.url);
+    if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET"))
+      return void reply(res, 403, "this speaker path is not available to a sandboxed task");
+    const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
+    await forward(req, res, target, {
+      headers: { authorization: `Bearer ${speaker.token}` },
+      ...(sshKey && requests ? { json: { sshKey } } : {}),
+    });
+  };
 
 /**
  * Keeps the guest's folders in step with `live.shares`: each active grant is mounted, a mode change is remounted, and a
@@ -462,7 +484,10 @@ export async function boot(
       }, 1_000);
     }
   } catch (error) {
-    await sandbox?.stop().then(() => sandbox?.waitUntilStopped()).catch(() => undefined);
+    await sandbox
+      ?.stop()
+      .then(() => sandbox?.waitUntilStopped())
+      .catch(() => undefined);
     await Sandbox.remove(name).catch(() => undefined);
     await stopDoors();
     throw error;

@@ -75,9 +75,7 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-speaker-"));
   await writeFile(join(dataDir, "groups.json"), JSON.stringify(groups));
   const proxyPort = proxy ? await freePort() : undefined;
-  const app = await createApp(
-    readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", ...(proxyPort ? { PROXY_PORT: String(proxyPort) } : {}) }),
-  );
+  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", ...(proxyPort ? { PROXY_PORT: String(proxyPort) } : {}) }));
   // Closing an HTTP server also closes the WebSocket server it was given, so each listener gets its own.
   const sockets: InstanceType<Ws["WebSocketServer"]>[] = [];
   const listen = (listenPort: number) => {
@@ -168,7 +166,13 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
 
   // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
   const fatal: string[] = [];
-  watchLeases(t, config, "unknown-token", () => {}, (message) => fatal.push(message));
+  watchLeases(
+    t,
+    config,
+    "unknown-token",
+    () => {},
+    (message) => fatal.push(message),
+  );
   await until(() => fatal.length === 1);
   assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-cli register/);
 
@@ -254,7 +258,13 @@ test("bottle-school reports its shares to speaker as not mountable, since its fo
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
   t.after(() => rm(documents, { recursive: true, force: true }));
   const config = { ...f.config, shareRoots: { documents } } as Config;
-  watchLeases(t, config, token, () => {}, (message) => assert.fail(message));
+  watchLeases(
+    t,
+    config,
+    token,
+    () => {},
+    (message) => assert.fail(message),
+  );
   await until(async () => (await f.live()).grants.includes("shares: documents (no VM mount)"));
 });
 
@@ -285,7 +295,10 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   first.closeAllConnections();
   first.close();
   await sleep(dropMs / 3);
-  assert.ok(received.slice(before).every((s) => s.leases.length), "grants must survive a short loss");
+  assert.ok(
+    received.slice(before).every((s) => s.leases.length),
+    "grants must survive a short loss",
+  );
   await until(() => received.slice(before).some((s) => s.leases.length === 0));
   assert.ok(Date.now() - lost >= dropMs, `dropped after ${Date.now() - lost} ms, before the limit`);
 
@@ -303,7 +316,15 @@ test("a grant counts as decided for the agent only once the sandbox host reports
     mcps: { filesystem: { label: "Files", transport: "stdio" as const, command: "/usr/bin/true", args: [], tools: ["read_file"], write: false } },
     extensions: {},
   };
-  const reportApplied = watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message), SPEAKER_LIMITS, catalog);
+  const reportApplied = watchLeases(
+    t,
+    f.config,
+    token,
+    (snapshot) => snapshots.push(snapshot),
+    (message) => assert.fail(message),
+    SPEAKER_LIMITS,
+    catalog,
+  );
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
@@ -324,13 +345,19 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   await f.approve(requestId, ["site:example.com"]);
   await until(() => snapshots.some((s) => s.leases.some((lease) => lease.kind === "site")));
   await sleep(700); // the held call is polling, and nothing has been reported yet
-  assert.deepEqual((await me()).grants.map((g) => [g.item, g.applying]), [["site:example.com", true]]);
+  assert.deepEqual(
+    (await me()).grants.map((g) => [g.item, g.applying]),
+    [["site:example.com", true]],
+  );
   const lease = snapshots.findLast((s) => s.leases.length)?.leases[0];
   assert.ok(lease);
   reportApplied([lease.id]);
   const answered = await site;
   assert.deepEqual([answered.status, answered.granted, answered.applying], ["decided", ["site:example.com"], undefined]);
-  assert.deepEqual((await me()).grants.map((g) => [g.item, g.applying]), [["site:example.com", undefined]]);
+  assert.deepEqual(
+    (await me()).grants.map((g) => [g.item, g.applying]),
+    [["site:example.com", undefined]],
+  );
 
   // An MCP server only starts when Pi is idle, which a held call prevents: the call answers at once, and the item
   // is `applying` until the host reports it.
@@ -366,7 +393,13 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   const { token, speaker } = await f.host(["secret"]);
   const wire: string[] = [];
   const snapshots: Snapshot[] = [];
-  watchLeases(t, f.config, token, (snapshot) => snapshots.push(snapshot), (message) => assert.fail(message));
+  watchLeases(
+    t,
+    f.config,
+    token,
+    (snapshot) => snapshots.push(snapshot),
+    (message) => assert.fail(message),
+  );
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: agent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
   await f.approve(request.id, ["secret:GITHUB_TOKEN"]);
@@ -407,7 +440,16 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   // task's live view, or the guest configuration it wrote.
   const guest = await mkdtemp(join(tmpdir(), "bottle-guest-"));
   t.after(() => rm(guest, { recursive: true, force: true }));
-  writeGuestConfig(guest, { ...f.config, localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] }, hostedProviders: [] } as Config, Catalog.parse({ mcps: {}, extensions: {} }), { name: "t", model: "local/m", attended: false }, new Map(), leases, [], []);
+  writeGuestConfig(
+    guest,
+    { ...f.config, localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] }, hostedProviders: [] } as Config,
+    Catalog.parse({ mcps: {}, extensions: {} }),
+    { name: "t", model: "local/m", attended: false },
+    new Map(),
+    leases,
+    [],
+    [],
+  );
   const written = readdirSync(guest, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
@@ -431,9 +473,12 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.equal(seen.length, 1);
 
   // A route that cannot be set up fails closed: no direct request, and the event says why.
-  const broken = secretRoute({ secretHosts: live.secretHosts.concat([{ name: "X", hosts: ["localhost"], expiresAt: null }]), events: [] as { at: string; text: string }[] }, async () => {
-    throw new Error("speaker.proxyPort is not set");
-  });
+  const broken = secretRoute(
+    { secretHosts: live.secretHosts.concat([{ name: "X", hosts: ["localhost"], expiresAt: null }]), events: [] as { at: string; text: string }[] },
+    async () => {
+      throw new Error("speaker.proxyPort is not set");
+    },
+  );
   assert.equal(await broken.allow("localhost"), false);
   assert.throws(() => broken.dispatcher("localhost"), /refusing a direct request/);
 });

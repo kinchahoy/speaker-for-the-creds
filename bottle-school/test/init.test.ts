@@ -51,11 +51,15 @@ test("init bottle-school writes a config.json that loads, with private directori
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }, { id: "big" }] })));
   const configPath = join(dir, "h", "config.json");
-  const result = await run([
-    "--image", "pi-init-unit",
-    ...["--control-port", "7391", "--guest-port", "7392", "--speaker-url", `http://${lan}:${speaker}`],
-    ...["--model-endpoint", `127.0.0.1:${model}`, "--model", "big"],
-  ], join(dir, "h"));
+  const result = await run(
+    [
+      "--image",
+      "pi-init-unit",
+      ...["--control-port", "7391", "--guest-port", "7392", "--speaker-url", `http://${lan}:${speaker}`],
+      ...["--model-endpoint", `127.0.0.1:${model}`, "--model", "big"],
+    ],
+    join(dir, "h"),
+  );
   assert.equal(result.status, 0, result.stderr + result.stdout);
 
   const config = loadConfig(configPath);
@@ -152,7 +156,10 @@ test("bottle-cli run names the archive folder, and ls lists finished tasks with 
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
   const configPath = join(dir, "h", "config.json");
-  const made = await run([...["--control-port", "7411", "--guest-port", "7412", "--speaker-url", `http://${lan}:${speaker}`], ...["--model-endpoint", `127.0.0.1:${model}`]], join(dir, "h"));
+  const made = await run(
+    [...["--control-port", "7411", "--guest-port", "7412", "--speaker-url", `http://${lan}:${speaker}`], ...["--model-endpoint", `127.0.0.1:${model}`]],
+    join(dir, "h"),
+  );
   assert.equal(made.status, 0, made.stderr + made.stdout);
   const { outputRoot } = loadConfig(configPath);
   const folder = join(outputRoot, "2026-01-01_0000--demo--abc123");
@@ -166,7 +173,11 @@ test("bottle-cli run names the archive folder, and ls lists finished tasks with 
   t.after(() => void control.close());
   await new Promise((done) => control.once("listening", done));
   const cli = async (...args: string[]) =>
-    (await promisify(execFile)(process.execPath, [join(import.meta.dirname, "..", "src", "cli.ts"), ...args], { env: { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath } })).stdout;
+    (
+      await promisify(execFile)(process.execPath, [join(import.meta.dirname, "..", "src", "cli.ts"), ...args], {
+        env: { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath },
+      })
+    ).stdout;
 
   assert.match(await cli("run", "--prompt", "x"), new RegExp(`The archive will be written to ${join(outputRoot, "stamp--new--new1")}`));
   const listing = await cli("ls");

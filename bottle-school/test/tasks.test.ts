@@ -52,7 +52,11 @@ async function fixture(t: TestContext) {
   const registered = await fetch(`${url}/_speaker/hosts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "bottle", kinds: ["site", "secret", "folder", "mcp", "ext"], tokenHash: createHash("sha256").update(hostToken).digest("hex") }),
+    body: JSON.stringify({
+      name: "bottle",
+      kinds: ["site", "secret", "folder", "mcp", "ext"],
+      tokenHash: createHash("sha256").update(hostToken).digest("hex"),
+    }),
   });
   await ownerPost(`/hosts/${((await registered.json()) as { id: string }).id}/approve`);
 
@@ -162,7 +166,10 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
     manifest.files.map((file: { path: string }) => file.path),
     ["result.txt"],
   );
-  const trace = readFileSync(`${control}/trace.jsonl`, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const trace = readFileSync(`${control}/trace.jsonl`, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
   assert.deepEqual(
     trace.map((run) => run.name),
     ["archive me", "pi"],

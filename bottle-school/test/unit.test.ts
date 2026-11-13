@@ -5,7 +5,17 @@ import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { attendedFor, folderRef, ipv4Destination, launchRequest, loadTemplates, secretHosts, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
+import {
+  attendedFor,
+  folderRef,
+  ipv4Destination,
+  launchRequest,
+  loadTemplates,
+  secretHosts,
+  secretRef,
+  speakerRequestAllowed,
+  Template,
+} from "../src/leases.ts";
 import { inForce } from "../src/tasks.ts";
 import { catalogReport, type Lease } from "../src/speaker.ts";
 import { grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
@@ -82,7 +92,6 @@ describe("configuration", () => {
     writeFileSync(path, JSON.stringify(config));
     assert.throws(() => loadConfig(path), /loopback, RFC1918, or Tailscale IPv4/);
   });
-
 });
 
 test("speaker exception permits agent routes only at the configured origin", () => {
@@ -92,7 +101,15 @@ test("speaker exception permits agent routes only at the configured origin", () 
   assert.ok(allowed("/_speaker/help/obsidian"));
   assert.ok(allowed("/_speaker/requests", "POST"));
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
-  for (const path of ["/admin", "/admin/api/leases", "/_speaker/hosts/agents", "/_speaker/agents", "/_speaker/providers", "http://speaker.example:7000/obsidian/", "https://speaker.example:8080/obsidian/"])
+  for (const path of [
+    "/admin",
+    "/admin/api/leases",
+    "/_speaker/hosts/agents",
+    "/_speaker/agents",
+    "/_speaker/providers",
+    "http://speaker.example:7000/obsidian/",
+    "https://speaker.example:8080/obsidian/",
+  ])
     assert.equal(allowed(path), false, path);
 });
 
@@ -100,8 +117,7 @@ test("enforcer parses refs and rejects malformed secrets and folder modes", () =
   // A secret grant names a secret in speaker and arrives with the hosts speaker bound it to.
   assert.ok(secretRef.safeParse("GITHUB_TOKEN").success);
   assert.ok(secretHosts.safeParse(["api.github.com", "*.example.org"]).success);
-  for (const ref of ["", "KEY@example.com", "KEY@", "KEY.x", "two words"])
-    assert.equal(secretRef.safeParse(ref).success, false, ref);
+  for (const ref of ["", "KEY@example.com", "KEY@", "KEY.x", "two words"]) assert.equal(secretRef.safeParse(ref).success, false, ref);
   for (const hosts of [[], undefined, ["https://example.com"], ["Example.com"], [""]])
     assert.equal(secretHosts.safeParse(hosts).success, false, JSON.stringify(hosts));
   assert.ok(folderRef.safeParse("documents:rw").success);
@@ -110,8 +126,7 @@ test("enforcer parses refs and rejects malformed secrets and folder modes", () =
 
 test("guest destinations reject all IPv6 forms", () => {
   assert.ok(ipv4Destination("192.168.1.5"));
-  for (const ip of ["::1", "fc00::1", "fe80::1", "::ffff:192.168.1.5", "2606:4700:4700::1111"])
-    assert.equal(ipv4Destination(ip), false, ip);
+  for (const ip of ["::1", "fc00::1", "fe80::1", "::ffff:192.168.1.5", "2606:4700:4700::1111"]) assert.equal(ipv4Destination(ip), false, ip);
 });
 
 test("model HTTP exchanges become timed llm runs with bounded-body references", () => {
@@ -197,9 +212,7 @@ test("Pi tool runs pair executions by native call id and retain unmatched record
     timestamp: "2026-10-20T10:00:00Z",
     message: {
       role: "assistant",
-      content: [
-        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "notes.txt" } },
-      ],
+      content: [{ type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "notes.txt" } }],
     },
   };
   const result = {
@@ -231,8 +244,7 @@ test("Pi tool runs pair executions by native call id and retain unmatched record
 
 test("a streamed chat completion assembles into its finished message", () => {
   const chunk = (body: object) => `data: ${JSON.stringify({ id: "c1", model: "m", ...body })}\n\n`;
-  const delta = (value: object, finish_reason: string | null = null) =>
-    chunk({ choices: [{ index: 0, delta: value, finish_reason }] });
+  const delta = (value: object, finish_reason: string | null = null) => chunk({ choices: [{ index: 0, delta: value, finish_reason }] });
   const stream =
     delta({ role: "assistant", content: null }) +
     delta({ reasoning_content: "Think" }) +
@@ -257,9 +269,7 @@ test("a streamed chat completion assembles into its finished message", () => {
     model: "m",
     content: "Run it.",
     reasoning_content: "Thinking",
-    tool_calls: [
-      { id: "t1", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } },
-    ],
+    tool_calls: [{ id: "t1", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } }],
     finish_reason: "tool_calls",
     usage: { completion_tokens: 9 },
     timings: { predicted_per_second: 28 },
@@ -284,7 +294,9 @@ test("guest configuration mounts no skills, sends the web-search proxy setting, 
   const config = loadConfig(writeConfig());
   // An MCP server that runs inside the VM; remote ones are speaker services and not catalog entries.
   const catalog = Catalog.parse({
-    mcps: { context7: { label: "Docs", transport: "stdio", command: "/opt/mcp/context7", args: [], tools: ["resolve-library-id", "query-docs"], write: false } },
+    mcps: {
+      context7: { label: "Docs", transport: "stdio", command: "/opt/mcp/context7", args: [], tools: ["resolve-library-id", "query-docs"], write: false },
+    },
     extensions: {},
   });
   const directory = join(config.configRoot, "guest");
@@ -356,11 +368,7 @@ test("a template's want, label and duration become the task's first request", ()
     duration: "1d",
   });
   // A hosted model's key is a speaker secret and joins the same request, without repeating an item.
-  assert.deepEqual(launchRequest(dev, "agent-1", ["secret:OPENROUTER", "site:pypi.org"])?.want, [
-    "group:developer",
-    "site:pypi.org",
-    "secret:OPENROUTER",
-  ]);
+  assert.deepEqual(launchRequest(dev, "agent-1", ["secret:OPENROUTER", "site:pypi.org"])?.want, ["group:developer", "site:pypi.org", "secret:OPENROUTER"]);
   // No want, no request; the default duration is speaker's default.
   const bare = Template.parse({ id: "bare", label: "Bare", limits });
   assert.equal(launchRequest(bare, "agent-1"), undefined);
@@ -423,11 +431,20 @@ test("replies tell the agent what to do, per item kind", () => {
   assert.match(line("secret:GITHUB_READ"), /Put GH_TOKEN=ph-1 in front of the one command[\s\S]*only for github\.com and api\.github\.com\. Do not print it/);
   assert.match(line("folder:photos"), /read-only.*Its files are in \/input\/photos\. You cannot write there; put results in \/output\./);
   assert.match(line("folder:photos:rw"), /read-write.*You can write there\./);
-  assert.match(line("obsidian.read", "Paths are vault-relative."), /curl -H "Authorization: Bearer \$SPEAKER_TOKEN" \$SPEAKER_URL\/obsidian\/<path>.*Paths are vault-relative\./);
-  assert.match(line("vault.read"), /It is an MCP server\. Send JSON-RPC with POST to \$SPEAKER_URL\/vault: first initialize, then tools\/list, then tools\/call\./);
+  assert.match(
+    line("obsidian.read", "Paths are vault-relative."),
+    /curl -H "Authorization: Bearer \$SPEAKER_TOKEN" \$SPEAKER_URL\/obsidian\/<path>.*Paths are vault-relative\./,
+  );
+  assert.match(
+    line("vault.read"),
+    /It is an MCP server\. Send JSON-RPC with POST to \$SPEAKER_URL\/vault: first initialize, then tools\/list, then tools\/call\./,
+  );
   assert.match(line("ext:pi-web-access"), /\(web_search, fetch_content\) are not loaded yet[\s\S]*make no more tool calls/);
   assert.deepEqual(piToolNames("ext:pi-web-access", catalog), ["web_search", "fetch_content"]);
-  assert.match(reply({ status: "decided", denied: ["folder:temp"] }, catalog), /^Denied: folder:temp\. Do not ask for it again in this task\..*\/output\/NOTES\.md\.$/);
+  assert.match(
+    reply({ status: "decided", denied: ["folder:temp"] }, catalog),
+    /^Denied: folder:temp\. Do not ask for it again in this task\..*\/output\/NOTES\.md\.$/,
+  );
   assert.throws(() => line("secret:MISSING"), /does not show/);
 });
 

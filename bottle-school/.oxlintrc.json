@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "rules": {
+    // The body is only set for non-GET methods; the rule cannot see that through the variable.
+    "unicorn/no-invalid-fetch-options": "off",
+    // Spreads in the argv arrays are grouped for readability.
+    "unicorn/no-useless-spread": "off"
+  }
+}

@@ -70,48 +70,74 @@ export const startControl = (config: Config, tasks: Tasks) => {
             <meta http-equiv="refresh" content="10" />
             <title>bottle-school</title>
             <style>
-              body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 960px; }
-              table { border-collapse: collapse; width: 100%; }
-              th, td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid #ccc; }
-              code { background: #f3f3f3; padding: 0.1rem 0.3rem; }
+              body {
+                font-family: system-ui, sans-serif;
+                margin: 2rem;
+                max-width: 960px;
+              }
+              table {
+                border-collapse: collapse;
+                width: 100%;
+              }
+              th,
+              td {
+                text-align: left;
+                padding: 0.35rem 0.6rem;
+                border-bottom: 1px solid #ccc;
+              }
+              code {
+                background: #f3f3f3;
+                padding: 0.1rem 0.3rem;
+              }
             </style>
           </head>
           <body>
             <h1>bottle-school</h1>
             <p>
               Read-only status page. Launch a task with
-              <code>mise run bottle-cli run --template &lt;id&gt; --prompt "..."</code>.
-              Raw state: <a href="/api/state">/api/state</a>
+              <code>mise run bottle-cli run --template &lt;id&gt; --prompt "..."</code>. Raw state: <a href="/api/state">/api/state</a>
             </p>
             <table>
               <thead>
-                <tr><th>id</th><th>name</th><th>state</th><th>mode</th><th>pending requests</th><th>done</th></tr>
+                <tr>
+                  <th>id</th>
+                  <th>name</th>
+                  <th>state</th>
+                  <th>mode</th>
+                  <th>pending requests</th>
+                  <th>done</th>
+                </tr>
               </thead>
               <tbody>
-                ${rows.length === 0
-                  ? html`<tr><td colspan="6">No tasks.</td></tr>`
-                  : rows.map(
-                      (row) => html`<tr>
-                        <td>${row.id}</td>
-                        <td>${row.name}</td>
-                        <td>${row.state}</td>
-                        <td>${row.attended ? "attended" : "unattended"}</td>
-                        <td>${row.pendingRequests}</td>
-                        <td>${row.done ? "yes" : "no"}</td>
-                      </tr>`,
-                    )}
+                ${
+                  rows.length === 0
+                    ? html`<tr>
+                        <td colspan="6">No tasks.</td>
+                      </tr>`
+                    : rows.map(
+                        (row) =>
+                          html`<tr>
+                            <td>${row.id}</td>
+                            <td>${row.name}</td>
+                            <td>${row.state}</td>
+                            <td>${row.attended ? "attended" : "unattended"}</td>
+                            <td>${row.pendingRequests}</td>
+                            <td>${row.done ? "yes" : "no"}</td>
+                          </tr>`,
+                      )
+                }
               </tbody>
             </table>
           </body>
         </html>`,
     );
   });
-  app.post("/api/tasks", validator("json", (body) => NewTask.parse(body)), async (context) =>
-    context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
+  app.post(
+    "/api/tasks",
+    validator("json", (body) => NewTask.parse(body)),
+    async (context) => context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
   );
-  app.post("/api/tasks/:id/abort", async (context) =>
-    context.json(await tasks.abort(tasks.get(context.req.param("id")))),
-  );
+  app.post("/api/tasks/:id/abort", async (context) => context.json(await tasks.abort(tasks.get(context.req.param("id")))));
   app.post("/api/tasks/:id/restart", async (context) => {
     const task = tasks.get(context.req.param("id"));
     await tasks.restart(task);
@@ -172,8 +198,7 @@ export const startBroker = (config: Config) => {
   // A closed task's artifacts can become a read-only input of the next task.
   config.shareRoots.archive = config.outputRoot;
 
-  const readJson = (path: string): unknown =>
-    JSON.parse(readFileSync(`${config.configRoot}/${path}`, "utf8"));
+  const readJson = (path: string): unknown => JSON.parse(readFileSync(`${config.configRoot}/${path}`, "utf8"));
   const catalog = Catalog.parse(readJson("catalog.json"));
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
   const tasks = new Tasks(config, templates, catalog, readHostToken(config));
@@ -195,10 +220,7 @@ if (import.meta.main) {
     process.on(signal, async () => {
       if (shuttingDown) return;
       shuttingDown = true;
-      for (const task of tasks.list())
-        await tasks
-          .close(task)
-          .catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`));
+      for (const task of tasks.list()) await tasks.close(task).catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`));
       process.exit(process.exitCode ?? 0);
     });
 }

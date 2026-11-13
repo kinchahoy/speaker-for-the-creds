@@ -92,7 +92,12 @@ describe("model endpoint", () => {
     const door = await listen(socket, modelDoor(config, view, secretRoute(view, speakerProxy), captures));
     const client = new Client("http://model.internal", { socketPath: socket });
     const ask = async () => {
-      const response = await client.request({ method: "POST", path: "/v1/chat/completions", body: '{"model":"m"}', headers: { "content-type": "application/json" } });
+      const response = await client.request({
+        method: "POST",
+        path: "/v1/chat/completions",
+        body: '{"model":"m"}',
+        headers: { "content-type": "application/json" },
+      });
       return { status: response.statusCode, body: await response.body.text() };
     };
     assert.deepEqual(await ask(), { status: 200, body: '{"choices":[]}' });
@@ -159,24 +164,31 @@ describe("folders over SSH", () => {
     await sync();
     await sync();
     assert.equal(guest.calls.length, 2);
-    assert.deepEqual(view.events.map((event) => event.text), ["could not mount folder docs: no key yet"]);
+    assert.deepEqual(
+      view.events.map((event) => event.text),
+      ["could not mount folder docs: no key yet"],
+    );
   });
 
   test("the guest's requests to speaker carry the task's SSH key, and nothing else is touched", async () => {
     const seen: { method?: string; url?: string; body: string }[] = [];
     const speaker = createServer((req, res) => {
       let body = "";
-      req.on("data", (chunk) => (body += chunk)).on("end", () => {
-        seen.push({ method: req.method, url: req.url, body });
-        res.writeHead(200, { "content-type": "application/json" }).end("{}");
-      });
+      req
+        .on("data", (chunk) => (body += chunk))
+        .on("end", () => {
+          seen.push({ method: req.method, url: req.url, body });
+          res.writeHead(200, { "content-type": "application/json" }).end("{}");
+        });
     });
     await new Promise<void>((resolve) => speaker.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${(speaker.address() as { port: number }).port}`;
     const socket = join(root, "speaker.sock");
     const door = await listen(socket, speakerDoor({ url, token: "t" }, "ssh-ed25519 AAAA"));
     const client = new Client("http://speaker.internal", { socketPath: socket });
-    await (await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })).body.dump();
+    await (
+      await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })
+    ).body.dump();
     await (await client.request({ method: "GET", path: "/_speaker/catalog" })).body.dump();
     assert.deepEqual(JSON.parse(seen[0]!.body), { want: ["folder:docs"], sshKey: "ssh-ed25519 AAAA" });
     assert.deepEqual([seen[1]!.method, seen[1]!.body], ["GET", ""]);

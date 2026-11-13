@@ -46,8 +46,7 @@ export const piToolNames = (item: string, catalog: CatalogView) => {
 /** One line for a granted item. `help` is the service notes from GET /_speaker/help/<service>, if any. */
 export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: string, help = "") => {
   const head = `Granted: ${item}${until(expiresAt)}`;
-  if (item.startsWith("site:"))
-    return `${head}. Requests to ${item.slice(5)} now go through. Retry what failed.`;
+  if (item.startsWith("site:")) return `${head}. Requests to ${item.slice(5)} now go through. Retry what failed.`;
   if (item.startsWith("secret:")) {
     const secret = catalog.secrets?.[item.slice(7)];
     if (!secret) throw new Error(`speaker's catalog does not show ${item} as granted`);
