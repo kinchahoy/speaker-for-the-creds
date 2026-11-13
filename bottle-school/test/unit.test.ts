@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -7,7 +7,8 @@ import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
 import { attendedFor, folderRef, ipv4Destination, launchRequest, loadTemplates, secretHosts, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
 import { inForce } from "../src/tasks.ts";
-import type { Lease } from "../src/speaker.ts";
+import { catalogReport, type Lease } from "../src/speaker.ts";
+import { grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace.ts";
 
 const roots: string[] = [];
@@ -87,7 +88,7 @@ describe("configuration", () => {
 test("speaker exception permits agent routes only at the configured origin", () => {
   const speaker = new URL("https://speaker.example:7000");
   const allowed = (path: string, method = "GET") => speakerRequestAllowed(speaker, new URL(path, speaker), method);
-  assert.ok(allowed("/_speaker/me"));
+  assert.ok(allowed("/_speaker/catalog"));
   assert.ok(allowed("/_speaker/help/obsidian"));
   assert.ok(allowed("/_speaker/requests", "POST"));
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
@@ -279,7 +280,7 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.throws(() => loadTemplates(path));
 });
 
-test("guest configuration loads the access-and-creds skill alone and the curated MCP tools", () => {
+test("guest configuration mounts no skills, sends the web-search proxy setting, and loads the curated MCP tools", () => {
   const config = loadConfig(writeConfig());
   // An MCP server that runs inside the VM; remote ones are speaker services and not catalog entries.
   const catalog = Catalog.parse({
@@ -289,9 +290,10 @@ test("guest configuration loads the access-and-creds skill alone and the curated
   const directory = join(config.configRoot, "guest");
   writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, new Map(), [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
-  assert.equal(args.filter((arg) => arg === "--skill").length, 1);
-  assert.ok(args.includes("/etc/bottle-school/skills/access-and-creds"));
-  assert.match(readFileSync(join(directory, "skills/access-and-creds/SKILL.md"), "utf8"), /^name: access-and-creds$/m);
+  assert.equal(args.includes("--skill"), false);
+  assert.equal(existsSync(join(directory, "skills")), false);
+  assert.ok(existsSync(join(directory, "extensions/reply.ts")));
+  assert.equal(JSON.parse(readFileSync(join(directory, "web-search.json"), "utf8")).ssrf.trustEnvProxy, true);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
 });
@@ -394,21 +396,39 @@ test("remote MCP servers are not catalog entries; the shipped catalog keeps only
   assert.throws(() => Catalog.parse({ mcps: { docs: remote }, extensions: {} }), /only MCP servers that run inside the VM/);
 });
 
-test("Pi's instructions name the mcp and ext entries and the secrets, and say how to use a secret", () => {
-  const catalog = Catalog.parse({
-    mcps: { filesystem: { label: "Files", transport: "stdio", command: "/opt/mcp/fs", args: [], tools: ["read_file"], write: false } },
-    extensions: JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")).extensions,
-  });
-  const secrets = [{ name: "GITHUB_TOKEN", hosts: ["api.github.com", "github.com"], env: "GH_TOKEN" }];
-  const note = systemNote({ name: "t", attended: false }, [], catalog, [], secrets);
-  assert.match(note, /- mcp:filesystem: Files; tools: read_file/);
-  assert.match(note, /- ext:pi-web-access: /);
-  assert.match(note, /- secret:GITHUB_TOKEN: set GH_TOKEN to its placeholder; used for api\.github\.com, github\.com/);
-  assert.match(note, /## Using a secret[\s\S]*secrets\.<NAME>[\s\S]*placeholder[\s\S]*GH_TOKEN=<placeholder> gh pr list[\s\S]*proxy/);
-  // Remote MCP servers are speaker services.
-  assert.match(note, /`<service>\.read` or `<service>\.full`[\s\S]*\$SPEAKER_URL\/<service>[\s\S]*never `mcp:` items/);
-  // With nothing set up the lists say so.
-  assert.match(systemNote({ name: "t", attended: false }, [], { mcps: {}, extensions: {} }, []), /## Secrets you can ask for\n\n- none/);
+test("Pi's instructions point to request_capability and carry no item list", () => {
+  const catalog = Catalog.parse({ mcps: {}, extensions: JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")).extensions });
+  const note = systemNote({ name: "t", attended: false }, [], catalog, []);
+  assert.match(note, /call `request_capability`\. Its description lists what you can ask for/);
+  for (const gone of ["site:<host>", "Using a secret", "ext:pi-web-access", "access-and-creds", "_speaker/me"]) assert.equal(note.includes(gone), false, gone);
+});
+
+test("the shipped extensions declare the sites they contact, and the host reports them to speaker", () => {
+  const shipped = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
+  assert.deepEqual(shipped.extensions["pi-web-access"]!.sites, ["mcp.exa.ai"]);
+  const report = catalogReport(shipped);
+  assert.deepEqual(report.extensions.find((entry) => entry.id === "pi-web-access")!.sites, ["mcp.exa.ai"]);
+  assert.deepEqual(report.mcps, []);
+});
+
+test("replies tell the agent what to do, per item kind", () => {
+  const catalog: CatalogView = {
+    secrets: { GITHUB_READ: { hosts: ["github.com", "api.github.com"], env: "GH_TOKEN", placeholder: "ph-1", environment: { GH_TOKEN: "ph-1" } } },
+    services: { vault: { mcp: true } },
+    extensions: { "pi-web-access": { tools: ["web_search", "fetch_content"] } },
+  };
+  const at = "2099-01-01T14:30:00Z";
+  const line = (item: string, help?: string) => grantedLine(item, catalog, at, help);
+  assert.match(line("site:pypi.org"), /^Granted: site:pypi\.org until .*14:30 UTC\. Requests to pypi\.org now go through\. Retry what failed\.$/);
+  assert.match(line("secret:GITHUB_READ"), /Put GH_TOKEN=ph-1 in front of the one command[\s\S]*only for github\.com and api\.github\.com\. Do not print it/);
+  assert.match(line("folder:photos"), /read-only.*Its files are in \/input\/photos\. You cannot write there; put results in \/output\./);
+  assert.match(line("folder:photos:rw"), /read-write.*You can write there\./);
+  assert.match(line("obsidian.read", "Paths are vault-relative."), /curl -H "Authorization: Bearer \$SPEAKER_TOKEN" \$SPEAKER_URL\/obsidian\/<path>.*Paths are vault-relative\./);
+  assert.match(line("vault.read"), /It is an MCP server\. Send JSON-RPC with POST to \$SPEAKER_URL\/vault: first initialize, then tools\/list, then tools\/call\./);
+  assert.match(line("ext:pi-web-access"), /\(web_search, fetch_content\) are not loaded yet[\s\S]*make no more tool calls/);
+  assert.deepEqual(piToolNames("ext:pi-web-access", catalog), ["web_search", "fetch_content"]);
+  assert.match(reply({ status: "decided", denied: ["folder:temp"] }, catalog), /^Denied: folder:temp\. Do not ask for it again in this task\..*\/output\/NOTES\.md\.$/);
+  assert.throws(() => line("secret:MISSING"), /does not show/);
 });
 
 test("a hosted model's key in models.json is the placeholder speaker issued, never a secret", () => {

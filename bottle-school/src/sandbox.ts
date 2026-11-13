@@ -139,7 +139,7 @@ export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, s
   new ProxyServer({
     prepareRequestFunction: async ({ hostname }) => {
       const decision = await egressDecision(live, route, hostname);
-      if (decision === "refuse") throw new RequestError(`${hostname} is not approved for this task`, 403);
+      if (decision === "refuse") throw new RequestError(`${hostname} is not approved for this task. To get access, call request_capability with site:${hostname}.`, 403);
       return decision === "speaker" ? { upstreamProxyUrl: `http://agent:${speaker.token}@${speaker.proxy}` } : { dnsLookup: publicLookup };
     },
   });

@@ -297,11 +297,11 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   if (!flags["skip-register"]) {
     p.log.message("Next, this machine registers with speaker as a sandbox host. You approve it once; after that speaker answers its access requests.");
     // After a restart speaker is locked until the owner signs in; registering needs it open.
-    const isLocked = () => fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
+    const isLocked = () => fetch(`${speakerUrl}/_speaker/catalog`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
     let password = ownerPassword ?? (flags["password-stdin"] ? await readStdin() : undefined);
     if (await isLocked()) password = await unlockSpeaker(speakerUrl, password, yes);
     await waitFor(`Speaker is locked: sign in at ${speakerUrl}/admin to unlock it`, "Speaker is unlocked.", "speaker stayed locked", async () =>
-      fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status !== 503),
+      fetch(`${speakerUrl}/_speaker/catalog`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status !== 503),
     );
     const id = await registerHost(loaded, configPath, hostname());
     if (password !== undefined) {
