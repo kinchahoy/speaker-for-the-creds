@@ -38,9 +38,9 @@ const scratch = (t: TestContext) => {
 };
 
 // Asynchronous: the fake speaker and model servers live in this process and must keep answering.
-const run = async (args: string[]) => {
+const run = async (args: string[], home: string) => {
   const flags = [init, "bottle-school", "--yes", "--skip-build", "--skip-register", "--skip-smoke", ...args];
-  return promisify(execFile)(process.execPath, flags).then(
+  return promisify(execFile)(process.execPath, flags, { env: { ...process.env, BOTTLE_SCHOOL_HOME: home, BOTTLE_SCHOOL_CONFIG: "", MSB_HOME: "" } }).then(
     (done) => ({ status: 0, ...done }),
     (failed: { code: number; stdout: string; stderr: string }) => ({ status: failed.code, stdout: failed.stdout, stderr: failed.stderr }),
   );
@@ -50,12 +50,12 @@ test("init bottle-school writes a config.json that loads, with private directori
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }, { id: "big" }] })));
-  const configPath = join(dir, "config.json");
+  const configPath = join(dir, "h", "config.json");
   const result = await run([
-    ...["--home", join(dir, "h"), "--config", configPath, "--image", "pi-init-unit"],
+    "--image", "pi-init-unit",
     ...["--control-port", "7391", "--guest-port", "7392", "--speaker-url", `http://${lan}:${speaker}`],
     ...["--model-endpoint", `127.0.0.1:${model}`, "--model", "big"],
-  ]);
+  ], join(dir, "h"));
   assert.equal(result.status, 0, result.stderr + result.stdout);
 
   const config = loadConfig(configPath);
@@ -72,28 +72,27 @@ test("init bottle-school writes a config.json that loads, with private directori
 
 test("init bottle-school refuses a loopback speaker URL, which a VM cannot reach, and writes no config", { skip: !kvm }, async (t) => {
   const dir = scratch(t);
-  const result = await run(["--home", join(dir, "h"), "--config", join(dir, "config.json"), "--speaker-url", "http://127.0.0.1:3000", "--model-endpoint", "127.0.0.1:1"]);
+  const result = await run(["--speaker-url", "http://127.0.0.1:3000", "--model-endpoint", "127.0.0.1:1"], join(dir, "h"));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /A VM cannot reach a loopback address/);
-  assert.equal(existsSync(join(dir, "config.json")), false);
+  assert.equal(existsSync(join(dir, "h", "config.json")), false);
 });
 
-test("init bottle-school refuses a home that already has a config unless --force", { skip: !kvm }, async (t) => {
-  const dir = scratch(t);
-  const home = join(dir, "h");
-  mkdirSync(join(home, "config"), { recursive: true });
-  writeFileSync(join(home, "config", "config.json"), "{}");
-  const result = await run(["--home", home, "--config", join(dir, "config.json")]);
+test("init bottle-school --yes refuses to replace an existing setup unless --force", { skip: !kvm }, async (t) => {
+  const home = join(scratch(t), "h");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "config.json"), "{}");
+  const result = await run([], home);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /already has a bottle-school config .*config\.json.*pass --force/);
+  assert.match(result.stderr, /already set up .*config\.json.*pass --force/);
 });
 
-test("init bottle-school accepts a deep home: no unix socket lives under it", { skip: !kvm }, async (t) => {
-  const dir = scratch(t);
-  const home = join(dir, "x".repeat(60), "a-home-with-a-rather-long-name-for-the-sockets");
-  const result = await run(["--home", home, "--config", join(dir, "config.json")]);
-  assert.doesNotMatch(result.stderr, /too long|unix socket/);
-  assert.ok(existsSync(join(home, "state")), result.stderr);
+test("init bottle-school refuses a home too long for microsandbox's unix sockets", async (t) => {
+  const home = join(scratch(t), "x".repeat(60));
+  const result = await run([], home);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /too long a path .*BOTTLE_SCHOOL_HOME/);
+  assert.equal(existsSync(home), false);
 });
 
 // A speaker that is locked until /admin/signin gets the owner password. A registered host stays pending (401 on
@@ -126,9 +125,9 @@ const registering = async (t: TestContext, owner: string, typed: string) => {
   const dir = scratch(t);
   const speaker = await lockedSpeaker(t, owner);
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
-  const args = [init, "bottle-school", "--yes", "--skip-build", "--skip-smoke", "--password-stdin", "--home", join(dir, "h"), "--config", join(dir, "config.json")];
+  const args = [init, "bottle-school", "--yes", "--skip-build", "--skip-smoke", "--password-stdin"];
   args.push("--control-port", "7401", "--guest-port", "7402", "--speaker-url", `http://${lan}:${speaker.port}`, "--model-endpoint", `127.0.0.1:${model}`);
-  const child = execFile(process.execPath, args);
+  const child = execFile(process.execPath, args, { env: { ...process.env, BOTTLE_SCHOOL_HOME: join(dir, "h"), BOTTLE_SCHOOL_CONFIG: "", MSB_HOME: "" } });
   child.stdin?.end(`${typed}\n`);
   const status = await new Promise<number | null>((done) => child.once("exit", done));
   return { status, speaker };
@@ -152,8 +151,8 @@ test("bottle-cli run names the archive folder, and ls lists finished tasks with 
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
-  const configPath = join(dir, "config.json");
-  const made = await run([...["--home", join(dir, "h"), "--config", configPath], ...["--control-port", "7411", "--guest-port", "7412", "--speaker-url", `http://${lan}:${speaker}`], ...["--model-endpoint", `127.0.0.1:${model}`]]);
+  const configPath = join(dir, "h", "config.json");
+  const made = await run([...["--control-port", "7411", "--guest-port", "7412", "--speaker-url", `http://${lan}:${speaker}`], ...["--model-endpoint", `127.0.0.1:${model}`]], join(dir, "h"));
   assert.equal(made.status, 0, made.stderr + made.stdout);
   const { outputRoot } = loadConfig(configPath);
   const folder = join(outputRoot, "2026-01-01_0000--demo--abc123");

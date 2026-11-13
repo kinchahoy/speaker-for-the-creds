@@ -11,13 +11,15 @@ for dir in /opt/homebrew/opt/util-linux/bin /usr/local/opt/util-linux/bin; do
 done
 command -v setsid >/dev/null || { echo "setsid is missing. Fix: sudo apt install util-linux (macOS: brew install util-linux)" >&2; exit 1; }
 [ -n "${BOTTLE_SCHOOL_CONFIG:-}" ] || [ -z "${PI_V2_CONFIG:-}" ] || { echo "note: PI_V2_CONFIG is deprecated; use BOTTLE_SCHOOL_CONFIG." >&2; BOTTLE_SCHOOL_CONFIG=$PI_V2_CONFIG; }
-config="${BOTTLE_SCHOOL_CONFIG:-$root/config.json}"
+home=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
+config="${BOTTLE_SCHOOL_CONFIG:-$home/config.json}"
+export MSB_HOME="${MSB_HOME:-$home/microsandbox}"
 [ -f "$config" ] || { echo "$config is missing. Fix: run mise run init bottle-school" >&2; exit 1; }
-# microsandbox refuses a storage root (MSB_HOME, else ~/.microsandbox) that is, or sits under, a group- or world-writable
+# microsandbox refuses a storage root (MSB_HOME) that is, or sits under, a group- or world-writable
 # directory (sticky ones such as /tmp are fine).
 node -e '
-	const { statSync } = require("node:fs"), { homedir } = require("node:os"), { dirname, join, resolve } = require("node:path");
-	for (let dir = resolve(process.env.MSB_HOME || join(homedir(), ".microsandbox")); ; dir = dirname(dir)) {
+	const { statSync } = require("node:fs"), { dirname, resolve } = require("node:path");
+	for (let dir = resolve(process.env.MSB_HOME); ; dir = dirname(dir)) {
 		const mode = statSync(dir, { throwIfNoEntry: false })?.mode ?? 0;
 		if (mode & 0o022 && !(mode & 0o1000)) {
 			console.error(`microsandbox refuses ${dir}: it is group- or world-writable. Fix: chmod 700 ${dir}`);

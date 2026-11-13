@@ -6,7 +6,7 @@ import { bearerAuth } from "hono/bearer-auth";
 import { validator } from "hono/validator";
 import { z } from "zod";
 import { reconcile } from "./sandbox.ts";
-import { assertNoHostSecrets, configPathFromEnv, loadConfig, type Config } from "./config.ts";
+import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
 import { loadTemplates } from "./leases.ts";
 import { Catalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
@@ -175,7 +175,6 @@ export const startBroker = (config: Config) => {
   const readJson = (path: string): unknown =>
     JSON.parse(readFileSync(`${config.configRoot}/${path}`, "utf8"));
   const catalog = Catalog.parse(readJson("catalog.json"));
-  assertNoHostSecrets(config);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
   const tasks = new Tasks(config, templates, catalog, readHostToken(config));
   startControl(config, tasks);

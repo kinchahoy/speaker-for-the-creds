@@ -16,8 +16,7 @@ const HELP = {
   --password-stdin      read the owner password from standard input
   --start | --no-start  start speaker in the background, or not
   --env-path FILE       where to write the settings (default: speaker/.env)`,
-  "bottle-school": `bottle-school flags:
-  --home DIR            where bottle-school keeps its config, state, and output
+  "bottle-school": `bottle-school keeps everything in ~/.bottle-school (set BOTTLE_SCHOOL_HOME to change it). Flags:
   --control-port N      control port: bottle-school's own API (7001)
   --guest-port N        guest port: VMs reach bottle-school here (7002)
   --speaker-url URL     speaker's URL as the VMs see it, for example http://192.168.1.10:3000
@@ -25,7 +24,6 @@ const HELP = {
   --model ID            the model to use (needed when the server lists several)
   --image TAG           guest image tag (bottle-school-guest)
   --password-stdin      read speaker's owner password from standard input
-  --config FILE         where to write config.json
   --skip-build | --skip-register | --skip-smoke   leave out that step`,
 };
 const USAGE = `usage: mise run init [speaker | bottle-school] [flags]

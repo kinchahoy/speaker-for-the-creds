@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
-import { assertNoHostSecrets, loadConfig } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 import { attendedFor, folderRef, ipv4Destination, launchRequest, loadTemplates, secretHosts, secretRef, speakerRequestAllowed, Template } from "../src/leases.ts";
 import { inForce } from "../src/tasks.ts";
 import type { Lease } from "../src/speaker.ts";
@@ -384,15 +384,6 @@ test("grants count as in force when installed, MCP and extension ones once Pi ru
   assert.deepEqual(inForce(leases, { mcp: [], extensions: [] }), ["site", "secret", "folder"]);
   assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: [] }), ["site", "secret", "folder", "mcp"]);
   assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: ["pi-web-access"] }), ["site", "secret", "folder", "mcp", "ext"]);
-});
-
-test("bottle-school refuses to start while a secrets file or BROKER_SECRET variable is left on the host", () => {
-  const root = mkdtempSync(join(tmpdir(), "bottle-secrets-"));
-  roots.push(root);
-  assertNoHostSecrets({ configRoot: root }, {});
-  assert.throws(() => assertNoHostSecrets({ configRoot: root }, { BROKER_SECRET_OPENROUTER: "x" }), /add BROKER_SECRET_OPENROUTER to speaker's Setup/);
-  writeFileSync(join(root, "secrets.env"), "BROKER_SECRET_X=y\n");
-  assert.throws(() => assertNoHostSecrets({ configRoot: root }, {}), /secrets\.env/);
 });
 
 test("remote MCP servers are not catalog entries; the shipped catalog keeps only in-VM servers and extensions", () => {

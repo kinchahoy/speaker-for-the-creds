@@ -1,21 +1,20 @@
-// `mise run init bottle-school`: checks the host, asks where bottle-school lives and how it reaches speaker and the model,
-// writes config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
+// `mise run init bottle-school`: checks the host, asks how bottle-school reaches speaker and the model, writes
+// ~/.bottle-school/config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
 import { spawn, spawnSync } from "node:child_process";
 import { accessSync, closeSync, constants, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
-import { homedir, hostname, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { hostname, platform } from "node:os";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
+import { bottleHome, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
   yes: { type: "boolean" },
   force: { type: "boolean" },
-  home: { type: "string" },
   "control-port": { type: "string" },
   "guest-port": { type: "string" },
   "speaker-url": { type: "string" },
@@ -23,7 +22,6 @@ export const bottleFlags = {
   model: { type: "string" },
   image: { type: "string" },
   "password-stdin": { type: "boolean" },
-  config: { type: "string" },
   "skip-build": { type: "boolean" },
   "skip-register": { type: "boolean" },
   "skip-smoke": { type: "boolean" },
@@ -57,6 +55,35 @@ const isFree = (port: number, host: string) =>
     probe.listen(port, host, () => probe.close(() => done(true)));
   });
 const command = (cmd: string, args: string[]) => spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
+const stop = (message: string): never => {
+  p.cancel(message);
+  process.exit(1);
+};
+/** At a terminal, asks to update an existing install; under --yes it needs --force. Returns true when it asked. */
+const confirmUpdate = async (what: string, fix: string, force: boolean, yes: boolean) => {
+  if (force) return false;
+  if (yes) fail(what, fix);
+  const update = answered(await p.confirm({ message: `${what}. Update it? Your current settings become the defaults; state, output, and images are kept.`, initialValue: true }));
+  return update || stop("Nothing was changed.");
+};
+/** Repeats the check until it passes: at a terminal it asks you to fix the problem and try again; under --yes it fails. */
+const untilFixed = async (problem: () => Promise<string | undefined>, fix: string, yes: boolean) => {
+  for (let found = await problem(); found !== undefined; found = await problem()) {
+    if (yes) fail(found, fix);
+    p.log.warn(`${found}. Fix: ${fix}`);
+    if (!answered(await p.confirm({ message: "Fixed it? Check again", active: "Check again", inactive: "Quit", initialValue: true }))) stop("Nothing more was changed.");
+  }
+};
+/** The parts of an existing config.json that become the defaults when updating it. */
+type Previous = { configRoot?: string; controlPort?: number; guestPort?: number; guestImage?: string; speaker?: { url?: string }; localModel?: { upstream?: string; models?: { id: string }[] } };
+const readPrevious = (path: string): Previous | undefined => {
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as Previous;
+  } catch (error) {
+    return fail(`${path} is not valid JSON (${(error as Error).message})`, "fix it, or delete it to start over");
+  }
+};
 
 const checkHost = (needDocker: boolean) => {
   if (platform() === "darwin") {
@@ -102,7 +129,7 @@ const speakerUrlProblem = (value: string) => {
 
 const Models = z.object({ data: z.array(z.object({ id: z.string() })) });
 
-async function pickModel(endpoint: string, wanted: string | undefined, yes: boolean) {
+async function pickModel(endpoint: string, wanted: string | undefined, yes: boolean, previous: string | undefined) {
   const url = `http://${endpoint}/v1/models`;
   const listed = await fetch(url, { signal: AbortSignal.timeout(5_000) })
     .then(async (response) => Models.parse(await response.json()).data.map((entry) => entry.id))
@@ -110,8 +137,9 @@ async function pickModel(endpoint: string, wanted: string | undefined, yes: bool
   if (listed.length === 0) fail(`${url} lists no models`, "load a model on that server");
   if (wanted !== undefined) return listed.includes(wanted) ? wanted : fail(`${endpoint} does not serve model ${wanted}`, `use one of: ${listed.join(", ")}`);
   if (listed.length === 1) return listed[0]!;
+  if (yes && previous !== undefined && listed.includes(previous)) return previous;
   if (yes) fail(`${endpoint} serves several models (${listed.join(", ")})`, "pass --model <id>");
-  return answered(await p.autocomplete({ message: `Model (${listed.length} available; type to filter, arrows move, Enter picks the highlighted one)`, maxItems: 8, options: listed.map((id) => ({ value: id, label: id })) }));
+  return answered(await p.autocomplete({ message: `Model (${listed.length} available; type to filter, arrows move, Enter picks the highlighted one)`, maxItems: 8, initialValue: previous, options: listed.map((id) => ({ value: id, label: id })) }));
 }
 
 /** Runs start.sh detached with its output in a log file. */
@@ -179,19 +207,25 @@ async function unlockSpeaker(speakerUrl: string, given: string | undefined, yes:
 export async function initBottleSchool(flags: BottleFlags, ownerPassword?: string) {
   const yes = flags.yes ?? false;
   p.intro("bottle-school setup");
-  const configPath = resolve(flags.config ?? configPathFromEnv());
-  if (existsSync(configPath) && !flags.force) fail(`${configPath} already exists`, "keep using it, or pass --force to replace it");
+  const home = bottleHome();
+  p.log.message(
+    [
+      "bottle-school runs coding agents in disposable VMs. Agents never hold a secret or reach the network on their own:",
+      "each access (a secret, a website, a folder) is granted per task by speaker-for-the-creds, which you approve.",
+      `This setup checks this machine, connects to speaker and your model server, and builds the VM image. Everything goes in ${home}.`,
+    ].join("\n"),
+  );
+  // microsandbox keeps unix sockets under the home, and socket paths are capped near 104 bytes.
+  if (home.length > 60) fail(`${home} is too long a path for bottle-school's unix sockets`, "set BOTTLE_SCHOOL_HOME to a shorter folder");
+  const configPath = configPathFromEnv();
+  const previous = readPrevious(configPath);
+  if (previous !== undefined) await confirmUpdate(`bottle-school is already set up (${configPath})`, "keep using it, or pass --force to replace its config", flags.force ?? false, yes);
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
-  const defaultHome = join(homedir(), ".local", "share", "bottle-school");
-  const home = resolve((await ask(flags.home, yes, defaultHome, () => p.text({ message: `Where should bottle-school keep its config, state, and output? (Enter keeps ${defaultHome})`, placeholder: defaultHome, defaultValue: defaultHome }))).replace(/^~(?=\/|$)/, homedir()));
-  for (const old of [join(home, "config.json"), join(home, "config", "config.json")])
-    if (existsSync(old) && !flags.force) fail(`${home} already has a bottle-school config (${old})`, "choose another home, keep using that install, or pass --force to overwrite it");
   const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
   for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
-  // The guest image and VM disks live in microsandbox's own home (MSB_HOME, else ~/.microsandbox), not under --home. It refuses
-  // a storage folder with a group- or world-writable ancestor, so check both now, before the other questions.
+  // The guest image and VM disks need room, and microsandbox refuses a folder with a group- or world-writable ancestor.
   const msbHome = microsandboxHome();
   const disk = statfsSync(existingAncestor(msbHome));
   const freeGiB = (disk.bavail * disk.bsize) / 1024 ** 3;
@@ -202,20 +236,30 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     if (directory === dirname(directory)) break;
   }
 
-  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", 7001, []);
-  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", 7002, [controlPort]);
+  const running = previous?.controlPort;
+  if (running !== undefined)
+    await untilFixed(
+      () => fetch(`http://127.0.0.1:${running}/api/state`, { signal: AbortSignal.timeout(2_000) }).then((r) => (r.ok ? `bottle-school is running on port ${running}` : undefined), () => undefined),
+      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle)",
+      yes,
+    );
+  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", previous?.controlPort ?? 7001, []);
+  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
 
-  const speakerUrl = (await ask(flags["speaker-url"], yes, undefined, () => p.text({ message: "Speaker's URL as the VMs see it", placeholder: "http://192.168.1.10:3000", validate: (v) => speakerUrlProblem(v ?? "") })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
+  const oldUrl = previous?.speaker?.url;
+  const speakerUrl = (await ask(flags["speaker-url"], yes, oldUrl, () => p.text({ message: `Speaker's URL as the VMs see it; bottle-school asks speaker before granting any access${oldUrl ? ` (Enter keeps ${oldUrl})` : ""}`, placeholder: oldUrl ?? "http://192.168.1.10:3000", defaultValue: oldUrl, validate: (v) => (v || !oldUrl ? speakerUrlProblem(v ?? "") : undefined) })))?.replace(/\/$/, "") ?? fail("--yes needs speaker's URL", "pass --speaker-url");
   const urlProblem = speakerUrlProblem(speakerUrl);
   if (urlProblem) fail(`speaker URL ${speakerUrl} is not usable`, urlProblem);
   const healthy = await fetch(`${speakerUrl}/_speaker/health`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.ok, () => false);
   if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker), or correct the URL");
   ok(`Speaker answers at ${speakerUrl}.`);
 
-  const endpoint = (await ask(flags["model-endpoint"], yes, undefined, () => p.text({ message: "Model server: host:port of an OpenAI-compatible server (for example 192.168.1.20:8080)", validate: (v) => (v?.trim() ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
-  const model = await pickModel(endpoint, flags.model, yes);
+  const oldEndpoint = previous?.localModel?.upstream;
+  const endpoint = (await ask(flags["model-endpoint"], yes, oldEndpoint, () => p.text({ message: `Model server the agents think with: host:port of an OpenAI-compatible server (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`, placeholder: oldEndpoint, defaultValue: oldEndpoint, validate: (v) => (v?.trim() || oldEndpoint ? undefined : "Enter the model server's host:port.") }))) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
+  const model = await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
 
-  const image = await ask(flags.image, yes, "bottle-school-guest", () => p.text({ message: "Guest image tag (Enter keeps bottle-school-guest)", placeholder: "bottle-school-guest", defaultValue: "bottle-school-guest" }));
+  const oldImage = previous?.guestImage ?? "bottle-school-guest";
+  const image = await ask(flags.image, yes, oldImage, () => p.text({ message: `Guest image: the Linux system each agent's VM boots (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }));
   const config = {
     ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
     bindHost: "127.0.0.1",
@@ -241,7 +285,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const env = { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath };
   if (!flags["skip-build"]) {
-    const build = yes || answered(await p.confirm({ message: `Build the guest image "${image}" now? It needs about 10 GiB under ${stateRoot} and several minutes the first time.`, initialValue: true }));
+    const build = yes || answered(await p.confirm({ message: `Build the guest image "${image}" now? It needs about 10 GiB under ${msbHome} and several minutes the first time.`, initialValue: true }));
     if (build) {
       const status = await new Promise<number | null>((done) => spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done));
       if (status !== 0) fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run guest-build ${image}`);
@@ -251,6 +295,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
 
   const loaded = loadConfig(configPath);
   if (!flags["skip-register"]) {
+    p.log.message("Next, this machine registers with speaker as a sandbox host. You approve it once; after that speaker answers its access requests.");
     // After a restart speaker is locked until the owner signs in; registering needs it open.
     const isLocked = () => fetch(`${speakerUrl}/_speaker/me`, { signal: AbortSignal.timeout(5_000) }).then((r) => r.status === 503);
     let password = ownerPassword ?? (flags["password-stdin"] ? await readStdin() : undefined);
@@ -268,12 +313,18 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     }
   } else p.log.info("Register later with: mise run bottle-cli register");
 
-  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && (yes || answered(await p.confirm({ message: "Start bottle-school and run a smoke-test task?", initialValue: true })));
+  const imageLoaded = spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
+  if (!flags["skip-smoke"] && !imageLoaded) p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run guest-build ${image}`);
+  const smoke = !flags["skip-smoke"] && !flags["skip-register"] && imageLoaded && (yes || answered(await p.confirm({ message: "Start bottle-school and run one small test task to check it all works?", initialValue: true })));
   if (smoke) {
     const logFile = join(home, "bottle-school.log");
     const server = startDetached(logFile, env);
+    let exited: number | null | undefined;
+    server.once("exit", (code) => (exited = code));
     const control = `http://127.0.0.1:${controlPort}`;
-    await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () => fetch(`${control}/api/state`).then((r) => r.ok, () => false));
+    await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () =>
+      exited !== undefined ? fail(`bottle-school exited (code ${exited}) before it answered`, `read ${logFile}`) : fetch(`${control}/api/state`).then((r) => r.ok, () => false),
+    );
     p.log.info(`bottle-school runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
     const created = await fetch(`${control}/api/tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT }) });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
