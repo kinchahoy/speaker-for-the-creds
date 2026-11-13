@@ -1,4 +1,4 @@
-// The owner's pages: Hono's html templates styled by Pico's classless CSS, with htmx for live panels, confirmations
+// The owner's pages: Hono's html templates styled by a small hand-written stylesheet, with htmx for live panels, confirmations
 // and form posts. The Inbox and Active panels poll every 5 seconds and are replaced only when their content changed.
 import { createHash } from 'node:crypto'
 import { html, raw } from 'hono/html'
@@ -21,17 +21,69 @@ export type Setup = {
 }
 
 const css = `
-main{max-width:1100px}nav a[aria-current]{font-weight:700;text-decoration:underline}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,360px),1fr));gap:1rem;align-items:start}
-article{margin:0}article>header>small{display:block}
-fieldset label{display:flex;gap:.5rem;align-items:flex-start;padding:.25rem .5rem;border-radius:.25rem}label.risky{background:var(--pico-mark-background-color)}
-fieldset input[type=checkbox],fieldset input[type=checkbox]:checked{appearance:auto;background:none;flex:none;width:1.1rem;height:1.1rem;margin:.15rem 0 0;accent-color:var(--pico-primary)}
-button.secondary{background:transparent;color:var(--pico-muted-color);border-color:var(--pico-muted-border-color)}
-button.deny{background:transparent;color:var(--pico-del-color);border-color:var(--pico-del-color)}
-.actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}.actions form,.actions button{margin:0;width:auto}
-ul.rows{padding:0}ul.rows>li{list-style:none;border-top:1px solid var(--pico-muted-border-color);padding:.5rem 0}
-.warn{color:var(--pico-del-color)}small{color:var(--pico-muted-color)}
+:root{color-scheme:light dark;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;accent-color:var(--accent);
+--bg:light-dark(oklch(97.5% .006 265),oklch(17% .02 265));--surface:light-dark(#fff,oklch(22% .025 265));--sunk:light-dark(oklch(95% .012 265),oklch(19% .025 265));
+--ink:light-dark(oklch(22% .04 265),oklch(95% .01 265));--dim:light-dark(oklch(44% .03 265),oklch(77% .03 265));--line:light-dark(oklch(90% .014 265),oklch(31% .03 265));--field:light-dark(oklch(58% .03 265),oklch(50% .03 265));
+--brand:light-dark(oklch(36% .17 268),oklch(30% .15 268));--accent:light-dark(oklch(48% .21 268),oklch(77% .13 268));--on-accent:light-dark(#fff,oklch(18% .05 268));
+--region:light-dark(oklch(94.5% .03 268),oklch(22% .05 268));--ticket:light-dark(#fff,oklch(31% .05 268));--perf:light-dark(oklch(80% .05 268),oklch(42% .06 268));
+--go:light-dark(oklch(46% .14 155),oklch(80% .17 155));--on-go:light-dark(#fff,oklch(20% .05 155));--good:light-dark(oklch(42% .13 155),oklch(84% .15 155));--good-bg:light-dark(oklch(92% .07 155),oklch(30% .06 155));
+--warn:light-dark(oklch(42% .1 70),oklch(87% .14 85));--warn-bg:light-dark(oklch(92% .1 85),oklch(32% .06 80));--bad:light-dark(oklch(48% .19 25),oklch(80% .13 25));--bad-bg:light-dark(oklch(95% .03 25),oklch(28% .05 25));
+--mark-bg:light-dark(oklch(92% .05 var(--h,268)),oklch(33% .08 var(--h,268)));--mark-ink:light-dark(oklch(40% .15 var(--h,268)),oklch(85% .12 var(--h,268)));
+--shadow:0 1px 2px light-dark(oklch(25% .05 268/.14),#0006),0 10px 24px -12px light-dark(oklch(25% .08 268/.4),#000b)}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;min-width:320px;background:var(--bg);color:var(--ink)}
+.sprite{position:absolute;width:0;height:0}.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.top{position:sticky;top:0;z-index:10;background:var(--brand);color:#fff}.top .in{max-width:1120px;margin:auto;padding:10px 20px 0}
+.bar{display:flex;align-items:center;gap:12px;min-height:44px}.bar a{color:#fff;font-size:.88rem}.bar small{margin-left:auto;color:oklch(90% .04 268)}.bar small::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:oklch(80% .17 155);margin-right:7px}
+.logo{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#fff;color:var(--brand)}
+h1{font-size:1.45rem;line-height:1.2;font-weight:800;letter-spacing:-.03em;margin:0}h1 em{font-weight:700}
+nav{display:flex;gap:4px;margin-top:6px;overflow-x:auto;scrollbar-width:none}nav a{display:flex;align-items:center;min-height:44px;padding:0 16px;border-radius:12px 12px 0 0;color:oklch(92% .035 268);text-decoration:none;font-weight:650;white-space:nowrap}
+nav a:hover{background:#fff2}nav a[aria-current]{background:var(--bg);color:var(--ink)}
+main{max-width:1120px;margin:auto;padding:20px 20px 72px}main>p:first-child{margin:12px 0}
+h2{display:flex;align-items:baseline;gap:10px;font-size:1.3rem;line-height:1.25;font-weight:750;letter-spacing:-.02em;margin:0 0 14px}h3{font-size:1rem;margin:14px 0 8px}
+small{color:var(--dim);font-size:.86rem}h2 small{font-size:.8rem;font-weight:700}a{color:var(--accent);text-underline-offset:3px}code{font:.9em ui-monospace,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:22px}.panel.region{background:var(--region);border:0;border-radius:18px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:14px;align-items:start}
+article{margin:0}article>footer{padding-bottom:12px}.region article{background:var(--ticket);border-radius:16px;box-shadow:var(--shadow);padding:18px 18px 0}
+article>header{display:block;margin-bottom:8px}article>header strong{font-size:1.12rem;font-weight:750}article>header small{display:block}
+.stub{position:relative;margin:14px -18px 0;padding:14px 18px 18px;border-top:2px dashed var(--perf)}.stub::before,.stub::after{content:"";position:absolute;top:-9px;width:16px;height:16px;border-radius:50%;background:var(--region)}.stub::before{left:-8px}.stub::after{right:-8px}
+#active article{border-top:1px solid var(--line);padding:12px 0}#active .cards{display:block}#active article>header{display:flex;gap:12px;align-items:center;margin:0}#active article>header>span:not(.mark){flex:1;min-width:0}#active article>header small{display:inline}
+ul.rows{list-style:none;margin:0;padding:0}ul.rows>li{padding:12px 0;border-top:1px solid var(--line)}ul.rows>li:first-child{border-top:0}#active ul.rows{margin-left:46px}#active ul.rows>li{padding:8px 0}
+li.row{display:flex;gap:12px;align-items:center}li.row>div:first-of-type{flex:1;min-width:0;overflow-wrap:anywhere}
+.mark{--h:268;display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--mark-bg);color:var(--mark-ink);flex:none}.chips .mark{width:24px;height:24px;border-radius:7px}.chips .mark .ic{width:14px;height:14px}
+.k-service{--h:70}.k-secret{--h:335}.k-site{--h:205}.k-folder{--h:135}.k-ssh{--h:95}.k-mcp{--h:295}.k-ext{--h:25}.k-host{--h:250}.k-agent{--h:180}
+mark{display:inline-block;padding:1px 9px;border-radius:99px;font-size:.78rem;font-weight:700;background:var(--warn-bg);color:var(--warn)}.chip{padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:700}.chip.good{background:var(--good-bg);color:var(--good)}.chip.bad{background:var(--bad-bg);color:var(--bad)}
+.warn{color:var(--bad)}p.warn{padding:10px 14px;border-radius:10px;background:var(--bad-bg);font-weight:600}
+label{display:block;font-size:.82rem;font-weight:600;color:var(--dim)}form{margin:0}
+input:not([type=checkbox],[type=radio]),select,textarea{display:block;width:100%;min-height:44px;margin:5px 0 12px;padding:9px 12px;border:1px solid var(--field);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:.95rem}textarea{font-family:ui-monospace,Menlo,Consolas,monospace}
+input[type=checkbox]{width:22px;height:22px;margin:0;flex:none}fieldset{border:0;margin:0 0 6px;padding:0;display:grid;gap:8px}legend{padding:0;margin-bottom:8px}
+fieldset label{display:flex;gap:10px;align-items:center;padding:4px 8px;border-radius:10px;font-size:1rem;font-weight:400;color:var(--ink)}fieldset label small{display:block;line-height:1.2}fieldset label code{font-weight:650}label.risky{background:var(--warn-bg)}
+button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:1px solid transparent;border-radius:10px;background:var(--accent);color:var(--on-accent);font:inherit;font-size:.92rem;font-weight:650;cursor:pointer;white-space:nowrap}button:hover{filter:brightness(1.1)}
+button.approve{background:var(--go);color:var(--on-go);font-weight:750}button.secondary{background:transparent;color:var(--ink);border-color:var(--line)}button.deny,form[hx-confirm] button{background:transparent;color:var(--bad);border-color:var(--bad)}form[hx-confirm] button{border-color:var(--line)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions form,.actions button{margin:0}.stub button{flex:1;min-height:52px;font-size:1.02rem}.stub button:first-child{flex:1.7}.actions a{padding:0 10px;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:18px}.chips input[type=text]{flex:1 1 200px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--field);border-radius:10px;background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer}
+.chips label:has(:checked){background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.chips label input{position:absolute;opacity:0}
+details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;color:var(--accent);font-weight:650}summary::-webkit-details-marker{display:none}summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}details[open]>summary::after{transform:rotate(225deg)}
+.panel>details{border-top:1px solid var(--line);margin-top:8px}
+.meter{display:inline-block;vertical-align:middle;width:110px;height:8px;margin-right:6px;border-radius:99px;background:var(--sunk);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}.meter i{display:block;height:100%;background:var(--go)}
+table{width:100%;border-collapse:collapse;font-size:.9rem}th{text-align:left;color:var(--dim)}th,td{padding:6px 10px 6px 0;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}.log-filter select{margin-bottom:0}
+.auth{max-width:420px;margin:48px auto}.auth button{width:100%}.auth h2{align-items:center}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}.top :focus-visible{outline-color:#fff}
+@media(max-width:560px){.top .in{padding:6px 12px 0}h1{font-size:1.25rem}.bar a{display:none}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:14px 14px 0}.stub{margin:14px -14px 0;padding:14px}.panel.region{padding:12px}#active ul.rows{margin-left:0}#active article>header{flex-wrap:wrap}#active article>header>span:not(.mark){flex-basis:calc(100% - 50px)}#active article>header>form{margin-left:46px}}
 `
+const sprite = `<svg class="sprite" aria-hidden="true"><defs>
+<symbol id="i-brand" viewBox="0 0 24 24"><circle cx="7" cy="14" r="3.2"/><path d="m9.4 11.8 8.1-8.1M14.5 6.7l2.5 2.5M17.2 4l2.5 2.5M3.2 8.5a6 6 0 0 1 3-3M2 4.8a9 9 0 0 1 4-2.7"/></symbol>
+<symbol id="i-service" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 9.2-9.2M17 6l3 3m-5-1 2 2"/></symbol>
+<symbol id="i-secret" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+<symbol id="i-site" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+<symbol id="i-mcp" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+<symbol id="i-ext" viewBox="0 0 24 24"><path d="M4 8h4a2 2 0 1 1 4 0h4v4a2 2 0 1 1 0 4v4H4z"/></symbol>
+<symbol id="i-host" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="i-agent" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 10 3 2-3 2M13 15h4"/></symbol>
+<symbol id="i-ssh" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13l3 2-3 2"/></symbol>
+</defs></svg>`
+const mark = (kind: string) =>
+  html`<span class="mark k-${kind}" aria-hidden="true"><svg class="ic"><use href="#i-${kind}"></use></svg></span>`
 // The page's only script (htmx is loaded without eval): a ticked group box ticks its members; the filter bar hides
 // cards and rows by kind and text; times show in the viewer's zone, with a live countdown where data-left is set.
 // Filtering and times are re-applied after every swap and then every second.
@@ -45,6 +97,9 @@ const tick = () => {
   const q = document.querySelector('[name=q]')?.value.toLowerCase() ?? ''
   document.querySelectorAll('[data-kind]').forEach((el) => {
     el.hidden = !((!kind || el.dataset.kind.split(' ').includes(kind)) && el.textContent.toLowerCase().includes(q))
+  })
+  document.querySelectorAll('.meter').forEach((m) => {
+    m.firstChild.style.width = Math.max(0, Math.min(100, ((new Date(m.nextElementSibling.dateTime) - Date.now()) / m.dataset.total) * 100)) + '%'
   })
   document.querySelectorAll('time[data-local]').forEach((t) => {
     const at = new Date(t.dateTime)
@@ -68,7 +123,7 @@ const htmxConfig = JSON.stringify({
   ],
 })
 const head = (nonce = '') =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker</title><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker for the creds</title><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
 
 const sections = [
   ['approvals', 'Inbox', '/admin'],
@@ -87,12 +142,18 @@ const kinds = {
   ext: 'extensions',
 }
 // Kind chips and a text box that narrow the cards and rows of the live panels (see pageScript).
-const filterBar = html`<div class="actions" role="search"><label><input type="radio" name="kind" value="" checked>all</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${text}</label>`)}<input type="text" name="q" placeholder="Search" aria-label="Search"></div>`
+const filterBar = html`<div class="chips" role="search"><input type="text" name="q" placeholder="Filter by name, item or kind" aria-label="Search"><label><input type="radio" name="kind" value="" checked>all</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${mark(k)}${text}</label>`)}</div>`
+const intros: Record<Section, string> = {
+  approvals: 'Sandbox hosts and access requests waiting for your yes or no.',
+  active: 'Agents and the access granted to them right now; extend or revoke any of it.',
+  services: 'Upstream APIs, secrets, groups and SSH targets speaker manages.',
+  log: 'Recent calls and decisions, newest first.',
+}
+const logo = html`<span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-brand"></use></svg></span>`
 export const layout = (nonce: string | undefined, section: Section, body: Html | string) =>
-  html`${head(nonce)}<body hx-boost="true"><header><nav><ul><li><strong>Speaker</strong></li></ul><ul>${sections.map(
-    ([id, label, href]) =>
-      html`<li><a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}</a></li>`,
-  )}</ul></nav></header><main>${section === 'approvals' || section === 'active' ? filterBar : ''}${typeof body === 'string' ? raw(body) : body}</main></body></html>`
+  html`${head(nonce)}<body hx-boost="true">${raw(sprite)}<header class="top"><div class="in"><div class="bar">${logo}<h1>Speaker for the <em>creds</em></h1><small>Live</small><a href="/admin">Refresh</a></div><nav>${sections.map(
+    ([id, label, href]) => html`<a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}</a>`,
+  )}</nav></div></header><main><p><small>${intros[section]}</small></p>${section === 'approvals' || section === 'active' ? filterBar : ''}${typeof body === 'string' ? raw(body) : body}</main></body></html>`
 
 // Sign-in and first-run pages: just one form.
 const authPage = (
@@ -104,7 +165,7 @@ const authPage = (
   exposed: boolean,
   error?: string,
 ) =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker</title><link rel="stylesheet" href="/admin/assets/pico.css"></head><body><main><article><h2>${heading}</h2><p>${intro}</p>${exposed ? html`<p class="warn" role="note">This page uses plain HTTP, so your password crosses the network unencrypted.</p>` : ''}${error ? html`<p class="warn" role="alert">${error}</p>` : ''}<form method="post" action="${action}">${fields}<button>${button}</button></form></article></main></body></html>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><style>${raw(css)}</style></head><body>${raw(sprite)}<main class="auth"><section class="panel"><h2>${logo}${heading}</h2><p>${intro}</p>${exposed ? html`<p class="warn" role="note">This page uses plain HTTP, so your password crosses the network unencrypted.</p>` : ''}${error ? html`<p class="warn" role="alert">${error}</p>` : ''}<form method="post" action="${action}">${fields}<button>${button}</button></form></section></main></body></html>`
 const password = (name: string, label: string, autocomplete: string) =>
   html`<label>${label}<input name="${name}" type="password" autocomplete="${autocomplete}" required></label>`
 export const signInPage = (exposed: boolean, error?: string) =>
@@ -162,7 +223,7 @@ const empty = (text: string) => html`<p><small>${text}</small></p>`
 // Request cards are hx-preserve: a refresh keeps the cards still pending as they are, so unticked items and a chosen duration stay.
 const digest = (inner: string) => createHash('sha256').update(inner).digest('hex').slice(0, 16)
 export const live = (id: string, inner: string) =>
-  `<section id="${id}" hx-get="/admin/panel/${id}?h=${digest(inner)}" hx-trigger="every 5s" hx-swap="outerHTML">${inner}</section>`
+  `<section id="${id}" class="panel${id === 'inbox' ? ' region' : ''}" hx-get="/admin/panel/${id}?h=${digest(inner)}" hx-trigger="every 5s" hx-swap="outerHTML">${inner}</section>`
 export const unchanged = (inner: string, hash?: string) => hash === digest(inner)
 
 // --- Inbox: sandbox hosts waiting to register and access requests, one card each ---
@@ -191,13 +252,13 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
   }
   const pick = (agentId: string, item: string) => {
     const detail = details[`${agentId} ${item}`]
-    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked><span><code>${item}</code> <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}</span></label>`
+    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code> <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}</span></label>`
   }
   const hostCards = hosts
     .filter((h) => h.status === 'pending')
     .map(
       (h) =>
-        html`<article id="host-${h.id}"><header><strong>Sandbox host ${h.name}</strong> <small>wants to register</small></header><p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions"><button>Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
+        html`<article id="host-${h.id}"><header><strong>Sandbox host ${h.name}</strong> <small>wants to register</small></header><p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions stub"><button class="approve">Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
     )
   const requestCards = requests
     .filter((r) => r.status === 'pending')
@@ -224,11 +285,11 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
       return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map(kindOf))].join(' ')}"><header><strong>${label}</strong>${agent ? html`<small>says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''}</small><small>from ${agent.source} · key ${agent.tokenHash.slice(0, 8)}${twin(agent)}</small>` : ''}<small>asked ${local(r.createdAt)}</small></header><p><small>Reason:</small> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
         (g) =>
           html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item))}</fieldset>`,
-      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item))}</fieldset>` : ''}${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button>Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
+      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
     })
   const cards = [...hostCards, ...requestCards]
   return String(
-    html`<h2>Inbox${cards.length ? ` (${cards.length} pending)` : ''}</h2>${cards.length ? html`<div class="cards">${cards}</div>` : empty('Nothing to approve. New requests appear here as soon as an agent asks for access.')}`,
+    html`<h2>Inbox ${cards.length ? html`<small>${cards.length} pending</small>` : ''}</h2>${cards.length ? html`<div class="cards">${cards}</div>` : empty('Nothing to approve. New requests appear here as soon as an agent asks for access.')}`,
   )
 }
 
@@ -252,20 +313,20 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
   const soonest = (id: string) => Math.min(Number.POSITIVE_INFINITY, ...grants.filter((g) => g.agentId === id).map(end))
   const grantRow = (g: View['grants'][number]) => {
     const detail = details[`${g.agentId} ${g.item}`]
-    return html`<li id="grant-${g.id}" data-kind="${kindOf(g.item)}"><code>${g.item}</code> ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`expires ${local(Date.parse(g.expiresAt), true)}`}${chips[g.state] ? html` · <mark data-state="${g.state}">${chips[g.state]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
+    return html`<li id="grant-${g.id}" data-kind="${kindOf(g.item)}"><code>${g.item}</code> ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`${g.grantedMs ? html`<span class="meter" data-total="${g.grantedMs}"><i></i></span>` : ''}${local(Date.parse(g.expiresAt), true)}`}${chips[g.state] ? html` · <mark data-state="${g.state}">${chips[g.state]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
   }
   const blocks = [...agents]
     .sort((a, b) => soonest(a.id) - soonest(b.id))
     .map((a) => {
       const mine = grants.filter((g) => g.agentId === a.id).sort((x, y) => end(x) - end(y))
       const open = sessions.filter((s) => s.agent === a.id)
-      return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header class="actions"><span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li data-kind="ssh"><code>${s.what}</code> <small>SSH session open since ${local(s.started)}</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
+      return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header>${mark('agent')}<span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header><ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li data-kind="ssh"><code>${s.what}</code> <small>SSH session open since ${local(s.started)}</small>${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</li>`)}</ul></article>`
     })
   const hostBlocks = hosts
     .filter((h) => h.status === 'approved')
     .map(
       (h) =>
-        html`<article><header class="actions"><span><strong>Sandbox host ${h.name}</strong> <small>${h.kinds.join(', ') || 'no item kinds'}${h.shares.length ? ` · shares: ${h.shares.map((s) => `${s.name} (${s.mount ? 'VM mount' : 'no VM mount'})`).join(', ')}` : ''}</small></span>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</header></article>`,
+        html`<article><header>${mark('host')}<span><strong>Sandbox host ${h.name}</strong> <small>${h.kinds.join(', ') || 'no item kinds'}${h.shares.length ? ` · shares: ${h.shares.map((s) => `${s.name} (${s.mount ? 'VM mount' : 'no VM mount'})`).join(', ')}` : ''}</small></span>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</header></article>`,
     )
   return String(
     html`<h2>Active ${grants.length ? html`<small>${plural(grants.length, 'grant', 'grants')}</small>` : ''}</h2>${blocks.length || hostBlocks.length ? html`<div class="cards">${[...blocks, ...hostBlocks]}</div>` : empty('Nothing active. Agents and the access you granted are listed here until they expire or you revoke them.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p>`,
@@ -286,11 +347,11 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
     html`<div class="actions">${error === 'tools' ? html`<p class="warn" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<small>${mcp[id] ? `Tools: ${mcp[id].read} read · ${mcp[id].write} write${mcp[id].unannotated ? ` (${mcp[id].unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</small>${button('/admin/services/tools', hidden('id', id), 'Refresh tools')}</div>`
   const serviceRows = Object.entries(services).map(([id, s]) => {
     const keyed = s.auth.type === 'none' || secrets.get(id) !== undefined
-    return html`<li><strong>${id}</strong> <code>${s.baseUrl}</code><br><small><span class="${keyed ? '' : 'warn'}">${s.auth.type === 'none' ? 'No credential' : `Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}`}</span> · read ${s.read} · write ${s.write} · notes ${s.notes ? 'yes' : 'no'}${s.mcp ? ' · MCP' : ''}${s.auth.type === 'path' ? ' · path secret' : ''}</small><div class="actions"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}">Log</a>${button('/admin/services/delete', hidden('id', id), 'Delete', `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></li>`
+    return html`<li class="row">${mark('service')}<div><strong>${id}</strong> <code>${s.baseUrl}</code><br><small><span class="chip ${keyed ? 'good' : 'bad'}">${s.auth.type === 'none' ? 'No credential' : `Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}`}</span> · read ${s.read} · write ${s.write} · notes ${s.notes ? 'yes' : 'no'}${s.mcp ? ' · MCP' : ''}${s.auth.type === 'path' ? ' · path secret' : ''}</small></div><div class="actions"><a href="/admin?section=services&amp;service=${encodeURIComponent(id)}">Edit</a><a href="/admin/log?service=${encodeURIComponent(id)}">Log</a>${button('/admin/services/delete', hidden('id', id), 'Delete', `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></li>`
   })
   const secretRows = Object.entries(owned).map(
     ([name, { hosts, env }]) =>
-      html`<li><strong>${name}</strong> <small>Agent sees <code>${env}</code> · sent only to ${hosts.join(', ')}</small>${button('/admin/secrets/delete', hidden('name', name), 'Delete', `Delete secret ${name}? Its value is erased.`)}</li>`,
+      html`<li class="row">${mark('secret')}<div><strong>${name}</strong> <small>Agent sees <code>${env}</code> · sent only to ${hosts.join(', ')}</small></div>${button('/admin/secrets/delete', hidden('name', name), 'Delete', `Delete secret ${name}? Its value is erased.`)}</li>`,
   )
   const targets = Object.entries(ssh.targets)
   const sshPanel = !ssh.enabled
@@ -314,7 +375,7 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
     ([id, group]) =>
       html`<li><strong>${id}</strong> ${group.description ? html`<small>${group.description}</small>` : ''}<br><small>${plural(group.items.length, 'item', 'items')}, granted together by one approval: ${group.items.join(', ')}</small><details><summary>Edit items</summary>${groupForm(id, group)}</details>${button('/admin/groups/delete', hidden('id', id), 'Delete', `Delete group ${id}? Agents can no longer request it. Existing grants stay.`)}</li>`,
   )
-  return html`<h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}<h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details><h2 id="groups">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p><h2>SSH targets</h2>${sshPanel}<h2>Owner password</h2><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form><p><small>Credentials stay on this server.</small></p>`
+  return html`<section class="panel"><h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel"><h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details></section><section class="panel"><h2 id="groups">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle-school template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p></section><section class="panel"><h2>SSH targets</h2>${sshPanel}</section><section class="panel"><h2>Owner password</h2><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></section><p><small>Credentials stay on this server.</small></p>`
 }
 
 // --- Log: newest first, narrowed by the filters in the address ---
@@ -350,12 +411,12 @@ export function log(
 ) {
   const choose = (name: string, options: [string, string][]) =>
     html`<label>${name[0].toUpperCase() + name.slice(1)}<select name="${name}"><option value="">Any</option>${options.map(([value, text]) => html`<option value="${value}" ${raw(query[name] === value ? 'selected' : '')}>${text}</option>`)}</select></label>`
-  return html`<h2>Log <small>${plural(entries.length, 'entry', 'entries')}, newest first</small></h2><form method="get" action="/admin/log"><div class="actions">${Object.entries(choices).map(([name, options]) => choose(name, options))}<button>Filter</button><a href="/admin/log">Clear</a></div></form>${
+  return html`<section class="panel"><h2>Log <small>${plural(entries.length, 'entry', 'entries')}, newest first</small></h2><form method="get" action="/admin/log"><div class="actions log-filter">${Object.entries(choices).map(([name, options]) => choose(name, options))}<button>Filter</button><a href="/admin/log">Clear</a></div></form>${
     entries.length
       ? html`<table><thead><tr><th>Time (UTC)</th><th>Who</th><th>What</th><th>Result</th></tr></thead><tbody>${entries.map(
           (e) =>
             html`<tr><td><time datetime="${e.time}">${time(Date.parse(e.time))}</time></td><td>${[e.label, e.agentName].filter(Boolean).join(' · ')}</td><td>${e.event === 'proxy' ? '' : `${e.event.replaceAll('_', ' ')}: `}${what(e)}</td><td>${result(e)}</td></tr>`,
         )}</tbody></table>`
       : empty('No log entries. Calls and decisions appear here as they happen, or nothing matches this filter.')
-  }`
+  }</section>`
 }

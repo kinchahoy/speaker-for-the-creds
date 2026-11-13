@@ -91,16 +91,11 @@ export function adminApp(core: Core) {
     await next()
   })
   admin.use('*', csrf({ origin: publicOrigin }))
-  // Pico's stylesheet and htmx, served from the installed packages.
-  const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
-  const assets = {
-    'pico.css': [asset('@picocss/pico/css/pico.classless.min.css'), 'text/css'],
-    'htmx.js': [asset('htmx.org/dist/htmx.min.js'), 'text/javascript'],
-  }
-  admin.get('/assets/:name{pico\\.css|htmx\\.js}', (c) => {
-    const [body, type] = assets[c.req.param('name') as keyof typeof assets]
-    return c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
-  })
+  // htmx, served from the installed package.
+  const htmx = readFileSync(new URL(import.meta.resolve('htmx.org/dist/htmx.min.js')), 'utf8')
+  admin.get('/assets/htmx.js', (c) =>
+    c.body(htmx, 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'max-age=86400' }),
+  )
   // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'

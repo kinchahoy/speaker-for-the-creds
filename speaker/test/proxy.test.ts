@@ -618,7 +618,7 @@ test('the admin pages have no JSON routes', async (t) => {
   assert.equal((await f.call(poll, { headers: f.ownerHeaders })).status, 204)
   await enroll(f, 'poll-token', { want: ['notes.read'], reason: 'poll' })
   assert.match(await (await f.call(poll, { headers: f.ownerHeaders })).text(), /<article id="request-/)
-  for (const asset of ['pico.css', 'htmx.js']) assert.equal((await f.call(`/admin/assets/${asset}`)).status, 200)
+  assert.equal((await f.call('/admin/assets/htmx.js')).status, 200)
 })
 
 test('a service set to never answers denied at once, and a POST read path counts as a read', async (t) => {
