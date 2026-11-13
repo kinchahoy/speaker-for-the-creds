@@ -133,13 +133,17 @@ export function createProxy(hooks: ProxyHooks): Server {
   // Requests inside one tunnel: grants are checked again on every request, so revoking ends access at once.
   const tunnelHandler = (agent: string, host: string, port: string) => (req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0]
-    const answer = (status: number, message: string) => {
-      hooks.log('secret_proxy', { agent, host, method: req.method, path, status })
+    const answer = (status: number, message: string, event = 'secret_proxy') => {
+      hooks.log(event, { agent, host, method: req.method, path, status, reason: message })
       res.writeHead(status, { 'content-type': 'text/plain', connection: 'close' }).end(`${message}\n`)
     }
     const secrets = hooks.secrets(agent).filter(({ hosts }) => hosts.some((pattern) => covers(pattern, host)))
     if (!secrets.length)
-      return answer(403, `speaker: your access to ${host} ended (revoked or expired). Check GET /_speaker/catalog.`)
+      return answer(
+        403,
+        `speaker: your access to ${host} ended (revoked or expired). Check GET /_speaker/catalog.`,
+        'secret_proxy_refused',
+      )
     const headers: OutgoingHttpHeaders = { ...req.headers, host: port === '443' ? host : `${host}:${port}` }
     for (const name of ['connection', 'proxy-connection', 'proxy-authorization', 'keep-alive', 'upgrade'])
       delete headers[name]
@@ -175,7 +179,8 @@ export function createProxy(hooks: ProxyHooks): Server {
   proxy.on('connect', async (req, socket: Socket, head) => {
     socket.on('error', () => undefined)
     let host = '',
-      port = ''
+      port = '',
+      agent: string | undefined
     try {
       ;({ hostname: host, port } = new URL(`http://${req.url}`))
       host = host.replace(/^\[|\]$/g, '')
@@ -187,7 +192,7 @@ export function createProxy(hooks: ProxyHooks): Server {
           407,
           'speaker: proxy credentials needed. Use http://agent:<your speaker token>@<speaker>:<proxy port>',
         )
-      const { agent } = hooks.authenticate(token, socket.remoteAddress?.replace(/^::ffff:/, ''))
+      ;({ agent } = hooks.authenticate(token, socket.remoteAddress?.replace(/^::ffff:/, '')))
       if (!hooks.secrets(agent).some(({ hosts }) => hosts.some((pattern) => covers(pattern, host))))
         throw new Refusal(
           403,
@@ -201,7 +206,7 @@ export function createProxy(hooks: ProxyHooks): Server {
     } catch (error) {
       const refusal =
         error instanceof Refusal ? error : new Refusal(502, `speaker: proxy failed: ${(error as Error).message}`)
-      hooks.log('secret_proxy_refused', { host, status: refusal.status, reason: refusal.message })
+      hooks.log('secret_proxy_refused', { agent, host, status: refusal.status, reason: refusal.message })
       refuse(socket, refusal.status, refusal.message)
     }
   })

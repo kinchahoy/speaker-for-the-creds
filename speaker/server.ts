@@ -24,6 +24,14 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
       return c.json({ error: 'invalid', message: error.message }, error.status)
     }
     if (error instanceof IllegalTransition) return c.json({ error: 'conflict', message: error.message }, 409)
+    // A malformed body from an authenticated agent counts as refused on the owner's page.
+    const caller = c.get('caller')
+    if ((error instanceof z.ZodError || error instanceof SyntaxError) && caller?.role === 'agent')
+      core.tally(
+        caller.agent,
+        'refused',
+        error instanceof z.ZodError ? z.prettifyError(error).replaceAll('\n', ' ') : 'Body is not valid JSON',
+      )
     if (error instanceof z.ZodError)
       return c.json(
         {

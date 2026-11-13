@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { upgradeWebSocket } from '@hono/node-server'
 import type { Context, Hono, MiddlewareHandler } from 'hono'
 import { etag } from 'hono/etag'
+import { HTTPException } from 'hono/http-exception'
 import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
@@ -19,6 +20,7 @@ import {
   invalid,
   itemForms,
   kindOf,
+  noCounts,
   plural,
   type Request,
   requestSchema,
@@ -68,6 +70,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     baseOf,
     grantState,
     endAgent,
+    tally,
   } = core
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', baseOf(c))
@@ -246,23 +249,30 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   }
   // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
-    const items = resolveItems(input.want, agent)
-    // A newer key replaces the older one.
-    if (input.sshKey) {
-      agent.sshKey = input.sshKey
-      syncJump()
-    }
-    // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
-    if (
-      !agent.sshKey &&
-      items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
-    )
-      throw invalid(
-        'ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)',
-        undefined,
-        400,
-        'Send "sshKey"; read "Folders and SSH" in GET /_speaker/help',
+    let items: string[]
+    try {
+      items = resolveItems(input.want, agent)
+      // A newer key replaces the older one.
+      if (input.sshKey) {
+        agent.sshKey = input.sshKey
+        syncJump()
+      }
+      // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
+      if (
+        !agent.sshKey &&
+        items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
       )
+        throw invalid(
+          'ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)',
+          undefined,
+          400,
+          'Send "sshKey"; read "Folders and SSH" in GET /_speaker/help',
+        )
+    } catch (error) {
+      // Turned away before the owner saw anything: the owner's page counts it.
+      if (error instanceof HTTPException) tally(agent, 'refused', error.message)
+      throw error
+    }
     const request = createRequest(agent, items, input.want, input.reason, input.duration)
     // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
     await hold(
@@ -322,6 +332,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         lastSeen: Date.now(),
         uses: 0,
         lastUsedAt: null,
+        counts: noCounts(),
       }
       // Refuse unknown names before enrolling, so a bad first request leaves no token behind.
       if (want.length) resolveItems(want, enrolling)
@@ -436,6 +447,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       lastSeen: Date.now(),
       uses: 0,
       lastUsedAt: null,
+      counts: noCounts(),
     }
     agents.set(agent.id, agent)
     audit('agent_created', { agent: agent.id, host: host.id })
@@ -742,13 +754,20 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     }
     const item = `${serviceId}.${write ? 'full' : 'read'}`
     const rule = write ? service.write : service.read
-    if (rule === 'never')
+    if (rule === 'never') {
+      tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
       return c.json({ error: 'denied', item, next: 'Stop: the owner blocks this; do not request it.' }, 403)
+    }
     const secret = credentialOf(serviceId)
     if (secret === undefined) return c.json({ error: 'invalid', message: 'Service has no key configured' }, 503)
     if (rule === 'ask' && !coverFor(agent.id, serviceId, write)) {
       const until = lockedUntil(agent.id, item)
-      if (until !== undefined)
+      if (until !== undefined) {
+        tally(
+          agent,
+          'blocked',
+          `${method} ${serviceId}: ${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
+        )
         return c.json(
           {
             error: 'denied',
@@ -758,6 +777,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           },
           403,
         )
+      }
       // A call files a request for exactly the item its method implies.
       const request = createRequest(
         agent,
@@ -769,6 +789,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       )
       await hold(c, () => request.status !== 'pending')
       if (!coverFor(agent.id, serviceId, write)) {
+        tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
         if (request.status === 'decided')
           return c.json(
             { error: 'denied', item, request: request.id, next: 'Stop: the owner denied this request.' },

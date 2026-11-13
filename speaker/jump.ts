@@ -593,7 +593,11 @@ export async function createJump(env: Env) {
       const sshGrant = grants.find((g) => g.item === `ssh:${name}`)
       const alias = share ? share.target : sshGrant ? name : undefined
       const target = alias === undefined ? undefined : settings.targets[alias]
-      if (alias === undefined || !target) return send({ type: 'refused', message: `You have no grant for "${name}"` })
+      if (alias === undefined || !target) {
+        const message = `You have no grant for "${name}"`
+        env.audit('ssh_refused', { agent: current.agent, session: current.id, why: message })
+        return send({ type: 'refused', message })
+      }
       if (!target.sftp) return send({ type: 'refused', message: `${alias} has no sftp-server` })
       const readOnly = share ? !folder.item.endsWith(':rw') : false
       const server = share ? `${target.sftp} -d ${sh(share.path)}${readOnly ? ' -R' : ''}` : target.sftp
