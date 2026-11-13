@@ -311,6 +311,7 @@ test('names that do not exist are refused without listing any real name, and nev
   ])
   assert.match(decodeURIComponent(root.headers.get('location') ?? ''), /sshError=Refused: root has no limits/)
   // A group naming targets and shares shows the agent only a count, never the names.
+  assert.equal((await f.enroll([])).status, 201) // the refused requests above enrolled nothing
   const { groups } = (await (await f.agent('/_speaker/catalog')).json()) as { groups: object }
   assert.deepEqual(groups, { ops: { description: 'Ops', items: [], also: '1 SSH target, 2 folders' } })
 })

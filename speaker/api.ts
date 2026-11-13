@@ -313,7 +313,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       throw invalid('This token is already enrolled from another address. Make a new token and enroll again')
     const created = !agent
     if (!agent) {
-      agent = {
+      const enrolling: Agent = {
         id: rid(),
         tokenHash,
         ...identity,
@@ -323,6 +323,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         uses: 0,
         lastUsedAt: null,
       }
+      // Refuse unknown names before enrolling, so a bad first request leaves no token behind.
+      if (want.length) resolveItems(want, enrolling)
+      agent = enrolling
       agents.set(agent.id, agent)
       audit('agent_enrolled', { agent: agent.id, source })
     }
@@ -447,6 +450,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Per secret grant, everything the agent needs to use it through the proxy (the value is never shown).
   const secretsView = (c: Context, agent: Agent) => {
     const base = baseOf(c),
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell path the agent runs as written
       ca = '${XDG_STATE_HOME:-$HOME/.local/state}/speaker/ca.pem'
     // The gh/git hint only makes sense for a secret that GitHub hosts accept.
     const gitHint = (hosts: string[]) =>

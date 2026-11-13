@@ -887,6 +887,9 @@ test('names an agent may not ask for are refused with the real ones, before anyt
   assert.equal(service.next, 'GET /_speaker/catalog')
   assert.match((await refused('st', ['group:nope'])).message, /Groups you can ask for: group:dev\./)
   assert.equal((await me(f, 'st')).requests.length, 0)
+  // A first request with a bad name enrolls nothing: the token stays unknown.
+  assert.equal((await enroll(f, 'fresh', { want: ['nosuch.read'], reason: 'x' })).status, 400)
+  assert.notEqual((await f.call('/_speaker/catalog', { headers: bearer('fresh') })).status, 200)
   assert.equal((await f.pending()).length, 0)
 })
 
