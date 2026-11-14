@@ -128,14 +128,14 @@ export default async function (pi: ExtensionAPI) {
     if (late.length) text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
     return { text, decision };
   };
-  // One long-poll at a time per request; re-posting the same items joins the request speaker already holds.
+  // One long-poll at a time per request, by id: watching never files a new request, even after a decision.
   const watch = async (key: string) => {
     if (watching.has(key)) return;
     watching.add(key);
     const entry = pending[key]!;
     for (;;) {
       try {
-        const decision = (await call(speaker, "POST", "requests", entry.params, undefined, 60)) as Decision;
+        const decision = (await call(speaker, "GET", `requests/${entry.id}`, undefined, undefined, 60)) as Decision;
         if (decision.status === "pending") continue;
         const { text } = await settle(decision, entry.params.want, undefined, true);
         delete pending[key];
@@ -143,11 +143,15 @@ export default async function (pi: ExtensionAPI) {
         watching.delete(key);
         return tell(text);
       } catch (error) {
-        if (error instanceof SpeakerError && error.status === 400) {
+        if (error instanceof SpeakerError && (error.status === 400 || error.status === 404)) {
           delete pending[key];
           savePending();
           watching.delete(key);
-          return tell(`[speaker] Request for ${entry.params.want.join(", ")} was refused: ${error.body.message ?? error.message}`);
+          return tell(
+            error.status === 404
+              ? `[speaker] Speaker no longer knows request ${entry.id} for ${entry.params.want.join(", ")} (it restarted, or the request is over a day old). Ask again only if you still need it.`
+              : `[speaker] Request for ${entry.params.want.join(", ")} was refused: ${error.body.message ?? error.message}`,
+          );
         }
         await sleep(RETRY_MS);
       }

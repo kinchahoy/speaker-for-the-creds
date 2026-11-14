@@ -74,6 +74,8 @@ mise run bottle serve
 
 bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whether the host is approved: 200 means approved, 401 means pending or unknown. `init` waits on it, and a lost connection to speaker uses it to tell a rejected token (fatal) from an outage (retried).
 
+`bottle register` names the host after the machine (`--name` overrides). Registering again from the same machine and name leaves the old entry until you approve the new one, which then replaces it.
+
 From another terminal, launch and inspect a task:
 {.ai}
 
@@ -235,7 +237,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
 
 ### Asking for access without waiting
 
-`request_capability` never holds the agent. It files the request with speaker and answers at once: with the decision if there already is one (auto-denied, invalid, or granted and in force), otherwise "Filed as request <id>. Not decided yet." and the agent keeps working. A background loop in the guest extension long-polls each pending request, one at a time; when the owner decides, it waits for items that apply at once to be in force and sends the agent one message starting `[speaker]` (steered into the current run, or a new turn if Pi is idle). Repeat calls for the same items answer "already pending". Pending requests live in `/work/.speaker/pending.json`, so a Pi restart re-arms them and a decision that landed meanwhile is delivered on start. `ext:` and `mcp:` grants no longer ask the agent to stop: bottle restarts Pi at its next idle, and the existing "now available / did not load / removed" message follows.
+`request_capability` never holds the agent. It files the request with speaker and answers at once: with the decision if there already is one (auto-denied, invalid, or granted and in force), otherwise "Filed as request <id>. Not decided yet." and the agent keeps working. A background loop in the guest extension watches each pending request by id (`GET /_speaker/requests/<id>` with `Speaker-Wait`), one long-poll at a time, so it never files a request twice; when the owner decides, it waits for items that apply at once to be in force and sends the agent one message starting `[speaker]` (steered into the current run, or a new turn if Pi is idle). Repeat calls for the same items answer "already pending". Pending requests live in `/work/.speaker/pending.json`, so a Pi restart re-arms them and a decision that landed meanwhile is delivered on start. `ext:` and `mcp:` grants no longer ask the agent to stop: bottle restarts Pi at its next idle, and the existing "now available / did not load / removed" message follows.
 
 <!-- author: ai -->
 

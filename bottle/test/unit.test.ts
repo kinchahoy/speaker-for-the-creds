@@ -102,6 +102,8 @@ test("speaker exception permits agent routes only at the configured origin", () 
   assert.ok(allowed("/_speaker/catalog"));
   assert.ok(allowed("/_speaker/help/obsidian"));
   assert.ok(allowed("/_speaker/requests", "POST"));
+  assert.ok(allowed("/_speaker/requests/abc123"));
+  assert.equal(allowed("/_speaker/requests/abc123", "POST"), false);
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
   for (const path of [
     "/admin",

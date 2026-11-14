@@ -71,6 +71,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     enforcementOf,
     endAgent,
     tally,
+    requests,
   } = core
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', baseOf(c))
@@ -298,15 +299,13 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       throw error
     }
     const request = createRequest(agent, items, input.want, input.reason, input.duration, undefined, bundled)
-    // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
-    await hold(
-      c,
-      () =>
-        statusOf(request) !== 'pending' &&
-        !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? '')),
-    )
+    await hold(c, () => settled(request))
     return outcome(c, request)
   }
+  // Decided, and in force on the sandbox. `mcp:` and `ext:` take effect when Pi is idle, which a held call prevents, so
+  // only the others are waited for.
+  const settled = (request: Request) =>
+    statusOf(request) !== 'pending' && !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? ''))
   // Enrollment and registration are unauthenticated: one shared budget caps how many identities anyone can create.
   // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
   const enrollmentLimit = rateLimiter<Env>({
@@ -502,6 +501,22 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       agent = caller.agent
     }
     const result = await ask(c, agent, input)
+    return c.json(result, result.status === 'pending' ? 202 : 200)
+  })
+  // One request's outcome by id, held like POST with `Speaker-Wait`. Watching an open request this way never files a
+  // new one, even after it was decided.
+  app.get('/_speaker/requests/:id', async (c) => {
+    const caller = c.get('caller')
+    const request = requests.get(c.req.param('id'))
+    const mine =
+      request !== undefined &&
+      (caller.role === 'host'
+        ? agentById(request.agentId)?.host === caller.host.id
+        : request.agentId === caller.agent.id)
+    if (!request || !mine)
+      throw invalid('No such request (decided requests are kept for a day)', undefined, 404, 'POST /_speaker/requests')
+    await hold(c, () => settled(request))
+    const result = outcome(c, request)
     return c.json(result, result.status === 'pending' ? 202 : 200)
   })
   // Notes and the caller's current state for one service.

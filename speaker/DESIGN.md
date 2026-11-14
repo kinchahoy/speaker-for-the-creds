@@ -109,7 +109,7 @@ Speaker adds the source address and a token fingerprint to the card itself. The 
 
 ### Waiting for the owner
 
-There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on any call, with curl's `--max-time` a little above it. On a service call without access, speaker files a request (or joins the agent's pending one for the same item; `Speaker-Reason: <one sentence>` gives the reason), holds the call until the owner decides or the time passes, then forwards it or answers with what to do next. On `POST /_speaker/requests` and on enrollment it holds the reply until the decision. Repeating a call later joins the same pending request. Any reverse proxy in front of speaker must allow requests this long (many default to 60 seconds).
+There is one way to wait: the `Speaker-Wait: <seconds>` header (at most 120) on any call, with curl's `--max-time` a little above it. On a service call without access, speaker files a request (or joins the agent's pending one for the same item; `Speaker-Reason: <one sentence>` gives the reason), holds the call until the owner decides or the time passes, then forwards it or answers with what to do next. On `POST /_speaker/requests` and on enrollment it holds the reply until the decision. `GET /_speaker/requests/<id>` holds the same way on a request already filed, so a client can file at once and watch later without ever filing again. Repeating a call later joins the same pending request. Any reverse proxy in front of speaker must allow requests this long (many default to 60 seconds).
 
 ### Requesting access
 
@@ -248,6 +248,7 @@ What the table means in practice:
 | `POST /_speaker/agents` | anyone, rate limited | enroll a direct agent with its first request |
 | `GET /_speaker/catalog` | agent | everything the caller may ask for and where it stands |
 | `POST /_speaker/requests` | agent, sandbox host for its agents | request items and groups |
+| `GET /_speaker/requests/<id>` | the request's agent, its sandbox host | one request's outcome, held with `Speaker-Wait`; decided requests are kept for a day |
 | `* /<service>/<path>` | agent | forwarded call, with optional `Speaker-Wait` |
 | SSH on one unusual port | agent with an SSH or folder grant | commands and file transfer, relayed |
 | `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |

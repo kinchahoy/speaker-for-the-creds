@@ -105,6 +105,10 @@ export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) =>
   if (url.origin !== speaker.origin) return false;
   const path = url.pathname;
   if (path.startsWith("/_speaker/"))
-    return (method === "GET" && /^\/_speaker\/(health|catalog|help(?:\/[a-zA-Z0-9_-]+)?)$/.test(path)) || (method === "POST" && path === "/_speaker/requests");
+    return (
+      (method === "GET" && /^\/_speaker\/(health|catalog|help(?:\/[a-zA-Z0-9_-]+)?)$/.test(path)) ||
+      (method === "GET" && /^\/_speaker\/requests\/[a-zA-Z0-9_-]+$/.test(path)) ||
+      (method === "POST" && path === "/_speaker/requests")
+    );
   return /^\/[a-zA-Z0-9_-]+(?:\/|$)/.test(path) && !/^\/admin(?:\/|$)/.test(path) && !path.startsWith("/_");
 };

@@ -912,6 +912,22 @@ test('the sign-in page warns about plain HTTP only for a caller that is not on l
   assert.doesNotMatch(await page({ ...away, 'x-forwarded-proto': 'https' }), /unencrypted/)
 })
 
+test('a request can be watched by id, before and after the decision, only by its agent', async (t) => {
+  const f = await setup(t)
+  await enroll(f, 'tok')
+  await enroll(f, 'other')
+  const filed = (await (await askFor(f, 'tok', { want: ['notes.read'], reason: 'work' })).json()) as Outcome
+  const watch = (token: string) => f.call(`/_speaker/requests/${filed.id}`, { headers: bearer(token) })
+  const pending = await watch('tok')
+  assert.equal(pending.status, 202)
+  assert.equal(((await pending.json()) as Outcome).status, 'pending')
+  assert.equal((await watch('other')).status, 404)
+  assert.equal((await f.decide(filed.id, 'approve')).status, 303)
+  const decided = await watch('tok')
+  assert.equal(decided.status, 200)
+  assert.deepEqual(((await decided.json()) as Outcome).granted, ['notes.read'])
+})
+
 test('each request is its own; posting exactly the same items again joins the pending one', async (t) => {
   const f = await setup(t)
   await enroll(f, 'tok')
