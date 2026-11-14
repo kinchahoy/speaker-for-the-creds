@@ -1,7 +1,7 @@
 import { isIPv4 } from "node:net";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { durationNames } from "../../speaker/items.ts";
+import { durationNames, type ErrorCode } from "../../speaker/items.ts";
 
 const Limits = z
   .object({
@@ -36,12 +36,25 @@ export const Template = z
   .strict();
 export type Template = z.infer<typeof Template>;
 
+/** The error code for each status bottle answers with, the same codes speaker uses (see `errorBody`). */
+export const codes = {
+  400: "invalid",
+  403: "denied",
+  404: "not_found",
+  409: "conflict",
+  429: "rate_limited",
+  500: "internal_error",
+  502: "upstream_unavailable",
+} as const satisfies Record<number, ErrorCode>;
+
 /** A failure with the HTTP status the control API answers it with: 400 bad input, 404 unknown task, 409 wrong state, 502 speaker failed. */
 export class StatusError extends Error {
   readonly status: 400 | 404 | 409 | 502;
-  constructor(status: StatusError["status"], message: string) {
+  readonly next?: string;
+  constructor(status: StatusError["status"], message: string, next?: string) {
     super(message);
     this.status = status;
+    if (next !== undefined) this.next = next;
   }
 }
 

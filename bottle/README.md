@@ -119,7 +119,7 @@ Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USE
 
 Finished tasks are listed below with `archived` or `failed-archive` (the work folder is kept). `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
 
-The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error as `{"error": {"message": "..."}}`: 400 for bad input, 404 for an unknown task, 409 when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 502 when speaker fails. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
+The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input, 403 `denied`, 404 `not_found` for an unknown task, 409 `conflict` when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
 {.ai}
 
 Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when it is complete.

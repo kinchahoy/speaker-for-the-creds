@@ -125,7 +125,8 @@ describe("model endpoint", () => {
     assert.equal((await ask()).status, 200);
     const refused = await ask();
     assert.equal(refused.status, 429);
-    assert.match(refused.body, /model request limit 2 reached/);
+    // The model door keeps the OpenAI error shape Pi's model client reads.
+    assert.deepEqual(JSON.parse(refused.body), { error: { message: "model request limit 2 reached; the owner can raise it" } });
     assert.equal(view.modelRequests, 2);
     assert.equal(view.httpResponses.length, 2);
     assert.equal(view.httpResponses[0]!.destination, `http://127.0.0.1:${port}`);
@@ -213,6 +214,10 @@ describe("folders over SSH", () => {
     await (await client.request({ method: "GET", path: "/_speaker/catalog" })).body.dump();
     assert.deepEqual(JSON.parse(seen[0]!.body), { want: ["folder:docs"], sshKey: "ssh-ed25519 AAAA" });
     assert.deepEqual([seen[1]!.method, seen[1]!.body], ["GET", ""]);
+    // Every other door refuses in speaker's error shape.
+    const refused = await client.request({ method: "GET", path: "/admin" });
+    assert.equal(refused.statusCode, 403);
+    assert.deepEqual(await refused.body.json(), { error: "denied", message: "this speaker path is not available to a sandboxed task" });
     await client.close();
     door.close();
     speaker.close();

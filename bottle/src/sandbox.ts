@@ -18,8 +18,8 @@ import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
 import { microsandboxHome, type Config } from "./config.ts";
-import { coversAny } from "../../speaker/items.ts";
-import { ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
+import { coversAny, errorBody } from "../../speaker/items.ts";
+import { codes, ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
 import { recordHttp, type HttpResponseRecord } from "./trace.ts";
 
 /** The live grant view the doors read. Each speaker snapshot replaces these entries; every use checks expiry. */
@@ -222,15 +222,20 @@ const newSshKey = async (dir: string) => {
 
 const headersOf = (headers: IncomingHttpHeaders) =>
   new Headers(Object.entries(headers).flatMap(([name, value]) => (value === undefined ? [] : [[name, [value].flat().join(", ")]])));
-const reply = (res: ServerResponse, status: number, message: string) =>
+/** A door's own refusal, in speaker's error shape. */
+const reply = (res: ServerResponse, status: keyof typeof codes, message: string, next?: string) =>
+  res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(errorBody(codes[status], message, next === undefined ? {} : { next })));
+/** The model door answers in the OpenAI shape, `{ error: { message } }`, because that is what Pi's model client reads. */
+const modelReply = (res: ServerResponse, status: number, message: string) =>
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: { message } }));
+type Reply = (res: ServerResponse, status: keyof typeof codes, message: string) => void;
 
 /** Sends a guest request on to `target` and streams the answer back; with `record`, also notes it for trace.jsonl. */
 const forward = async (
   req: IncomingMessage,
   res: ServerResponse,
   target: URL,
-  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; dir: string } } = {},
+  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; dir: string }; fail?: Reply } = {},
 ) => {
   const started = Date.now();
   const sent = await buffer(req);
@@ -244,7 +249,7 @@ const forward = async (
     body: body.length ? body : null,
     ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
   }).catch((error: Error) => {
-    reply(res, 502, `${target.host} is unreachable: ${error.message}`);
+    (options.fail ?? reply)(res, 502, `${target.host} is unreachable: ${error.message}`);
     if (options.record) note(options.record.live, `${target.origin} is unreachable: ${error.message}`);
   });
   if (!upstream) return;
@@ -284,10 +289,11 @@ export const modelDoor =
     const path = req.url ?? "/";
     const provider = config.hostedProviders.find((entry) => path.startsWith(`/hosted/${entry.id}/`));
     const target = provider ? new URL(path.slice(`/hosted/${provider.id}`.length), provider.baseUrl) : new URL(path, `http://${config.localModel.upstream}`);
-    if (provider && (await route.allow(provider.host)) !== true) return void reply(res, 403, `the ${provider.credential} secret is not granted to this task`);
-    if (!countModelRequest(live)) return void reply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
+    if (provider && (await route.allow(provider.host)) !== true)
+      return void modelReply(res, 403, `the ${provider.credential} secret is not granted to this task`);
+    if (!countModelRequest(live)) return void modelReply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
     const dispatcher = provider ? route.dispatcher(provider.host) : undefined;
-    await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, dir } });
+    await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, dir }, fail: modelReply });
   };
 
 /**
@@ -358,9 +364,9 @@ const Catalog = z.object({
 });
 
 /** Starts a server on a unix socket that a vsock route reaches; a failed request ends as a 502, never an unhandled error. */
-export const listen = async (path: string, handler: RequestListener) => {
+export const listen = async (path: string, handler: RequestListener, fail: Reply = reply) => {
   const server = createServer((req, res) => {
-    Promise.resolve(handler(req, res)).catch((error: Error) => (res.headersSent ? res.destroy() : reply(res, 502, error.message)));
+    Promise.resolve(handler(req, res)).catch((error: Error) => (res.headersSent ? res.destroy() : fail(res, 502, error.message)));
   }).listen(path);
   await once(server, "listening");
   return server;
@@ -398,7 +404,7 @@ export async function boot(
   const key = sshPort ? await newSshKey(dir) : undefined;
   const servers = [
     await serveEgress(egress, `${socketDir}/egress.sock`),
-    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.capture)),
+    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.capture), modelReply),
     await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key?.public)),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
     ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),

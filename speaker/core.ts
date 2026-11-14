@@ -8,7 +8,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { WSContext } from 'hono/ws'
 import writeFile from 'write-file-atomic'
 import { z } from 'zod'
-import { durationNames, durations, itemForms, kindOf } from './items.ts'
+import { durationNames, durations, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
 import { hostStates, type RequestEvent, type RequestState, requestTable, transition } from './lifecycle.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
@@ -264,7 +264,7 @@ export type View = {
   sessions: { id: string; agent: string; what: string; started: number }[]
   details: Record<string, { text: string; warning?: string }>
 }
-export { covers, durations, itemForms, itemPatterns, kindOf } from './items.ts'
+export { covers, durations, errorBody, itemForms, itemPatterns, kindOf, type ErrorFields } from './items.ts'
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
 export type HostCatalog = {
@@ -312,21 +312,20 @@ export async function optionalFile(path: string): Promise<string | undefined> {
   }
 }
 export const save = (path: string, value: unknown) => writeFile(path, JSON.stringify(value, null, 2), { mode: 0o600 })
-// The one shape of every agent- and host-facing error: a code, a human sentence, and the next step or what to tell the
-// user when there is one.
-export type ErrorFields = { next?: string; tell_user?: string; [field: string]: unknown }
-const errorBody = (error: string, message: string, fields: ErrorFields = {}) => ({ error, message, ...fields })
 export const agentError = (
   c: Context,
   status: ContentfulStatusCode,
-  error: string,
+  error: ErrorCode,
   message: string,
   fields?: ErrorFields,
 ) => c.json(errorBody(error, message, fields), status)
 export const invalid = (message: string, accepted?: string[], status: 400 | 404 = 400, next?: string) =>
   new HTTPException(status, {
     res: Response.json(
-      errorBody('invalid', message, { ...(accepted ? { accepted } : {}), ...(next ? { next } : {}) }),
+      errorBody(status === 404 ? 'not_found' : 'invalid', message, {
+        ...(accepted ? { accepted } : {}),
+        ...(next ? { next } : {}),
+      }),
       {
         status,
       },

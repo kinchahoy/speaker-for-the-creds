@@ -6,7 +6,8 @@ import { validator } from "hono/validator";
 import { z } from "zod";
 import { reconcile } from "./sandbox.ts";
 import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
-import { loadTemplates, StatusError } from "./grants.ts";
+import { errorBody } from "../../speaker/items.ts";
+import { codes, loadTemplates, StatusError } from "./grants.ts";
 import { Catalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
 import { closed, Tasks, type Task } from "./tasks.ts";
@@ -27,9 +28,13 @@ const NewTask = z
   })
   .strict();
 
-/** Every error answers `{ error: { message } }`, as the VM doors do: a StatusError carries its status, bad input is 400, anything else 500. */
-const failure: ErrorHandler = (error, context) =>
-  context.json({ error: { message: error.message } }, error instanceof StatusError ? error.status : error instanceof z.ZodError ? 400 : 500);
+/** Every error answers speaker's shape, `{ error, message, next? }`: a StatusError carries its status, bad input is 400, anything else 500. */
+const failure: ErrorHandler = (error, context) => {
+  const status = error instanceof StatusError ? error.status : error instanceof z.ZodError ? 400 : 500;
+  const message = error instanceof z.ZodError ? z.prettifyError(error) : error.message;
+  const next = error instanceof StatusError ? error.next : undefined;
+  return context.json(errorBody(codes[status], message, next === undefined ? {} : { next }), status);
+};
 
 /** The owner's CLI drives this API. Browsers carry an Origin header, so any request with one is refused. */
 export const startControl = (config: Config, tasks: Tasks) => {
@@ -38,7 +43,7 @@ export const startControl = (config: Config, tasks: Tasks) => {
 
   app.use(async (context, next) => {
     if (context.req.header("origin") || context.req.header("host") !== expectedHost)
-      return context.json({ error: { message: "this request is not from the bottle CLI" } }, 403);
+      return context.json(errorBody("denied", "this request is not from the bottle CLI", { next: "use the bottle CLI: bottle help" }), 403);
     await next();
   });
 

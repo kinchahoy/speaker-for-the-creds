@@ -9,6 +9,7 @@ import { z } from 'zod'
 import {
   type Agent,
   agentError,
+  type ErrorFields,
   type Core,
   demoSecret,
   type Env,
@@ -77,7 +78,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', baseOf(c))
   // Every agent-facing 401 names the next step and points at the skill.
-  const unauthorized = (c: Context, error: string, message: string, fields: { next?: string; tell_user?: string }) => {
+  const unauthorized = (
+    c: Context,
+    error: 'enroll' | 'register' | 'approval_required',
+    message: string,
+    fields: ErrorFields,
+  ) => {
     c.header('www-authenticate', 'Bearer realm="speaker"')
     c.header('link', '</skill.md>; rel="help"')
     return agentError(c, 401, error, message, { ...fields, help: '/skill.md' })
@@ -740,13 +746,13 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
   })
   app.all('/_speaker/*', (c) =>
-    agentError(c, 404, 'invalid', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
+    agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
   )
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url),
       [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
     if (!Object.hasOwn(services, serviceId))
-      return agentError(c, 404, 'invalid', 'Unknown service', { next: 'GET /_speaker/catalog' })
+      return agentError(c, 404, 'not_found', 'Unknown service', { next: 'GET /_speaker/catalog' })
     const service = services[serviceId],
       agent = agentCaller(c),
       method = c.req.method,

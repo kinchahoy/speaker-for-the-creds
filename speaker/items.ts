@@ -39,3 +39,25 @@ export const covers = (pattern: string, host: string) => {
 }
 export const coversAny = (patterns: readonly string[], host: string) =>
   patterns.some((pattern) => covers(pattern, host))
+
+// The one shape of every error speaker and bottle answer: a code, a human sentence, and the next step or what to tell
+// the user when there is one. (Only bottle's model endpoint differs: it answers in the OpenAI shape Pi expects.)
+export type ErrorCode =
+  | 'invalid'
+  | 'not_found'
+  | 'denied'
+  | 'conflict'
+  | 'rate_limited'
+  | 'locked'
+  | 'no_key'
+  | 'enroll'
+  | 'register'
+  | 'approval_required'
+  | 'upstream_unavailable'
+  | 'internal_error'
+export type ErrorFields = { next?: string; tell_user?: string; [field: string]: unknown }
+export const errorBody = (error: ErrorCode, message: string, fields: ErrorFields = {}) => ({
+  error,
+  message,
+  ...fields,
+})

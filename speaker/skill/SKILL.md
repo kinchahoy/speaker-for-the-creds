@@ -96,6 +96,7 @@ A service in the catalog with `mcp: true` is a remote MCP server. Ask for `<serv
 - `approval_required`: the owner has not decided yet. Repeat with `Speaker-Wait: 60`.
 - `denied`: stop. Tell the user.
 - `invalid`: fix the input. The message says what is accepted and `next` says where to look.
+- `not_found`: that route or service does not exist. Do what `next` says.
 - `rate_limited`: wait and retry.
 - `locked`: the owner has not signed in to speaker yet. Tell the user, then repeat the call later.
 - `no_key`: the service has no key yet. Tell the user.

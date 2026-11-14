@@ -212,8 +212,8 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
       throw new Error(`cannot reach ${url} (${cause}). Is bottle running? Config: ${configPath}`);
     }
-    const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
-    if (!response.ok) throw new Error(plain(payload.error?.message ?? `HTTP ${response.status} from ${url}`));
+    const payload = (await response.json().catch(() => ({}))) as { message?: string; next?: string };
+    if (!response.ok) throw new Error(plain([payload.message ?? `HTTP ${response.status} from ${url}`, payload.next].filter(Boolean).join(". ")));
     return payload as T;
   };
 
