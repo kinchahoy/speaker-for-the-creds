@@ -6,10 +6,10 @@
 
 ## Intent
 
-1. **Make the project smaller before making it bigger.** Fewest lines of custom code is the first priority: remove what nothing uses, and let well-kept libraries do what custom code does today. No feature you use is lost; where a feature is cool but heavy, it is simplified, not removed.
+1. **Make the project smaller before making it bigger.** Fewest lines of custom code is a high priority: remove (with approval) what nothing uses, keep an eye out for dead code, and let well-kept libraries do what custom code does today. The owner is open to tweaking or simplifying features if that helps reduce custom code, but some expensive features are cool and worth it; those stay.
 2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle task shows up as an agent in the Herdr app that you can talk to, and Herdr tells you when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
 3. **Keep it easy for others to deploy.** One laptop or several boxes, minimal setup on remote machines, latest dependencies by default with a tested lockfile available.
-4. **Security boundaries do not move.** No cut or library swap weakens grants, token binding, secret handling, audit logging or share containment.
+4. **Don't weaken security boundaries without specifically checking.** Any cut or library swap that touches grants, token binding, secret handling, audit logging or share containment is raised with the owner first.
 
 ## What decides the design
 
