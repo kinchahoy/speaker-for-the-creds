@@ -282,7 +282,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 
 ## Code
 
-`server.ts` composes the parts and starts listening: `core.ts` (schemas, settings, in-memory state, request, grant and decision logic), `api.ts` (agent and sandbox-host API, service proxy), `admin.ts` (owner pages and forms), `ui.ts` (page templates), `proxy.ts` (secrets proxy), `jump.ts` (targets, shares, `ssh-agent`, the jump server), `relay.ts` (the forced command) with `sftp.ts` (folder limits), `store.ts` (encrypted keys), `lifecycle.ts` (state transition tables).
+`server.ts` composes the parts and starts listening: `core.ts` (schemas, settings, in-memory state, request, grant and decision logic), `api.ts` (agent and sandbox-host API, service proxy), `catalog.ts` (what `/catalog` shows an agent), `admin.ts` (owner pages and forms), `ui.ts` (page templates), `proxy.ts` (secrets proxy), `jump.ts` (targets, shares, `ssh-agent`, the jump server), `relay.ts` (the forced command) with `sftp.ts` (folder limits), `store.ts` (encrypted keys), `lifecycle.ts` (host and relay-session transition tables).
 
 ## Rules in detail
 
