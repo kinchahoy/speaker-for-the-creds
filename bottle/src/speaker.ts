@@ -279,11 +279,16 @@ export const watchGrants = (
     applied = next;
     send({ type: "applied", grantIds });
   };
+  /** Replaces the catalog this host offers and reports it at once. */
+  const setCatalog = (next: Catalog) => {
+    catalog = next;
+    send({ type: "catalog", ...catalogReport(catalog) });
+  };
   const stop = () => {
     link = { state: "stopped" };
     clearInterval(dropTimer);
     clearTimeout(retryTimer);
     socket?.close();
   };
-  return Object.assign(report, { stop });
+  return Object.assign(report, { stop, catalog: setCatalog });
 };

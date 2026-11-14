@@ -24,3 +24,6 @@ MSB_HOME=${MSB_HOME:-"$HOME_DIR/microsandbox"}
 docker buildx build --load --platform "${PI_GUEST_PLATFORMS:-$PLATFORM}" -t "$IMAGE" "$ROOT/guest"
 mkdir -p -m 700 "$MSB_HOME"
 docker save --platform "$PLATFORM" "$IMAGE" | MSB_HOME="$MSB_HOME" "$MSB" load --tag "$IMAGE"
+# bottle checks the catalog's extension paths against the plugins this image links (no VM needed at startup).
+STATE=$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).stateRoot" "$CONFIG")
+docker run --rm --entrypoint cat "$IMAGE" /opt/pi-plugins.manifest > "$STATE/guest-plugins.txt"

@@ -262,3 +262,18 @@ test("a task whose Pi dies right after a restart is pi-down with Pi's stderr, an
     task.live.events.some((event) => event.text.includes("Pi restart failed: Pi restart: Pi exited right after launch: Error: cannot load /opt/notes")),
   );
 });
+
+test("reloading the catalog tells speaker what the host now offers and leaves running tasks alone", async (t) => {
+  const entry = { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] };
+  const f = await fixture(t, { mcps: {}, extensions: { notes: entry } });
+  const task = await f.tasks.create({ template: "offline" });
+  const offered = async () =>
+    Object.keys(
+      ((await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.agentToken}` } })).json()) as { extensions: object })
+        .extensions,
+    );
+  await until(async () => (await offered()).includes("notes"));
+  f.tasks.reloadCatalog(Catalog.parse({ mcps: {}, extensions: { wiki: { ...entry, label: "Wiki", guestPath: "/opt/wiki" } } }));
+  await until(async () => (await offered()).join() === "wiki");
+  assert.equal(task.state, "idle");
+});

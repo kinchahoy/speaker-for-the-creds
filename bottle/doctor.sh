@@ -36,5 +36,8 @@ if [ "$failed" = 0 ]; then
 	check "guest image $image loaded into microsandbox" "mise run bottle build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
 	check "guest image $image boots and runs a command" "mise run bottle build $image" \
 		sh -c '"$1" run -q --no-net --replace --name pi-doctor "$2" -- true; rc=$?; "$1" rm pi-doctor; exit $rc' sh "$root/node_modules/.bin/msb" "$image"
+	# src/pi.ts validates catalog.json and checks each extension's guestPath against the image's plugin manifest.
+	if out=$(node "$root/src/pi.ts" 2>&1); then echo "ok       catalog.json is valid and its extensions are in the guest image"
+	else echo "MISSING  catalog.json -> $out"; failed=1; fi
 fi
 [ "$failed" = 0 ] && echo "all checks passed" || { echo "some checks failed" >&2; exit 1; }

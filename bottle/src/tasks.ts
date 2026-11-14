@@ -124,7 +124,7 @@ export class Tasks {
   readonly speaker: ReturnType<typeof speakerClient>;
   readonly config: Config;
   readonly templates: Map<string, Template>;
-  readonly catalog: Catalog;
+  catalog: Catalog;
 
   /** `vm` starts a task's VM; tests pass a stand-in. */
   constructor(config: Config, templates: Map<string, Template>, catalog: Catalog, hostToken: string, vm: Boot = boot) {
@@ -149,6 +149,11 @@ export class Tasks {
   }
 
   list = () => [...this.byId.values()];
+  /** Swaps in a re-read catalog and tells speaker. Running tasks keep the extensions they loaded; grants are applied against the new catalog from the next snapshot. */
+  reloadCatalog = (catalog: Catalog) => {
+    this.catalog = catalog;
+    this.#report.catalog(catalog);
+  };
   /** Closes the connection to speaker (the tasks stay as they are). */
   stop = () => this.#report.stop();
   get = (id: string) => {

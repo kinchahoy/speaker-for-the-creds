@@ -6,7 +6,41 @@
       "guestPath": "/opt/pi-plugins/pi-web-access",
       "description": "web_search through keyless Exa and fetch_content over plain HTTP (each page host needs its own site request).",
       "tools": ["web_search", "fetch_content", "get_search_content", "source_check"],
-      "sites": ["mcp.exa.ai"]
+      "sites": ["mcp.exa.ai"],
+      "files": {
+        "web-search.json": {
+          "provider": "exa",
+          "webSearch": {
+            "enabled": true,
+            "allowedProviders": ["exa"]
+          },
+          "fetchRouting": {
+            "providers": ["http"],
+            "allowRemoteHostedProviders": false
+          },
+          "ssrf": {
+            "trustEnvProxy": true
+          },
+          "allowBrowserCookies": false,
+          "workflow": "none",
+          "autoOpenBrowser": false,
+          "toolActivation": "eager",
+          "commands": {
+            "curator": {
+              "enabled": false
+            },
+            "google-account": {
+              "enabled": false
+            }
+          },
+          "youtube": {
+            "enabled": false
+          },
+          "video": {
+            "enabled": false
+          }
+        }
+      }
     },
     "pi-cc-loop": {
       "label": "Scheduled wake-ups (pi-cc-loop)",
