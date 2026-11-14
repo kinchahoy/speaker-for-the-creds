@@ -79,8 +79,9 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
 | 2e | **MCP tool listing through `@modelcontextprotocol/client` v2**, classification unchanged; the unused v1 SDK is removed; skipped if the v2 check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
 | 2f | **Require the proxy and SSH ports** in speaker and bottle | cheap subagent, after 2e | both test suites |
-| 3 | **Library changes** (findings below): `commander` for bottle's CLI, Hono's proxy helper, Node's key handling, one commit each. The MCP client is step 2e. | cheap subagents | tests pass unchanged; the CLI checked by hand |
-| 3b | **Latest by default**: floating specs, `install` and `install:locked` tasks | main session | `mise run install`, then check and tests |
+| 3a | **One pnpm workspace, latest by default**: a root `pnpm-workspace.yaml` with each shared dependency declared once, one lockfile, one set of mise tasks; floating specs; `install` takes latest and `install:locked` uses the lockfile; `speaker/Dockerfile` reworked for the workspace, floating by default with a locked build on request | main session | `mise run install`, check, tests, and a container build both ways |
+| 3b | **Library changes** (findings below): `commander` for bottle's CLI and the root `init.ts`, Hono's proxy helper, Node's key handling, one commit each. The MCP client is step 2e. | cheap subagents | tests pass unchanged; the CLI checked by hand |
+| 3c | **Hono's typed client**: both servers' routes become one chained definition that exports its type; bottle's calls to speaker and the bottle CLI's calls to its control API use the typed client | subagent on a mid-tier model, after 3b | `tsc` catches a wrong path or body; both test suites |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
@@ -143,19 +144,22 @@ Agreed, all four:
 | **Upstream forwarding on Hono's proxy helper**, already installed | ~-12 | 0 | Compression is negotiated instead of forced off; a malformed `Connection` header is answered 400. The header strip list, redirect refusal and audit stay. | Low to medium. Covered by `proxy.test.ts`. |
 | **Secrets-proxy key handling on Node's built-in key export and import** | ~-11 | 0 | None; stored keys stay readable. Verified by running it. | Low. |
 
-**Latest by default, locked on request** (your rule, now in `~/AGENTS.md`). In this repo:
+**Latest by default; a lockfile is available** (your rule, now in `~/AGENTS.md`). In this repo, as step 3a:
 
-- `package.json` specs float (`latest` or a plain range). `mise run install` takes the newest versions and leaves the committed lockfiles alone (`pnpm install --no-lockfile`).
-- A new `mise run install:locked` installs exactly the committed `pnpm-lock.yaml` files, the tested set. `speaker/Dockerfile` already installs that way and stays so.
-- The lockfiles are refreshed only when you say so, after a test run.
-- This settles the two things the scan flagged: `undici` in bottle (two major versions behind) moves up with the first latest install, and Pi as `latest` in the guest image is now within the rules.
+- **One pnpm workspace.** Eight dependencies are declared in both packages today, with two lockfiles and every mise task written twice. A root `pnpm-workspace.yaml` declares each once, leaves one lockfile, and halves the mise tasks. It also gives the root `init.ts` somewhere to get `commander` from (~-23 lines more).
+- **Specs float.** `mise run install` takes the newest versions and leaves the lockfile alone (`pnpm install --no-lockfile`).
+- **Locked is available.** `mise run install:locked` installs exactly the committed lockfile, the last tested set.
+- **The speaker container floats too.** `speaker/Dockerfile` installs latest by default; a build argument gives the locked build when you ask for it. The Dockerfile is reworked anyway, because it copies only speaker's own files today.
+- **The lockfile is updated only when you specifically ask.**
+- This settles the two things the scan flagged: `undici` in bottle (two major versions behind) moves up with the first latest install, and Pi as `latest` in the guest image is within the rules.
 
-Not doing: one pnpm workspace instead of two installs. It saves no code and means reworking `speaker/Dockerfile`. `@clack/prompts` is already the prompt library in both `init` files; nothing to adopt there.
+**Hono's typed client** (step 3c, adopted for type safety rather than line count). Both servers register their routes as separate statements today, so they are first restructured into one chained definition each. bottle's calls to speaker and the CLI's calls to bottle's control API then go through the client, and a wrong path or body shape fails `tsc`. The scan expected this to be about neutral in lines, possibly slightly up. One naming trap: Hono's client function is called `hc`, the same as herdr-core's command; import it under another name.
+
+`@clack/prompts` is already the prompt library in both `init` files; nothing to adopt there.
 
 Checked and rejected, so they are not looked at again:
 
 - **A reconnecting WebSocket wrapper** for bottle's speaker link: it could replace only the backoff timer (about 6 lines), and would need a workaround to send the auth header. Net zero or worse.
-- **Hono's typed client**: good practice where a client makes many calls, but here both servers register routes as separate statements, so they would need restructuring into one chained definition to serve about three calls, a net gain in lines. Revisit if a TypeScript client with many calls appears.
 - **`@clack/prompts` built-ins** for the init helpers: they do not cover the flag-or-default-or-prompt pattern. The helpers are shared instead (step 1c, ~-42).
 - **`age-encryption`** for the key store: changes the on-disk format, is pre-1.0, and touches secret handling.
 - **A MITM proxy library** for the secrets proxy, **`ssh2`** for the SFTP relay, **Hono's bearer-auth** for agent tokens: each would lose a security check or need the same code written around it.
