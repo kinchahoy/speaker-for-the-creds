@@ -68,7 +68,6 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     maxTasks: 2,
     guestImage: "test",
     speaker: { url },
-    shareRoots: {},
     localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] },
     hostedProviders: [],
   } satisfies Config;

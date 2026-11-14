@@ -33,7 +33,6 @@ Everything bottle keeps lives in one private folder (mode 700), `~/.bottle`, or 
 | `config/` | `templates.json` and `catalog.json` |
 | `state/` | `speaker.token` (this host's login to speaker) and each running task's work folder |
 | `output/` | one archive folder per finished task |
-| `share/documents/` | a folder you can share into tasks |
 | `microsandbox/` | the guest image, VM disks, and microsandbox's database (`MSB_HOME` overrides it) |
 | `bottle.log` | output of a bottle that `init` started |
 
@@ -55,7 +54,6 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
-- `shareRoots`: bottle reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `build`. It defaults to `~/.bottle/config.json`.
 
 <!-- author: ai -->
@@ -126,7 +124,7 @@ Finished tasks are listed below with `archived` or `failed-archive` (the work fo
 The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input or malformed JSON, 401 or 403 `denied` (a wrong guest token, a request not from the CLI), 404 `not_found` for an unknown task, 409 `conflict` when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
 {.ai}
 
-Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when it is complete.
+Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. A one-shot task writes `/output/DONE` only when it is complete.
 {.ai}
 
 A task is attended (you are at its terminal) or unattended (nobody is). Without `--prompt`, a task defaults to attended. With one, it defaults to unattended. `--attended` or `--unattended` overrides the default. A template's `"attended"` fixes the mode, and a flag that contradicts the template is refused.
@@ -203,7 +201,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
   - While a folder grant is active, bottle (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle unmounts the share.
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
   - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
-  - A share needs no entry in `shareRoots`. `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
+  - `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
 - Storage: microsandbox keeps images, VM disks, and its sockets in `~/.bottle/microsandbox`. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder).
 
 <!-- author: ai -->
@@ -225,7 +223,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - Pi-alive check: after every Pi start or restart, bottle waits 3 seconds and checks that Pi is still running. If it exited (a bad extension path or a crashing extension), the task goes to `pi-down` with the tail of Pi's stderr (`/run/pi.err` in the guest) in its events, and the `mcp:` and `ext:` grants are not reported to speaker as in force. A failed first start is `start-failed`. This needs the guest image rebuilt for the stderr capture; without it the note says no stderr was captured.
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline. The optional `maxModelRequests` caps the model request count.
 - `workGiB` is a launch-time free-space check. Enforce work and output quotas through the host filesystem before unattended tasks share a disk with other services.
-- `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message next to `shares`; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.
+- `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.
   - An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command: `transport: "stdio"`, an absolute `command`, `args`, the advertised `tools`, and whether it can write.
   - Remote and hosted MCP servers are not catalog entries; they are speaker services. Add one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search). A task asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. So the shipped catalog has no `mcps` entries, and a remote entry fails validation with that explanation.
   - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), an optional system-prompt note, and optional `files` (config file name under `~/.pi/agent` to JSON or string content; see Add an extension). An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
@@ -233,7 +231,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
 - Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
-- On every connection, bottle reports the names in `shareRoots` to speaker, each as not mountable, because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
+- Folders come over SSH: speaker sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
 
 ### Asking for access without waiting
 
@@ -266,7 +264,7 @@ A hosted provider's key is a speaker secret like any other. In `config.json`, se
 2. Run `bottle build`. The image is rebuilt and the plugin manifest is copied to `<stateRoot>/guest-plugins.txt`.
 3. Add an entry to the live `<configRoot>/catalog.json` (`~/.bottle/config/catalog.json`; `bottle/catalog.json` has the shipped ones): `label`, `guestPath` (`/opt/pi-plugins/<name>`), `description`, `tools`, `sites`, and optionally `note` and `files`. `tools` must be the names the package registers, because Pi's `--tools` is an allowlist and an unlisted tool stays hidden. The `sites` are hosts the extension itself contacts; when the extension is requested they are added as separate `site:` grants and end with the extension's grant.
 4. Optional `files`: `{ "<name>.json": { ... } }` writes `~/.pi/agent/<name>.json` in the guest, only for tasks that load the extension (a string value is written as is, anything else as JSON). A name has no directory part and cannot replace bottle's own `models.json`, `settings.json`, `mcp.json`, or `APPEND_SYSTEM.md`. The shipped `pi-web-access` entry is the example, with browser cookies and hosted extraction off.
-5. Reload without restarting: `pkill -HUP -f "bottle/src/server.ts"`, or `curl -X POST http://<bindHost>:<controlPort>/api/catalog/reload` against the control API. The catalog is re-validated against the image, swapped in, and re-sent to speaker. A bad catalog is refused (the SIGHUP logs it, the API answers 400) and the old one stays. Running tasks are not restarted for a new or changed entry. A grant for an entry you removed is skipped with a task note, and that task's Pi restarts at its next idle point without it.
+5. Reload without restarting: `pkill -HUP -f "bottle/src/server.ts"`. The catalog is re-validated against the image, swapped in, and re-sent to speaker. A bad catalog is refused (the SIGHUP logs it) and the old one stays. Running tasks are not restarted for a new or changed entry. A grant for an entry you removed is skipped with a task note, and that task's Pi restarts at its next idle point without it.
 
 `bottle doctor` checks the catalog and every `guestPath` after the image checks.
 {.ai}
@@ -347,7 +345,7 @@ You delete archives manually. If archiving fails, bottle keeps the work tree for
 
 <sub>AI-written</sub>
 
-Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network and ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, shares, the 30-second drop), and the secret route against a real speaker proxy. They do not boot a guest.
+Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network and ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, the 30-second drop), and the secret route against a real speaker proxy. They do not boot a guest.
 {.ai}
 
 Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. With `PROXY_PORT` set in speaker (registration records it as `speaker.proxyPort` here), also check:
@@ -357,7 +355,7 @@ Before deployment, verify register, launch, request, approval, expiry, revocatio
 - a revoke ends that access
 - the model-request capture for routed requests
 - certificate inheritance through dtach
-- herdr and terminal behavior
+- terminal behavior
 
 Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, and terminal resize.
 {.ai}

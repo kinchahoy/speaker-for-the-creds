@@ -31,7 +31,7 @@ afterEach(() => {
 const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
   const root = mkdtempSync(join(tmpdir(), "bottle-config-"));
   roots.push(root);
-  for (const name of ["config", "state", "output", "documents"]) mkdirSync(join(root, name));
+  for (const name of ["config", "state", "output"]) mkdirSync(join(root, name));
   const path = join(root, "config.json");
   writeFileSync(
     path,
@@ -46,7 +46,6 @@ const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
         configRoot: join(root, "config"),
         stateRoot: join(root, "state"),
         outputRoot: join(root, "output"),
-        shareRoots: { documents: join(root, "documents") },
         localModel: {
           guestHost: "model.internal",
           upstream: "127.0.0.1:8080",

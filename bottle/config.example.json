@@ -11,10 +11,6 @@
   "configRoot": "/srv/bottle/config",
   "stateRoot": "/srv/bottle/state",
   "outputRoot": "/srv/bottle/output",
-  "shareRoots": {
-    "documents": "/home/me/Documents",
-    "projects": "/home/me/projects"
-  },
   "localModel": {
     "guestHost": "model.internal",
     "upstream": "127.0.0.1:8080",

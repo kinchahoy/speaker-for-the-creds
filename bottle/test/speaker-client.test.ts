@@ -97,7 +97,7 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
     await rm(dataDir, { recursive: true, force: true });
   });
   const url = `http://127.0.0.1:${speakerPort}`;
-  const config = { speaker: { url, ...(proxyPort ? { proxyPort } : {}) }, shareRoots: {} } as Config;
+  const config = { speaker: { url, ...(proxyPort ? { proxyPort } : {}) } } as Config;
   const owner = {
     cookie: await setOwnerPassword((path, init) => fetch(url + path, init)),
     origin: "http://localhost",
@@ -250,22 +250,6 @@ test("registering learns speaker's proxy and SSH ports into config.json, and the
   assert.equal(await hostApproved(config), false);
   assert.equal((await f.ownerPost(`/hosts/${id}/approve`)).status, 303);
   assert.equal(await hostApproved(config), true);
-});
-
-test("bottle reports its shares to speaker as not mountable, since its folders arrive over SSH", async (t) => {
-  const f = await fixture(t);
-  const { token } = await f.host([]);
-  const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
-  t.after(() => rm(documents, { recursive: true, force: true }));
-  const config = { ...f.config, shareRoots: { documents } } as Config;
-  watchGrants(
-    t,
-    config,
-    token,
-    () => {},
-    (message) => assert.fail(message),
-  );
-  await until(async () => (await f.live()).grants.includes("shares: documents (no VM mount)"));
 });
 
 test("without word from speaker for 30 seconds the grants are dropped until it is back", async (t) => {

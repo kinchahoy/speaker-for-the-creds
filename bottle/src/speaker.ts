@@ -137,9 +137,6 @@ export const speakerProxy = (config: Config, agentToken: string, ca: string) => 
   });
 };
 
-/** The shares this host holds, for speaker's choice of delivery: the guest has no VM mount, its folders arrive over SSH. */
-export const shareReport = (config: Config) => Object.keys(config.shareRoots).map((name) => ({ name, mount: false }));
-
 /** What this host's catalog offers, for speaker's list of what an agent may ask for and its checks of `mcp:` and `ext:` items. */
 export const catalogReport = (catalog: Catalog) => ({
   mcps: Object.entries(catalog.mcps).map(([id, { label, tools }]) => ({ id, label, tools })),
@@ -196,7 +193,7 @@ type Outage = Exclude<Link, { state: "open" | "stopped" }>;
  * heard for `dropMs` (30 s: connection lost, or snapshots stopped) every grant is dropped until the next snapshot. It
  * reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker rejects the token, after
  * SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs of continuous outage. On
- * every connection it reports the shares it holds. Returns the function that reports the in-effect grant ids; its `stop`
+ * every connection it reports its catalog. Returns the function that reports the in-effect grant ids; its `stop`
  * closes the connection and ends the reconnecting.
  */
 export const watchGrants = (
@@ -246,7 +243,6 @@ export const watchGrants = (
       // A stale link stays stale until the first snapshot arrives.
       link = link.state === "stale" ? { ...link, was: "open" } : { state: "open", heardAt: Date.now() };
       backoff = limits.retryMs;
-      send({ type: "shares", shares: shareReport(config) });
       send({ type: "catalog", ...catalogReport(catalog) });
       send({ type: "applied", grantIds: JSON.parse(applied) });
     };

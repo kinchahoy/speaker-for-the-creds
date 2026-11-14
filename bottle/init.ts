@@ -285,8 +285,8 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
-  const [configRoot, stateRoot, outputRoot, documents] = ["config", "state", "output", "share/documents"].map((name) => join(home, name));
-  for (const directory of [home, configRoot, stateRoot, outputRoot, documents]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const [configRoot, stateRoot, outputRoot] = ["config", "state", "output"].map((name) => join(home, name));
+  for (const directory of [home, configRoot, stateRoot, outputRoot]) mkdirSync(directory, { recursive: true, mode: 0o700 });
   // The guest image and VM disks need room, and microsandbox refuses a folder with a group- or world-writable ancestor.
   const msbHome = microsandboxHome();
   const disk = statfsSync(existingAncestor(msbHome));
@@ -363,7 +363,6 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     configRoot,
     stateRoot,
     outputRoot,
-    shareRoots: { documents },
     hostedProviders: [],
   };
   config.localModel = { ...config.localModel, upstream: endpoint, models: [{ id: model, label: model }] };

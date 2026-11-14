@@ -28,7 +28,6 @@ const ConfigFile = z
     configRoot: z.string(),
     stateRoot: z.string(),
     outputRoot: z.string(),
-    shareRoots: z.record(z.string().regex(/^[a-z0-9-]+$/, "a share root uses lowercase letters, digits, and dashes"), z.string()),
     localModel: z.object({
       guestHost: z.hostname().refine((value) => value === value.toLowerCase(), "a guest model host must be lowercase"),
       upstream: z.string().min(1),
@@ -82,7 +81,6 @@ export const validateConfig = (data: unknown): Config => {
   assertDirectory("configRoot", config.configRoot);
   assertDirectory("stateRoot", config.stateRoot);
   assertDirectory("outputRoot", config.outputRoot);
-  for (const [id, root] of Object.entries(config.shareRoots)) assertDirectory(`shareRoots.${id}`, root);
   return config;
 };
 

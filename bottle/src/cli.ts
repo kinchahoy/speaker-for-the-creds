@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
-import { parseArgs, promisify } from "node:util";
+import { parseArgs } from "node:util";
 import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
@@ -27,7 +27,6 @@ const SELF = process.env.MISE_TASK_NAME === undefined ? "bottle" : "mise run bot
 const FINISHED_SHOWN = 5;
 const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
-const run = promisify(execFile);
 
 /** Host commands backed by the package's shell scripts; their arguments pass through unchanged. */
 const SCRIPTS = {
@@ -146,18 +145,6 @@ const parseOptions = (args: string[]) => {
   }
 };
 
-/** The control API and speaker report validation failures as JSON issue arrays; print them on one line. */
-const plain = (message: string): string => {
-  let issues: unknown;
-  try {
-    issues = JSON.parse(message);
-  } catch {
-    return message;
-  }
-  if (!Array.isArray(issues)) return message;
-  return issues.map((issue: { path?: unknown[]; message: string }) => `${issue.path?.join(".") ?? ""} ${issue.message}`.trim()).join("; ");
-};
-
 const age = (startedAt: string): string => {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000));
   if (seconds < 60) return `${seconds}s`;
@@ -170,30 +157,11 @@ const truncate = (text: string, width: number) => {
   return oneLine.length > width ? `${oneLine.slice(0, width - 3)}...` : oneLine;
 };
 
-/** herdr agent states are idle|working|blocked|unknown; herdr derives its own `done` from idle. */
-const report = async (pane: string, task: Task) => {
-  const state = task.pendingRequests.length > 0 ? "blocked" : task.state === "busy" ? "working" : "idle";
-  const message = task.done ? "done" : task.summary;
-  const source = "custom:bottle";
-  await run("herdr", ["pane", "report-agent", pane, "--source", source, "--agent", "pi", "--state", state, "--message", message]);
-  await run("herdr", [
-    "pane",
-    "report-metadata",
-    pane,
-    "--source",
-    source,
-    "--title",
-    task.name,
-    "--state-label",
-    `${state}=${task.pendingRequests.length} pending${task.done ? ", done" : ""}`,
-  ]);
-};
-
 const loadCliConfig = (): Config => {
   try {
     return loadConfig(configPath);
   } catch (error) {
-    throw new Error(`cannot load ${configPath}: ${plain((error as Error).message.split("\n").join(" "))}`);
+    throw new Error(`cannot load ${configPath}: ${(error as Error).message.split("\n").join(" ")}`);
   }
 };
 
@@ -214,7 +182,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       throw new Error(`cannot reach ${url} (${cause}). Is bottle running? Config: ${configPath}`);
     }
     const payload = (await response.json().catch(() => ({}))) as { message?: string; next?: string };
-    if (!response.ok) throw new Error(plain([payload.message ?? `HTTP ${response.status} from ${url}`, payload.next].filter(Boolean).join(". ")));
+    if (!response.ok) throw new Error([payload.message ?? `HTTP ${response.status} from ${url}`, payload.next].filter(Boolean).join(". "));
     return payload as T;
   };
 
@@ -253,15 +221,10 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       hours: hoursValue,
     });
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
-    if (process.env.HERDR_ENV === "1") {
-      const { stdout } = await run("herdr", ["pane", "split", "--current", "--direction", "right", "--env", "HERDR_AGENT=pi"]);
-      await run("herdr", ["pane", "run", JSON.parse(stdout).result.pane.pane_id, attach]);
-    } else {
-      const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
-      console.log(
-        `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
-      );
-    }
+    const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
+    console.log(
+      `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
+    );
   } else if (command === "ls") {
     const list = await tasks();
     if (list.length === 0) console.log(`No live tasks. Start one with: ${SELF} run --prompt "..."`);
@@ -315,23 +278,6 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       console.error(`error: cannot start the terminal: ${error.message}`);
       process.exit(1);
     });
-    const pane = process.env.HERDR_PANE_ID;
-    if (pane) {
-      let last = "";
-      const poll = async () => {
-        try {
-          const current = await resolveTask(task.id);
-          const key = JSON.stringify([current.state, current.pendingRequests.length, current.done, current.summary]);
-          if (key !== last) await report(pane, current);
-          last = key;
-        } catch {
-          // The task may have closed or the service may be briefly unreachable; the terminal stays attached.
-        }
-      };
-      await poll();
-      const timer = setInterval(() => void poll(), 2_000);
-      child.on("exit", () => clearInterval(timer));
-    }
     child.on("exit", (code) => process.exit(code ?? 1));
   } else if (command === "stop") {
     const task = await resolveTask(positionals[0]!);

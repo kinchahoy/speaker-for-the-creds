@@ -77,16 +77,6 @@ export const startControl = (config: Config, tasks: Tasks) => {
     return context.json({ closing: task.id }, 202);
   });
 
-  // Re-reads catalog.json: validation errors answer 400 and leave the current catalog; running tasks keep their loaded extensions.
-  app.post("/api/catalog/reload", (context) => {
-    try {
-      tasks.reloadCatalog(loadCatalog(config));
-    } catch (error) {
-      throw new StatusError(400, `catalog not reloaded: ${(error as Error).message}`);
-    }
-    return context.json({ extensions: Object.keys(tasks.catalog.extensions), mcps: Object.keys(tasks.catalog.mcps) });
-  });
-
   app.onError(failure);
   serve({ fetch: app.fetch, hostname: config.bindHost, port: config.controlPort });
   console.log(`control  http://${expectedHost}`);
@@ -131,10 +121,6 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
 
 /** Starts the trusted service: catalog, launch templates, task manager, and both listeners. */
 export const startService = (config: Config) => {
-  if ("archive" in config.shareRoots) throw new Error("archive is a reserved share root name");
-  // A closed task's artifacts can become a read-only input of the next task.
-  config.shareRoots.archive = config.outputRoot;
-
   const catalog = loadCatalog(config);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
   const tasks = new Tasks(config, templates, catalog, readHostToken(config));
