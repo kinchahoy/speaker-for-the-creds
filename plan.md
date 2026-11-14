@@ -6,8 +6,10 @@
 
 ## Intent
 
+Who is who in this document: **the owner** is the human who runs this project and makes every decision. **The main session** is the coding agent carrying out the plan; **subagents** are cheaper agents it hands mechanical edits to. "The agent", "Pi" or "a task" elsewhere means an AI agent that speaker and bottle serve, not the one doing this work.
+
 1. **Make the project smaller before making it bigger.** Fewest lines of custom code is a high priority: remove (with approval) what nothing uses, keep an eye out for dead code, and let well-kept libraries do what custom code does today. The owner is open to tweaking or simplifying features if that helps reduce custom code, but some expensive features are cool and worth it; those stay.
-2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle task shows up as an agent in the Herdr app that you can talk to, and Herdr tells you when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
+2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle task shows up as an agent in the Herdr app that the owner can talk to, and Herdr tells the owner when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
 3. **Keep it easy for others to deploy.** One laptop or several boxes, minimal setup on remote machines, latest dependencies by default with a tested lockfile available.
 4. **Don't weaken security boundaries without specifically checking.** Any cut or library swap that touches grants, token binding, secret handling, audit logging or share containment is raised with the owner first.
 
@@ -44,7 +46,7 @@ Spikes first, because these are unverified:
 
 The password is typed once per Herdr start and the token lives in a variable, never on disk. Signing in here also unlocks speaker after a restart, as `/admin` does.
 
-Security level: sandboxed agents cannot reach the Mac, the mod or the token. Direct agents running as you on the same Mac could edit the mod's files, which matches what `DESIGN.md` already says about a single machine (accident protection, not a hostile local agent). A stored token in the OS keystore is a possible later step; through the `security` CLI any process running as you can read it back, so it only helps with a signed helper and Touch ID.
+Security level: sandboxed agents cannot reach the Mac, the mod or the token. Direct agents running as the owner's user account on the same Mac could edit the mod's files, which matches what `DESIGN.md` already says about a single machine (accident protection, not a hostile local agent). A stored token in the OS keystore is a possible later step; through the `security` CLI any process running as the owner's user account can read it back, so it only helps with a signed helper and Touch ID.
 
 ## Not building
 
@@ -93,7 +95,7 @@ Not doing: reformatting speaker to width 160. It removes 363 lines without remov
 
 ## Open
 
-Nothing is waiting on a decision. Work starts when you say go.
+Nothing is waiting on a decision. No agent starts any step until the owner says go.
 
 ## Line-reduction audit of the existing code
 
@@ -129,7 +131,7 @@ Decided:
 | Read/write classification of remote MCP tools | ~-35 | **simplify, do not remove.** About 50 of its lines are a hand-written MCP client that lists a server's tools (handshake, paging, event-stream parsing, session close). The official MCP client does that in about 20 (details under Library pass). The classification itself stays as it is. |
 | Require `PROXY_PORT` and `SSH_PORT` (and bottle's matching settings) | ~-40 | cut. Speaker no longer runs without the secrets proxy or jump server; `init` already sets both. |
 
-Kept, by your decision: hosted model providers (a key feature), the speaker link as it is, all of `init`, the `/admin` extras, the three-denials lock, extension-bundled sites, the Docker path and the demo service.
+Kept, by the owner's decision: hosted model providers (a key feature), the speaker link as it is, all of `init`, the `/admin` extras, the three-denials lock, extension-bundled sites, the Docker path and the demo service.
 
 ### Library pass: findings
 
@@ -144,13 +146,13 @@ Agreed, all four:
 | **Upstream forwarding on Hono's proxy helper**, already installed | ~-12 | 0 | Compression is negotiated instead of forced off; a malformed `Connection` header is answered 400. The header strip list, redirect refusal and audit stay. | Low to medium. Covered by `proxy.test.ts`. |
 | **Secrets-proxy key handling on Node's built-in key export and import** | ~-11 | 0 | None; stored keys stay readable. Verified by running it. | Low. |
 
-**Latest by default; a lockfile is available** (your rule, now in `~/AGENTS.md`). In this repo, as step 3a:
+**Latest by default; a lockfile is available** (the owner's rule, now in `~/AGENTS.md`). In this repo, as step 3a:
 
 - **One pnpm workspace.** Eight dependencies are declared in both packages today, with two lockfiles and every mise task written twice. A root `pnpm-workspace.yaml` declares each once, leaves one lockfile, and halves the mise tasks. It also gives the root `init.ts` somewhere to get `commander` from (~-23 lines more).
 - **Specs float.** `mise run install` takes the newest versions and leaves the lockfile alone (`pnpm install --no-lockfile`).
 - **Locked is available.** `mise run install:locked` installs exactly the committed lockfile, the last tested set.
-- **The speaker container floats too.** `speaker/Dockerfile` installs latest by default; a build argument gives the locked build when you ask for it. The Dockerfile is reworked anyway, because it copies only speaker's own files today.
-- **The lockfile is updated only when you specifically ask.**
+- **The speaker container floats too.** `speaker/Dockerfile` installs latest by default; a build argument gives the locked build when the owner asks for it. The Dockerfile is reworked anyway, because it copies only speaker's own files today.
+- **Agents update the lockfile only when the owner specifically asks.**
 - This settles the two things the scan flagged: `undici` in bottle (two major versions behind) moves up with the first latest install, and Pi as `latest` in the guest image is within the rules.
 
 **Hono's typed client** (step 3c, adopted for type safety rather than line count). Both servers register their routes as separate statements today, so they are first restructured into one chained definition each. bottle's calls to speaker and the CLI's calls to bottle's control API then go through the client, and a wrong path or body shape fails `tsc`. The scan expected this to be about neutral in lines, possibly slightly up. One naming trap: Hono's client function is called `hc`, the same as herdr-core's command; import it under another name.
@@ -166,9 +168,9 @@ Checked and rejected, so they are not looked at again:
 - **Merging speaker's secrets proxy with bottle's `proxy-chain`**: they do different jobs.
 - Removing `hono-rate-limiter` or `write-file-atomic`, and about ten small utilities: each under 5 net lines.
 
-**Hosted model providers, in plain words.** By default the Pi inside a VM talks to your own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once you approve, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
+**Hosted model providers, in plain words.** By default the Pi inside a VM talks to the owner's own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once the owner approves, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
 
-**The speaker link, in plain words.** bottle holds one WebSocket to speaker to receive grants. Around it are four behaviours: it reconnects with a growing delay; on a failed connect it asks speaker whether its token is still accepted, and stops at once with a "register again" message if not; it shuts bottle down if speaker was never reached within 30 seconds of startup or has been gone for 5 minutes; and it drops every grant after 30 seconds of silence. The cut would keep only the last one and retry forever. The token check and the give-up limits are the fast-fail path, which is why I would keep them.
+**The speaker link, in plain words.** bottle holds one WebSocket to speaker to receive grants. Around it are four behaviours: it reconnects with a growing delay; on a failed connect it asks speaker whether its token is still accepted, and stops at once with a "register again" message if not; it shuts bottle down if speaker was never reached within 30 seconds of startup or has been gone for 5 minutes; and it drops every grant after 30 seconds of silence. The cut would keep only the last one and retry forever. The token check and the give-up limits are the fast-fail path, which is why they are kept.
 
 ### The trace export: why it is large, and a slim version
 
@@ -183,7 +185,7 @@ Checked and rejected, so they are not looked at again:
 
 ### In-VM MCP and VM-mount delivery, in plain words
 
-- **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. A task asks for `mcp:<id>`; when you approve, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
+- **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. A task asks for `mcp:<id>`; when the owner approves, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
 - **VM-mount folder delivery.** Speaker can deliver a `folder:` grant two ways. Over SSH, the sandbox mounts the share with `sshfs` through speaker's jump server, which is what happens today. As a VM mount, a sandbox host that has the folder on its own disk would map it straight into the VM, which is much faster for `grep -r`, `find` and `git status`. bottle always tells speaker it cannot mount, so speaker's VM-mount branch never runs. Cutting it removes the unused branch and closes the door on the fast path until it is rebuilt.
 
 ### Not recommended (weakens a security boundary)
