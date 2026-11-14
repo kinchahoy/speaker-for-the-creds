@@ -226,7 +226,8 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message next to `shares`; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.
   - An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command: `transport: "stdio"`, an absolute `command`, `args`, the advertised `tools`, and whether it can write.
   - Remote and hosted MCP servers are not catalog entries; they are speaker services. Add one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search). A task asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. So the shipped catalog has no `mcps` entries, and a remote entry fails validation with that explanation.
-  - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), and an optional system-prompt note. An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
+  - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), an optional system-prompt note, and optional `files` (config file name under `~/.pi/agent` to JSON or string content; see Add an extension). An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
+- bottle reads `catalog.json` at startup and checks that every extension's `guestPath` is in the guest image. `bottle build` copies the image's `/opt/pi-plugins.manifest` to `<stateRoot>/guest-plugins.txt`, so the check needs no VM. A wrong path stops startup naming the entry, and `bottle doctor` reports the same error. A missing manifest means the image was not built with this bottle: run `bottle build`.
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
 - Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
@@ -255,17 +256,32 @@ A hosted provider's key is a speaker secret like any other. In `config.json`, se
 
 <!-- author: ai -->
 
+## Add an extension
+
+<sub>AI-written</sub>
+
+1. Pin the npm package in `guest/pi-package.json`. Any dependency that declares a `pi` extension is linked automatically into `/opt/pi-plugins/<name>` (the part after the scope), except the always-on ones (`ALWAYS_ON` in the Dockerfile), which go to `/opt/pi-extensions`. There is no link list to edit.
+2. Run `bottle build`. The image is rebuilt and the plugin manifest is copied to `<stateRoot>/guest-plugins.txt`.
+3. Add an entry to the live `<configRoot>/catalog.json` (`~/.bottle/config/catalog.json`; `bottle/catalog.json` has the shipped ones): `label`, `guestPath` (`/opt/pi-plugins/<name>`), `description`, `tools`, `sites`, and optionally `note` and `files`. `tools` must be the names the package registers, because Pi's `--tools` is an allowlist and an unlisted tool stays hidden. The `sites` are hosts the extension itself contacts; when the extension is requested they are added as separate `site:` grants and end with the extension's grant.
+4. Optional `files`: `{ "<name>.json": { ... } }` writes `~/.pi/agent/<name>.json` in the guest, only for tasks that load the extension (a string value is written as is, anything else as JSON). A name has no directory part and cannot replace bottle's own `models.json`, `settings.json`, `mcp.json`, or `APPEND_SYSTEM.md`. The shipped `pi-web-access` entry is the example, with browser cookies and hosted extraction off.
+5. Reload without restarting: `pkill -HUP -f "bottle/src/server.ts"`, or `curl -X POST http://<bindHost>:<controlPort>/api/catalog/reload` against the control API. The catalog is re-validated against the image, swapped in, and re-sent to speaker. A bad catalog is refused (the SIGHUP logs it, the API answers 400) and the old one stays. Running tasks are not restarted for a new or changed entry. A grant for an entry you removed is skipped with a task note, and that task's Pi restarts at its next idle point without it.
+
+`bottle doctor` checks the catalog and every `guestPath` after the image checks.
+{.ai}
+
+<!-- author: ai -->
+
 ## Research and loop presets
 
 <sub>AI-written</sub>
 
-The `research` group (the `research` template asks for it) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle writes the extension's `~/.pi/agent/web-search.json` (`pi-launch` copies it like `settings.json`). Search uses only keyless Exa through its hosted MCP endpoint, and pages are fetched directly over HTTP. Hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site:` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv.
+The `research` group (the `research` template asks for it) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. The extension's `~/.pi/agent/web-search.json` is the `files` entry of `pi-web-access` in `catalog.json`, written only into tasks that load it. Search uses only keyless Exa through its hosted MCP endpoint, and pages are fetched directly over HTTP. Hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site:` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv.
 {.ai}
 
 The group leaves out Parallel Search. It duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site grant. Parallel Search is a speaker service (`parallel-search.read`) that the agent can request explicitly.
 {.ai}
 
-No search API keys are configured. To add a keyed provider, add its key as a speaker secret with the provider's host, make `writeGuestConfig` set the provider's key field (for example `exaApiKey`) to the task's placeholder for that secret (see `GET /_speaker/catalog`), and approve `secret:<NAME>`.
+No search API keys are configured. To add a keyed provider, add its key as a speaker secret with the provider's host, set the provider's key field (for example `exaApiKey`) to the task's placeholder for that secret (see `GET /_speaker/catalog`). The catalog's `files` are static, so this needs a small change in `writeGuestConfig`. Then approve `secret:<NAME>`.
 {.ai}
 
 The `loop` template is unattended. It runs at most 24 hours and 300 model requests, and it asks for `group:loop` (pi-cc-loop and pi-cc-monitor) for one day. Pi then wakes itself with `/loop`, cron jobs, `schedule_wakeup`, or `Monitor`. bottle never archives a task for being idle, so a self-waking Pi keeps running between wakes. `/output/DONE` or the deadline still ends it. Durable jobs live in `/work/.pi/scheduled_tasks.json`. They survive Pi restarts within the task and disappear with the work directory at archival. Persisting jobs across tasks through a folder grant is future work.

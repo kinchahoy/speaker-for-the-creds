@@ -1,8 +1,8 @@
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
-import type { Config } from "./config.ts";
+import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./grants.ts";
 import type { Grant } from "./speaker.ts";
@@ -22,6 +22,8 @@ const McpEntry = z
   })
   .strict();
 
+const RESERVED_FILES = new Set(["models.json", "settings.json", "mcp.json", "APPEND_SYSTEM.md"]);
+
 export const Catalog = z
   .object({
     mcps: z.record(z.string().regex(/^[a-z0-9-]+$/), McpEntry),
@@ -39,6 +41,19 @@ export const Catalog = z
           sites: z.array(z.string().min(1)),
           /** Guidance appended to the system prompt while the extension is loaded. */
           note: z.string().min(1).optional(),
+          /**
+           * Config files for the extension, written only into tasks that load it. A key is a file name under the guest's
+           * ~/.pi/agent; a string value is written as is, anything else as JSON.
+           */
+          files: z
+            .record(
+              z
+                .string()
+                .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "a config file name has no directory part")
+                .refine((name) => !RESERVED_FILES.has(name), "that file is bottle's own Pi configuration"),
+              z.unknown(),
+            )
+            .optional(),
         })
         .strict(),
     ),
@@ -56,6 +71,27 @@ export const Catalog = z
   });
 
 export type Catalog = z.infer<typeof Catalog>;
+
+/** `bottle build` writes this list of the guest image's linked plugins next to the task state. */
+const manifestPath = (config: Config) => `${config.stateRoot}/guest-plugins.txt`;
+
+/** Reads and validates `<configRoot>/catalog.json`; every extension's guestPath must exist in the guest image, per the build's manifest. */
+export const loadCatalog = (config: Config): Catalog => {
+  const catalog = Catalog.parse(JSON.parse(readFileSync(`${config.configRoot}/catalog.json`, "utf8")));
+  let manifest: Set<string>;
+  try {
+    manifest = new Set(readFileSync(manifestPath(config), "utf8").split("\n"));
+  } catch {
+    throw new Error(`${manifestPath(config)} is missing, so the catalog cannot be checked against the guest image. Fix: run bottle build`);
+  }
+  for (const [id, { guestPath }] of Object.entries(catalog.extensions))
+    if (!manifest.has(guestPath))
+      throw new Error(
+        `catalog extension "${id}" names ${guestPath}, which is not in the guest image (${config.guestImage}). ` +
+          `Fix: correct guestPath in ${config.configRoot}/catalog.json, or pin the package in guest/pi-package.json and run bottle build`,
+      );
+  return catalog;
+};
 
 const SESSION = "/work/.pi-session/task.jsonl";
 /** Commands the guest image provides. */
@@ -177,28 +213,6 @@ export const ASK_USER_EXTENSION = {
   tools: ["ask_user_question"],
 };
 
-/**
- * pi-web-access reads ~/.pi/agent/web-search.json. Search uses only keyless Exa (its hosted MCP endpoint, mcp.exa.ai),
- * and pages are fetched directly over HTTP, so every page host still needs a `site:` grant. Hosted extraction services,
- * browser cookies, the curator browser UI, and the video and YouTube paths (Gemini or yt-dlp) are off. The package
- * has no telemetry or network update check; its upgrade notice only compares the bundled changelog.
- */
-const webSearchJson = {
-  provider: "exa",
-  webSearch: { enabled: true, allowedProviders: ["exa"] },
-  fetchRouting: { providers: ["http"], allowRemoteHostedProviders: false },
-  // pi-web-access resolves each hostname with node:dns before fetching (its SSRF guard); the guest has no DNS, so that
-  // failed with EAI_AGAIN even for granted hosts. This hands the hostname to HTTPS_PROXY instead; our egress proxy already refuses internal addresses.
-  ssrf: { trustEnvProxy: true },
-  allowBrowserCookies: false,
-  workflow: "none",
-  autoOpenBrowser: false,
-  toolActivation: "eager",
-  commands: { curator: { enabled: false }, "google-account": { enabled: false } },
-  youtube: { enabled: false },
-  video: { enabled: false },
-};
-
 /** Curated servers are small, so Pi declares their tools directly; its default `codemode` exposure hides them behind a tool we do not grant. */
 const mcpServers = (catalog: Catalog, ids: string[]) =>
   Object.fromEntries(
@@ -221,20 +235,21 @@ export const writeGuestConfig = (
   extIds: string[],
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
+  rmSync(`${directory}/agent-files`, { recursive: true, force: true });
+  mkdirSync(`${directory}/agent-files`);
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/request-capability.ts`, `${directory}/extensions/request-capability.ts`);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
   const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config, keys));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
-  writeJson("web-search.json", webSearchJson);
   writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
   const [provider, ...model] = task.model.split("/");
   // `--tools` filters MCP tools only when it names them, so each granted tool is listed by its Pi name.
   const mcpTools = mcpIds.flatMap((id) => piToolNames(`mcp:${id}`, { mcp: catalog.mcps }));
-  const extensions = [
+  const extensions: { guestPath: string; tools: string[]; files?: Record<string, unknown> }[] = [
     ...(task.attended ? [ASK_USER_EXTENSION] : []),
     ...extIds.map((id) => {
       const entry = catalog.extensions[id];
@@ -242,6 +257,10 @@ export const writeGuestConfig = (
       return entry;
     }),
   ];
+  // Only a loaded extension's config reaches the guest; pi-launch copies the directory into ~/.pi/agent.
+  for (const entry of extensions)
+    for (const [name, content] of Object.entries(entry.files ?? {}))
+      writeFileSync(`${directory}/agent-files/${name}`, typeof content === "string" ? content : JSON.stringify(content, null, 2));
   const args = [
     "--provider",
     provider,
@@ -320,3 +339,14 @@ export const pi = {
   /** The transcript improves archive browsing, but an exporter failure never discards the session or artifacts. */
   export: (guest: Guest) => guest.exec(`pi --export ${SESSION} /work/transcript.html || true`),
 };
+
+/** `node src/pi.ts`: the doctor's check that catalog.json is valid and names only extensions the guest image has. */
+if (import.meta.main) {
+  try {
+    const catalog = loadCatalog(loadConfig(configPathFromEnv()));
+    console.log(`catalog ok: ${Object.keys(catalog.extensions).length} extensions, ${Object.keys(catalog.mcps).length} MCP servers`);
+  } catch (error) {
+    console.error((error as Error).message);
+    process.exit(1);
+  }
+}

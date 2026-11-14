@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
-import { Catalog, grantChange, systemNote, writeGuestConfig } from "../src/pi.ts";
+import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
 import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce } from "../src/tasks.ts";
@@ -288,7 +288,7 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.throws(() => loadTemplates(path));
 });
 
-test("guest configuration mounts no skills, sends the web-search proxy setting, and loads the curated MCP tools", () => {
+test("guest configuration mounts no skills, sends no extension config for an MCP-only task, and loads the curated MCP tools", () => {
   const config = loadConfig(writeConfig());
   // An MCP server that runs inside the VM; remote ones are speaker services and not catalog entries.
   const catalog = Catalog.parse({
@@ -303,7 +303,7 @@ test("guest configuration mounts no skills, sends the web-search proxy setting, 
   assert.equal(args.includes("--skill"), false);
   assert.equal(existsSync(join(directory, "skills")), false);
   assert.ok(existsSync(join(directory, "extensions/reply.ts")));
-  assert.equal(JSON.parse(readFileSync(join(directory, "web-search.json"), "utf8")).ssrf.trustEnvProxy, true);
+  assert.deepEqual(readdirSync(join(directory, "agent-files")), []);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
 });
@@ -345,9 +345,13 @@ test("attended mode loads ask-user-question; ext: grants load catalog extensions
   assert.deepEqual(research.loaded, ["/etc/bottle/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
   assert.ok(research.tools.includes("web_search") && !research.tools.includes("ask_user_question"));
   assert.match(research.system, /## Unattended task[\s\S]*Nobody is watching[\s\S]*## Owner prompt\n\nFind three sources$/);
-  const webSearch = JSON.parse(readFileSync(join(research.directory, "web-search.json"), "utf8"));
+  const webSearch = JSON.parse(readFileSync(join(research.directory, "agent-files/web-search.json"), "utf8"));
   assert.deepEqual(webSearch.webSearch.allowedProviders, ["exa"]);
   assert.deepEqual(webSearch.fetchRouting, { providers: ["http"], allowRemoteHostedProviders: false });
+  assert.equal(webSearch.ssrf.trustEnvProxy, true);
+  assert.equal(webSearch.allowBrowserCookies, false);
+  // Config files follow the extension: a task without it gets none.
+  assert.equal(existsSync(join(write(false, ["pi-cc-loop"]).directory, "agent-files/web-search.json")), false);
 
   const loop = write(false, ["pi-cc-loop", "pi-cc-monitor"]);
   assert.ok(loop.tools.includes("schedule_wakeup") && loop.tools.includes("Monitor"));
@@ -514,4 +518,45 @@ test("grantChange diffs the loadout and names tools as Pi registers them", () =>
     removed: ["ext:notes"],
     tools: { added: ["mcp__my_db__run_query"], removed: ["note"] },
   });
+});
+
+test("catalog extensions carry config files that only a task loading the extension receives", () => {
+  const config = loadConfig(writeConfig());
+  const entry = { label: "Notes", guestPath: "/opt/pi-plugins/notes", description: "Notes", tools: ["note"], sites: [] };
+  const catalog = Catalog.parse({
+    mcps: {},
+    extensions: { notes: { ...entry, files: { "notes.json": { a: 1 }, "notes.txt": "plain" } }, other: { ...entry, guestPath: "/opt/pi-plugins/other" } },
+  });
+  const write = (name: string, extIds: string[]) => {
+    const directory = join(config.configRoot, name);
+    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", attended: false }, new Map(), [], [], extIds);
+    return join(directory, "agent-files");
+  };
+  const withNotes = write("with", ["notes"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(withNotes, "notes.json"), "utf8")), { a: 1 });
+  assert.equal(readFileSync(join(withNotes, "notes.txt"), "utf8"), "plain");
+  assert.deepEqual(readdirSync(write("without", ["other"])), []);
+  // A restart that drops the extension removes its files from the same directory.
+  assert.deepEqual(readdirSync(write("with", ["other"])), []);
+  for (const name of ["../x.json", "sub/x.json", "models.json"])
+    assert.throws(
+      () => Catalog.parse({ mcps: {}, extensions: { notes: { ...entry, files: { [name]: {} } } } }),
+      name === "models.json" ? /bottle's own/ : /no directory part/,
+    );
+});
+
+test("the catalog is checked against the guest image's plugin manifest, and a missing path names the entry and the fix", () => {
+  const config = loadConfig(writeConfig());
+  const entry = { label: "X", description: "X", tools: [], sites: [] };
+  const save = (extensions: object) => writeFileSync(join(config.configRoot, "catalog.json"), JSON.stringify({ mcps: {}, extensions }));
+  save({ good: { ...entry, guestPath: "/opt/pi-plugins/good" } });
+  assert.throws(() => loadCatalog(config), /guest-plugins\.txt is missing.*bottle build/);
+  writeFileSync(join(config.stateRoot, "guest-plugins.txt"), "/opt/pi-plugins/good\n");
+  assert.deepEqual(Object.keys(loadCatalog(config).extensions), ["good"]);
+  save({ good: { ...entry, guestPath: "/opt/pi-plugins/good" }, typo: { ...entry, guestPath: "/opt/pi-plugins/gooood" } });
+  assert.throws(() => loadCatalog(config), /extension "typo" names \/opt\/pi-plugins\/gooood.*not in the guest image.*pi-package\.json and run bottle build/);
+});
+
+test("the shipped catalog parses", () => {
+  Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
 });

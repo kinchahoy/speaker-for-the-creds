@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono, type ErrorHandler } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
@@ -9,7 +8,7 @@ import { reconcile } from "./sandbox.ts";
 import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
 import { errorBody } from "../../speaker/items.ts";
 import { codes, loadTemplates, StatusError } from "./grants.ts";
-import { Catalog } from "./pi.ts";
+import { loadCatalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
 import { closed, Tasks, type Task } from "./tasks.ts";
 
@@ -78,6 +77,16 @@ export const startControl = (config: Config, tasks: Tasks) => {
     return context.json({ closing: task.id }, 202);
   });
 
+  // Re-reads catalog.json: validation errors answer 400 and leave the current catalog; running tasks keep their loaded extensions.
+  app.post("/api/catalog/reload", (context) => {
+    try {
+      tasks.reloadCatalog(loadCatalog(config));
+    } catch (error) {
+      throw new StatusError(400, `catalog not reloaded: ${(error as Error).message}`);
+    }
+    return context.json({ extensions: Object.keys(tasks.catalog.extensions), mcps: Object.keys(tasks.catalog.mcps) });
+  });
+
   app.onError(failure);
   serve({ fetch: app.fetch, hostname: config.bindHost, port: config.controlPort });
   console.log(`control  http://${expectedHost}`);
@@ -126,8 +135,7 @@ export const startService = (config: Config) => {
   // A closed task's artifacts can become a read-only input of the next task.
   config.shareRoots.archive = config.outputRoot;
 
-  const readJson = (path: string): unknown => JSON.parse(readFileSync(`${config.configRoot}/${path}`, "utf8"));
-  const catalog = Catalog.parse(readJson("catalog.json"));
+  const catalog = loadCatalog(config);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
   const tasks = new Tasks(config, templates, catalog, readHostToken(config));
   startControl(config, tasks);
@@ -142,6 +150,15 @@ if (import.meta.main) {
   const staleSessions = await reconcile();
   if (staleSessions) console.log(`removed ${staleSessions} microsandbox VMs a crashed service left behind`);
   const { tasks } = startService(config);
+
+  process.on("SIGHUP", () => {
+    try {
+      tasks.reloadCatalog(loadCatalog(config));
+      console.log("catalog reloaded");
+    } catch (error) {
+      console.error(`catalog not reloaded, the previous one stays: ${(error as Error).message}`);
+    }
+  });
 
   let shuttingDown = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const)

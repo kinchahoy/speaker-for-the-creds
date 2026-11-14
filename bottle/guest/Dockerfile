@@ -70,18 +70,25 @@ RUN --mount=type=cache,target=/root/.cache/mise \
  && git lfs install --system
 
 # 5. Agent: Pi and its extensions in one pnpm project (pi-package.json; their install scripts stay unrun), so the extensions share a single Pi instead of
-# each installing their own as a peer dependency. Always-on extensions are linked into /opt/pi-extensions (pi-launch loads
-# them in every task); the rest into /opt/pi-plugins, the paths catalog.json names.
+# each installing their own as a peer dependency. Every dependency that declares a `pi` extension is linked automatically: the
+# ALWAYS_ON ones into /opt/pi-extensions (pi-launch loads them in every task), the rest into /opt/pi-plugins, the paths
+# catalog.json names. /opt/pi-plugins.manifest lists what is linked there; `bottle build` copies it to the host, and
+# bottle checks every catalog guestPath against it.
+ARG ALWAYS_ON="pi-loop-police pi-token-speed"
 COPY pi-package.json /opt/pi/package.json
 RUN --mount=type=cache,target=/root/.local/share/pnpm \
     --mount=type=cache,target=/root/.cache/pnpm \
     cd /opt/pi && pnpm install --config.strictDepBuilds=false \
  && ln -s /opt/pi/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js /usr/local/bin/pi \
- && link() { dir="/opt/pi/node_modules/$1"; jq -e .pi "$dir/package.json" >/dev/null && ln -s "$dir" "$2/${1##*/}"; } \
  && mkdir -p /opt/pi-extensions /opt/pi-plugins \
- && for p in pi-loop-police pi-token-speed; do link "$p" /opt/pi-extensions || exit 1; done \
- && for p in @juicesharp/rpiv-ask-user-question pi-web-access pi-cc-loop pi-cc-monitor; do link "$p" /opt/pi-plugins || exit 1; done \
+ && for p in $(jq -r '.dependencies | keys[]' package.json); do \
+      dir="/opt/pi/node_modules/$p"; \
+      jq -e .pi "$dir/package.json" >/dev/null || continue; \
+      case " $ALWAYS_ON " in *" $p "*) to=/opt/pi-extensions ;; *) to=/opt/pi-plugins ;; esac; \
+      ln -s "$dir" "$to/${p##*/}"; \
+    done \
  && ln -s /opt/pi/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent /opt/pi-plugins/subagent \
- && test -f /opt/pi-plugins/subagent/index.ts
+ && test -f /opt/pi-plugins/subagent/index.ts \
+ && { ls -d /opt/pi-plugins/*; find -L /opt/pi-plugins -maxdepth 2 -name index.ts; } | sort -u > /opt/pi-plugins.manifest
 
 COPY rootfs/ /
