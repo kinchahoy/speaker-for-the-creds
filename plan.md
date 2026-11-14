@@ -76,19 +76,21 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 2a | **Slim trace**: replace the trace export with one JSON line per model call (see below) | cheap subagent, bottle files | bottle tests; a task archive holds `model-calls.jsonl` |
 | 2b | **Cut VM-mount folder delivery** from speaker; `DESIGN.md` updated in the same commit | cheap subagent, speaker files, in parallel with 2a | speaker tests |
 | 2c | **In-VM MCP servers stay**: add a test that an approved `mcp:<id>` puts the server into Pi's MCP config and a revoke removes it (no VM needed), and a short README example of a catalog entry | cheap subagent, after 2a | the new test passes |
-| 3 | **Further feature cuts**, if you approve any from the table below, one commit per feature with docs | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
+| 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
+| 2e | **MCP tool listing through the official SDK**, classification unchanged; skipped if the SDK check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
+| 3 | **Proposed cuts you confirm** (table below), one commit per feature with docs | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
 Rules for the subagents: each gets an exact file list and the audit's line ranges, removes only what is listed, never edits a test to make it pass (a failing test is reported back), and does not commit. A and B run together because their files do not overlap; nothing else runs in parallel in the one tree.
 
-Agreed: all low-risk cuts (1a to 1c) including the Herdr TUI integration, the slim trace (2a), cutting VM-mount delivery (2b), and keeping in-VM MCP servers with a test (2c). Step 3 waits on your picks.
+Agreed: all low-risk cuts (1a to 1c) including the Herdr TUI integration, the slim trace (2a), cutting VM-mount delivery (2b), keeping in-VM MCP servers with a test (2c), cutting `bottle doctor` (2d), and simplifying the MCP tool listing without losing the feature (2e). Step 3 waits on your yes or no per row.
 
 Not doing: reformatting speaker to width 160. It removes 363 lines without removing any code, and 160 is not a common width (formatter defaults are 80 to 100, and 120 is a common wider choice), so speaker's 120 is the more standard of the two. The packages keep their current widths.
 
 ## Open
 
-1. **Which further feature cuts to take** (table below).
+1. **Yes or no on each proposed cut** (table under Further feature cuts).
 
 ## Line-reduction audit of the existing code
 
@@ -116,21 +118,34 @@ One medium-risk extra: replace speaker's hand-written upstream forwarding with H
 | VM-mount folder delivery in speaker | ~-45, plus ~60 in tests | cut |
 | In-VM MCP servers (`mcp:` items) | 0 | keep, add a test and a README example |
 
-### Further feature cuts: your decision (about 780 lines in total)
+### Further feature cuts
 
-| Cut | Lines | What you lose |
+Decided:
+
+| Cut | Lines | Decision |
 | --- | --- | --- |
-| Narrow `init`, four separable pieces | ~-185 | Re-running `init` to update an install with your old answers as defaults (~45); `init bottle` unlocking speaker and approving the sandbox host with the owner password, instead of you doing it in `/admin` (~65); the smoke-test task at the end (~55); the reverse-proxy questions in `init speaker` (~20). Flags-only init would be ~-400. |
-| Read/write classification of remote MCP tools | ~-120 | `.read` grants for MCP services; every tool call would need `.full`. Coarser grants. |
-| `/admin` extras: filter bar, custom confirm dialog, per-agent counts, countdown meters | ~-125 | Polish on the owner pages. |
-| Hosted model providers in bottle | ~-110 | Hosted models through a speaker secret; local models only. Removes the `awaiting-key` task state. |
-| Simpler speaker link in bottle (keep the 30-second grant drop) | ~-60 | The specific "token rejected" message and auto-shutdown after 5 minutes without speaker. |
-| `bottle doctor` | ~-59 | The preflight command; `init` and `start.sh` check most of the same things. |
-| Docker path for speaker | -47 | The hardened container. This is the planned NAS deployment, so probably keep. |
-| Require `PROXY_PORT` and `SSH_PORT` | ~-40 | Running speaker without the secrets proxy or jump server. |
-| Extension-bundled sites | ~-30 | Site grants ending automatically with their extension. |
-| Three-denials lock | ~-25 | Auto-deny for 15 minutes after three denials. |
-| Built-in demo service | ~-20 | The no-key demo on a fresh install. |
+| `bottle doctor` | ~-59 | cut. `init` and `start.sh` keep their own host checks. |
+| Read/write classification of remote MCP tools | ~-35 | **simplify, do not remove.** About 50 of its lines are a hand-written MCP client that lists a server's tools (handshake, paging, event-stream parsing, session close). The official `@modelcontextprotocol/sdk` client does that in about 10. The classification itself stays as it is. Check first: the SDK's release activity, and that its HTTP transport lets speaker add the credential header and refuse redirects. If it cannot, leave the code alone. |
+
+Proposed, waiting for your yes or no:
+
+| Cut | Lines | What you lose | My view |
+| --- | --- | --- | --- |
+| Require `PROXY_PORT` and `SSH_PORT` | ~-40 | Running speaker without the secrets proxy or jump server. `init` already sets both. | cut |
+| `init`: the smoke-test task and the reverse-proxy questions | ~-75 | You run a first task yourself; you set `TRUSTED_PROXY` in the env file. | cut |
+| `/admin`: the filter bar and the custom confirm dialog | ~-72 | Filtering the Inbox by kind or text; a styled confirm instead of the browser's. | cut |
+| Three-denials lock | ~-25 | Auto-deny for 15 minutes after an agent is denied three times; it would reach you again instead. | cut |
+| `init`: update in place, and unlocking speaker and approving the host with the owner password | ~-110 | Re-running `init` with old answers as defaults; one-step setup. Both matter for easy deployment by others. | keep |
+| Hosted model providers in bottle | ~-110 | Running the sandboxed Pi on a cloud model (see below). Anyone without a local model server needs it. | keep |
+| Speaker link in bottle | ~-60 | Fast failure on a rejected token and on a long outage (see below). | keep |
+| Docker path for speaker | -47 | The hardened container, which is the planned NAS deployment. | keep |
+| `/admin`: per-agent counts, "same agent enrolled earlier" warning, countdown meters | ~-54 | Signals that an agent is misbehaving. | keep |
+| Extension-bundled sites | ~-30 | Site grants ending with their extension's grant; they would run to their own end time. | keep |
+| Built-in demo service | ~-20 | The no-key demo the README tells new users to start with. | keep |
+
+**Hosted model providers, in plain words.** By default the Pi inside a VM talks to your own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once you approve, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
+
+**The speaker link, in plain words.** bottle holds one WebSocket to speaker to receive grants. Around it are four behaviours: it reconnects with a growing delay; on a failed connect it asks speaker whether its token is still accepted, and stops at once with a "register again" message if not; it shuts bottle down if speaker was never reached within 30 seconds of startup or has been gone for 5 minutes; and it drops every grant after 30 seconds of silence. The cut would keep only the last one and retry forever. The token check and the give-up limits are the fast-fail path, which is why I would keep them.
 
 ### The trace export: why it is large, and a slim version
 
