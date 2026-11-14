@@ -1,17 +1,12 @@
-// Explicit lifecycles for requests and sandbox hosts (grants have none: they exist only while in force).
-// Every status change goes through transition(); a move missing from a table throws.
+// Explicit lifecycles for sandbox hosts and relay sessions. Requests have none: their status is derived (statusOf in
+// core.ts), and grants exist only while in force. A status change goes through transition(); a move missing from a
+// table throws.
 
 export type Table<S extends string, E extends string> = Readonly<Record<S, Readonly<Partial<Record<E, S>>>>>
 
 export class IllegalTransition extends Error {
-  readonly machine: string
-  readonly from: string
-  readonly event: string
   constructor(machine: string, from: string, event: string) {
     super(`${machine} cannot ${event} while ${from}`)
-    this.machine = machine
-    this.from = from
-    this.event = event
   }
 }
 
@@ -19,16 +14,6 @@ export function transition<S extends string, E extends string>(machine: string, 
   const to = table[from][event]
   if (to === undefined) throw new IllegalTransition(machine, from, event)
   return to
-}
-
-export const requestStates = ['pending', 'decided', 'expired'] as const
-export type RequestState = (typeof requestStates)[number]
-export type RequestEvent = 'decide' | 'expire'
-// decide: the owner answered every item (each is granted or denied). expire: nobody answered within 2 hours.
-export const requestTable: Table<RequestState, RequestEvent> = {
-  pending: { decide: 'decided', expire: 'expired' },
-  decided: {},
-  expired: {},
 }
 
 export const hostStates = ['pending', 'approved'] as const

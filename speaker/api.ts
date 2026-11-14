@@ -9,7 +9,6 @@ import { z } from 'zod'
 import {
   type Agent,
   agentError,
-  type ErrorFields,
   type Core,
   demoSecret,
   type Env,
@@ -20,9 +19,7 @@ import {
   identitySchema,
   idSchema,
   invalid,
-  itemForms,
   itemsWhere,
-  kindOf,
   noCounts,
   plural,
   type Request,
@@ -31,6 +28,7 @@ import {
   statusOf,
   union,
 } from './core.ts'
+import { type ErrorFields, itemForms, kindOf } from './items.ts'
 
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const {
@@ -45,6 +43,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     connections,
     agentById,
     agentByToken,
+    resolveAgent,
     jump,
     ownerSecrets,
     lockNotice,
@@ -71,7 +70,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     saveHosts,
     sourceOf,
     baseOf,
-    delivery,
+    enforcementOf,
     endAgent,
     tally,
   } = core
@@ -113,8 +112,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         next: `Send Authorization: Bearer <token>. ${enrollNext}`,
       })
     const digest = hash(token)
-    const agent = agentByToken(digest)
-    if (agent?.status === 'revoked') return revokedReply(c)
     const host = [...hosts.values()].find((item) => same(item.tokenHash, digest))
     if (host && host.source !== sourceOf(c))
       return unauthorized(c, 'register', 'This sandbox host token was registered from another address', {
@@ -125,10 +122,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       return unauthorized(c, 'approval_required', 'The owner has not approved this sandbox host yet', {
         tell_user: tellUser(c, `host-${host.id}`),
       })
-    else if (agent && agent.source === sourceOf(c)) {
-      agent.lastSeen = Date.now()
-      c.set('caller', { role: 'agent', agent })
-    } else return unauthorized(c, 'enroll', 'This token is not enrolled for this address', { next: enrollNext })
+    else {
+      const found = resolveAgent(token, sourceOf(c))
+      if ('agent' in found) c.set('caller', { role: 'agent', agent: found.agent })
+      else if (found.refused === 'revoked') return revokedReply(c)
+      else return unauthorized(c, 'enroll', 'This token is not enrolled for this address', { next: enrollNext })
+    }
     await next()
   }
   const hostCaller = (c: Context<Env>) => {
@@ -242,7 +241,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const applying = (request: Request) =>
     request.grantIds.flatMap((id) => {
       const grant = grants.get(id)
-      return grant && live(grant) && delivery(grant) !== 'enforced' ? [grant.item] : []
+      return grant && live(grant) && enforcementOf(grant) !== 'enforced' ? [grant.item] : []
     })
   // A request as the agent sees it: per-item outcome, and what to do next.
   const outcome = (c: Context, request: Request) => {
@@ -455,6 +454,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       }
     }),
   )
+  // A sandbox host checking that speaker has approved it (the auth middleware has already refused unapproved ones).
+  app.get('/_speaker/hosts/self', (c) => {
+    const caller = c.get('caller')
+    if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
+    return c.json({ id: caller.host.id, name: caller.host.name, status: caller.host.status })
+  })
   app.post('/_speaker/hosts/agents', async (c) => {
     const host = hostCaller(c)
     const identity = identitySchema.parse(await c.req.json())
@@ -668,7 +673,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       grants: mine.map((grant) => ({
         item: grant.item,
         expiresAt: grant.expiresAt,
-        ...(delivery(grant) === 'enforced' ? {} : { applying: true }),
+        ...(enforcementOf(grant) === 'enforced' ? {} : { applying: true }),
       })),
       secrets,
       ...(agent.host ? { extensions, mcp } : {}),

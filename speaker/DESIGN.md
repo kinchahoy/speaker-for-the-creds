@@ -128,7 +128,7 @@ Speaker runs an SSH jump server in its container (see The jump server and relay)
 
 ### Knowing where it stands
 
-`GET /_speaker/catalog` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force; speaker tracks each grant as `enforced`, `granted` (sent to a connected sandbox host, not yet reported) or `waiting` (its host is not connected)), every secret the owner set up (name, hosts, variable, and `state` `granted` or `ask`; the placeholder and setup hints only once granted), the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. For a sandboxed agent it also lists `extensions` and `mcp` from its sandbox host's catalog, each with its state. `text` is the same list as plain markdown for a weak model, with one line per item; the `request_capability` tool pastes it into its description, so it names no routes. What it leaves out, and why, is in What an agent can see.
+`GET /_speaker/catalog` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force; speaker tracks each grant as `enforced`, `sent` (to a connected sandbox host, not yet reported) or `host-offline` (its host is not connected)), every secret the owner set up (name, hosts, variable, and `state` `granted` or `ask`; the placeholder and setup hints only once granted), the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. For a sandboxed agent it also lists `extensions` and `mcp` from its sandbox host's catalog, each with its state. `text` is the same list as plain markdown for a weak model, with one line per item; the `request_capability` tool pastes it into its description, so it names no routes. What it leaves out, and why, is in What an agent can see.
 
 ### Errors
 
@@ -252,6 +252,7 @@ What the table means in practice:
 | SSH on one unusual port | agent with an SSH or folder grant | commands and file transfer, relayed |
 | `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |
 | `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents; the host reports its shares and catalog |
+| `GET /_speaker/hosts/self` | sandbox host | `{ id, name, status: "approved" }`; a pending or unknown host token gets the usual `401` (`approval_required`, `enroll` or `register`), an agent token `403` `denied` |
 | `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
 | `GET /_speaker/health` | anyone | liveness |
 | `/admin/...` | owner | HTML forms only |
@@ -319,7 +320,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/catalog` gives the path.
 - A share the sandbox host reported with `mount: false` (or did not report) is delivered to its agents over SSH, and the host mounts it itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
-- After a speaker restart, the sandbox host re-creates the agents of its running tasks and files each task's template request again; the owner sees one card per task.
+- After a speaker restart, the agent tokens of running tasks are unknown and their grants are gone. Those tasks lose speaker access until they are relaunched (the sandbox host does not re-create their agents).
 
 **Deployment**
 

@@ -4,22 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
-import {
-  hostStates,
-  hostTable,
-  IllegalTransition,
-  type RequestEvent,
-  requestStates,
-  requestTable,
-  sessionTable,
-  transition,
-} from '../lifecycle.ts'
+import { hostStates, hostTable, IllegalTransition, sessionTable, transition } from '../lifecycle.ts'
 import { createApp, readConfig } from '../server.ts'
 import { setOwnerPassword } from './owner.ts'
 
 test('every table target is a known state and terminal states accept no event', () => {
   for (const [states, table] of [
-    [requestStates, requestTable],
     [hostStates, hostTable],
     [['connecting', 'open', 'closed'], sessionTable],
   ] as const) {
@@ -27,20 +17,11 @@ test('every table target is a known state and terminal states accept no event', 
     for (const moves of Object.values(table))
       for (const to of Object.values(moves)) assert.ok((states as readonly string[]).includes(to as string))
   }
-  for (const state of ['decided', 'expired'] as const) assert.deepEqual(requestTable[state], {})
+  assert.deepEqual(hostTable.approved, {})
 })
 
 test('transitions: legal moves land on the table state, illegal moves throw', () => {
-  assert.equal(transition('request', requestTable, 'pending', 'decide'), 'decided')
-  assert.equal(transition('request', requestTable, 'pending', 'expire'), 'expired')
   assert.equal(transition('host', hostTable, 'pending', 'approve'), 'approved')
-  const illegal: [(typeof requestStates)[number], RequestEvent][] = [
-    ['decided', 'decide'],
-    ['decided', 'expire'],
-    ['expired', 'decide'],
-  ]
-  for (const [from, event] of illegal)
-    assert.throws(() => transition('request', requestTable, from, event), IllegalTransition, `${from} + ${event}`)
   assert.throws(() => transition('host', hostTable, 'approved', 'approve'), IllegalTransition)
 })
 

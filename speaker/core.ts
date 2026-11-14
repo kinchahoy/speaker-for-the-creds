@@ -10,7 +10,7 @@ import writeFile from 'write-file-atomic'
 import { z } from 'zod'
 import { durationNames, durations, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
-import { hostStates, type RequestEvent, type RequestState, requestTable, transition } from './lifecycle.ts'
+import { hostStates } from './lifecycle.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
 import { createStore, generateSshKey, openStore, type Store, type Vault } from './store.ts'
 
@@ -22,23 +22,23 @@ export const urlSchema = z.url().refine((value) => {
   const url = new URL(value)
   return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
 }, 'Use an HTTP(S) URL without credentials, query, or fragment')
-export const sshKeySchema = z
+const sshKeySchema = z
   .string()
   .trim()
   .regex(
     /^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+( [^\r\n]*)?$/,
     'Send one ed25519 or ECDSA public key',
   )
-export const durationSchema = z.enum(durationNames).default('2h')
-export const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
+const durationSchema = z.enum(durationNames).default('2h')
+const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
 // Three denials of the same item for the same agent within this window lock it: it is answered as denied, without
 // asking the owner, until the window after the third denial has passed.
-export const denialLimit = 3
-export const denialWindow = 15 * 60_000
-export const requestLifetime = 2 * 3600_000
-export const agentIdleLimit = 7 * 86_400_000
+const denialLimit = 3
+const denialWindow = 15 * 60_000
+const requestLifetime = 2 * 3600_000
+const agentIdleLimit = 7 * 86_400_000
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
-export const mcpReadMethods = new Set([
+const mcpReadMethods = new Set([
   'initialize',
   'ping',
   'tools/list',
@@ -50,7 +50,7 @@ export const mcpReadMethods = new Set([
   'completion/complete',
   'logging/setLevel',
 ])
-export const authSchema = z.discriminatedUnion('type', [
+const authSchema = z.discriminatedUnion('type', [
   // A keyless service (a remote MCP server or API that needs no credential): speaker only gates and forwards.
   z.object({ type: z.literal('none') }),
   z.object({ type: z.literal('bearer'), secret: idSchema }),
@@ -83,15 +83,15 @@ export const serviceSchema = z.object({
   // Streamable-HTTP MCP server: POST bodies are classified by JSON-RPC method and tool annotations.
   mcp: z.boolean().optional(),
 })
-export const itemSchema = z
+const itemSchema = z
   .string()
   .trim()
   .refine((item) => kindOf(item) !== undefined, `An item is one of: ${itemForms.join(', ')}`)
 // Item kinds a sandbox host may declare it enforces.
-export const hostKinds = ['secret', 'site', 'folder', 'mcp', 'ext'] as const
+const hostKinds = ['secret', 'site', 'folder', 'mcp', 'ext'] as const
 // SHA-256 of the empty string: what a setup that never wrote its token file sends.
-export const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-export const hashSchema = z
+const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+const hashSchema = z
   .string()
   .regex(/^[a-f0-9]{64}$/, 'tokenHash must be 64 lowercase hex characters (SHA-256 of the token)')
   .refine((value) => value !== emptyHash, 'tokenHash is the hash of an empty token; write the token first')
@@ -104,10 +104,7 @@ export const groupDescriptionSchema = z
 export const groupItemsSchema = z.array(
   itemSchema.refine((item) => kindOf(item) !== 'group', 'Groups cannot contain groups'),
 )
-export const groupsSchema = z.record(
-  idSchema,
-  z.object({ description: groupDescriptionSchema, items: groupItemsSchema }),
-)
+const groupsSchema = z.record(idSchema, z.object({ description: groupDescriptionSchema, items: groupItemsSchema }))
 export const hostSchema = z.object({
   id: idSchema,
   name: z.string().trim().min(1).max(100),
@@ -118,7 +115,7 @@ export const hostSchema = z.object({
   // this field matches no address and is told to register again.
   source: z.string().default(''),
 })
-export const reasonSchema = z.string().trim().min(1).max(500)
+const reasonSchema = z.string().trim().min(1).max(500)
 export const identitySchema = z.object({
   label: z.string().trim().min(1).max(200),
   agent: z.string().trim().min(1).max(120).default('unknown'),
@@ -142,7 +139,7 @@ export const enrollSchema = identitySchema
     message: 'reason is required with want',
     path: ['reason'],
   })
-export const listSchema = z.union([z.string(), z.array(z.string())]).transform((value) => [value].flat())
+const listSchema = z.union([z.string(), z.array(z.string())]).transform((value) => [value].flat())
 export const newPasswordSchema = z
   .object({ password: z.string().min(8, 'Use at least 8 characters.'), confirm: z.string() })
   .refine((value) => value.password === value.confirm, { message: 'The two passwords differ.', path: ['confirm'] })
@@ -171,11 +168,11 @@ export const decisionSchema = z.object({
 export type Service = z.infer<typeof serviceSchema>
 export type Group = z.infer<typeof groupsSchema>[string]
 export type Host = z.infer<typeof hostSchema>
-export type Duration = z.infer<typeof adminDurationSchema>
-export type Usage = { uses: number; lastUsedAt: number | null }
+type Duration = z.infer<typeof adminDurationSchema>
+type Usage = { uses: number; lastUsedAt: number | null }
 // What the owner sees at a glance: requests that reached them, items decided, and what speaker turned away (a request
 // refused before the owner saw it, a call blocked for lack of a grant), with the latest such message.
-export type Counts = {
+type Counts = {
   requests: number
   granted: number
   denied: number
@@ -236,14 +233,15 @@ export type Request = {
 }
 export const itemsWhere = (request: Request, outcome: Outcome) =>
   Object.keys(request.outcomes).filter((item) => request.outcomes[item] === outcome)
+type RequestState = 'pending' | 'decided' | 'expired'
 export const statusOf = (request: Request): RequestState =>
   request.expired ? 'expired' : itemsWhere(request, 'pending').length ? 'pending' : 'decided'
 // How far a grant has reached what enforces it. `enforced`: it is in force (speaker itself enforces it, or the
-// sandbox host reported it applied). `granted`: sent to a connected sandbox host, not yet reported applied. `waiting`:
-// its sandbox host is not connected.
-export type Delivery = 'enforced' | 'granted' | 'waiting'
-export type GrantView = Grant & { label: string; agent: string; state: Delivery }
-export type RequestView = Request & { status: RequestState; items: string[] }
+// sandbox host reported it applied). `sent`: sent to a connected sandbox host, not yet reported applied.
+// `host-offline`: its sandbox host is not connected.
+type Enforcement = 'enforced' | 'sent' | 'host-offline'
+type GrantView = Grant & { label: string; agent: string; enforcement: Enforcement }
+type RequestView = Request & { status: RequestState; items: string[] }
 // One connected sandbox host: its socket, the grants it reported applied, the shares it holds (and whether it can
 // mount them), and what it can start inside its VMs (MCP servers and Pi extensions, with the sites they need).
 export type Connection = {
@@ -253,8 +251,8 @@ export type Connection = {
   catalog?: HostCatalog
 }
 // Where the encrypted store stands: no owner password yet, set but not unlocked since the last start, or open.
-export type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
-export type AgentView = Agent & { sandboxHost?: string; grants: number }
+type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
+type AgentView = Agent & { sandboxHost?: string; grants: number }
 export type View = {
   hosts: (Host & { shares: { name: string; mount: boolean }[] })[]
   agents: AgentView[]
@@ -264,14 +262,13 @@ export type View = {
   sessions: { id: string; agent: string; what: string; started: number }[]
   details: Record<string, { text: string; warning?: string }>
 }
-export { covers, durations, errorBody, itemForms, itemPatterns, kindOf, type ErrorFields } from './items.ts'
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
-export type HostCatalog = {
+type HostCatalog = {
   mcps: { id: string; label: string; tools: string[] }[]
   extensions: { id: string; label: string; description: string; tools: string[]; sites: string[] }[]
 }
-export type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
+type Caller = { role: 'host'; host: Host } | { role: 'agent'; agent: Agent }
 export type Env = { Variables: { caller: Caller } }
 export const demoSecret = 'speaker-demo-credential-not-for-real-services'
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -303,7 +300,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
     .parse(environment)
 }
 
-export async function optionalFile(path: string): Promise<string | undefined> {
+async function optionalFile(path: string): Promise<string | undefined> {
   try {
     return await readFile(path, 'utf8')
   } catch (error) {
@@ -403,6 +400,18 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return agent?.status === 'enrolled' ? agent : undefined
   }
   const enrolled = () => [...agents.values()].filter((agent) => agent.status === 'enrolled')
+  // The one agent token check, for the API and the proxy: the agent behind a token, or why there is none. Every
+  // agent token only works from the address it enrolled from. (The lock is checked by each caller before this.)
+  const resolveAgent = (
+    token: string,
+    source: string | undefined,
+  ): { agent: Agent } | { refused: 'revoked' | 'unknown' } => {
+    const agent = agentByToken(hash(token))
+    if (agent?.status === 'revoked') return { refused: 'revoked' }
+    if (!agent || agent.source !== source) return { refused: 'unknown' }
+    agent.lastSeen = Date.now()
+    return { agent }
+  }
   const agentByToken = (digest: string) => [...agents.values()].find((agent) => same(agent.tokenHash, digest))
   const connections = new Map<string, Connection>()
   const strikes = new Map<string, number[]>()
@@ -455,8 +464,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   })
   const syncJump = () => void jump.sync().catch(() => undefined)
   // A request ends once, from pending: decided when its last item is answered, expired when nobody answers in time.
-  function endRequest(request: Request, event: RequestEvent) {
-    const status = transition('request', requestTable, 'pending', event)
+  function endRequest(request: Request, status: 'decided' | 'expired') {
     if (status === 'expired') request.expired = true
     else request.decidedAt = Date.now()
     audit(`request_${status}`, {
@@ -483,7 +491,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       }
     for (const [id, request] of requests) {
       const status = statusOf(request)
-      if (status === 'pending' && now - request.createdAt >= requestLifetime) endRequest(request, 'expire')
+      if (status === 'pending' && now - request.createdAt >= requestLifetime) endRequest(request, 'expired')
       else if (status !== 'pending' && now - (request.decidedAt ?? request.createdAt) >= 86_400_000) requests.delete(id)
     }
     const hasGrant = (id: string) => [...grants.values()].some((grant) => grant.agentId === id)
@@ -738,8 +746,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return serial(async () => {
       const request = requests.get(id)
       if (!request) throw new HTTPException(404, { message: 'Request not found' })
-      transition('request', requestTable, statusOf(request), 'decide')
-      if (!agentById(request.agentId)) throw new HTTPException(409, { message: 'Agent was removed' })
+      if (statusOf(request) !== 'pending')
+        throw new HTTPException(409, { message: `Request is already ${statusOf(request)}` })
+      const owner = agentById(request.agentId)
+      if (!owner) throw new HTTPException(409, { message: 'Agent was removed' })
       const take = new Set(approved)
       const seen = new Set(shown)
       const pending = itemsWhere(request, 'pending')
@@ -754,13 +764,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         strikes.set(strikeKey(request.agentId, item), [...recentStrikes(strikeKey(request.agentId, item)), Date.now()])
       for (const item of yes) request.outcomes[item] = 'granted'
       for (const item of no) request.outcomes[item] = 'denied'
-      const owner = agentById(request.agentId)
-      if (owner) {
-        owner.counts.granted += yes.length
-        owner.counts.denied += no.length
-      }
+      owner.counts.granted += yes.length
+      owner.counts.denied += no.length
       if (yes.length) request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
-      if (statusOf(request) === 'decided') endRequest(request, 'decide')
+      if (statusOf(request) === 'decided') endRequest(request, 'decided')
       push()
     })
   }
@@ -855,7 +862,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       )
     } else {
       if (count('granted')) request.expiresAt = null
-      endRequest(request, 'decide')
+      endRequest(request, 'decided')
     }
     return request
   }
@@ -884,12 +891,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     const proto = peerOf(c) === config.TRUSTED_PROXY ? c.req.header('x-forwarded-proto') : undefined
     return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`
   }
-  const delivery = (grant: Grant): Delivery => {
+  const enforcementOf = (grant: Grant): Enforcement => {
     const hostId = agentById(grant.agentId)?.host
     if (!hostId || serviceItem(grant.item) || jump.overSsh(grant)) return 'enforced'
     const connection = connections.get(hostId)
-    if (!connection) return 'waiting'
-    return connection.applied.has(grant.id) ? 'enforced' : 'granted'
+    if (!connection) return 'host-offline'
+    return connection.applied.has(grant.id) ? 'enforced' : 'sent'
   }
   const view = (): View => {
     const asViews = [...requests.values()].map((request) => ({
@@ -907,7 +914,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       requests: asViews,
       grants: [...grants.values()].filter(live).map((grant) => {
         const agent = agentById(grant.agentId)
-        return { ...grant, label: agent?.label ?? '', agent: agent?.agent ?? '', state: delivery(grant) }
+        return { ...grant, label: agent?.label ?? '', agent: agent?.agent ?? '', enforcement: enforcementOf(grant) }
       }),
       sessions: jump.sessions(),
       details: Object.fromEntries(
@@ -935,13 +942,11 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         authenticate(token, source) {
           const notice = lockNotice()
           if (notice) throw new Refusal(503, `${notice.message}. ${notice.tell_user}`)
-          const agent = agentByToken(hash(token))
-          if (agent?.status === 'revoked')
+          const found = resolveAgent(token, source)
+          if ('agent' in found) return { agent: found.agent.id }
+          if (found.refused === 'revoked')
             throw new Refusal(403, 'The owner revoked this agent. Stop and tell the user')
-          if (!agent || agent.source !== source)
-            throw new Refusal(407, 'Unknown token or address. Enroll again (read "Set up" in GET /_speaker/help)')
-          agent.lastSeen = Date.now()
-          return { agent: agent.id }
+          throw new Refusal(407, 'Unknown token or address. Enroll again (read "Set up" in GET /_speaker/help)')
         },
         secrets: secretGrants,
         ca: certificateAuthority,
@@ -975,6 +980,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     agentById,
     enrolled,
     agentByToken,
+    resolveAgent,
     grants,
     requests,
     connections,
@@ -1027,7 +1033,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     peerOf,
     sourceOf,
     baseOf,
-    delivery,
+    enforcementOf,
     view,
     endAgent,
   }

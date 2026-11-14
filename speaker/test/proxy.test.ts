@@ -16,7 +16,7 @@ import { setOwnerPassword } from './owner.ts'
 const upstreamSecret = 'secret-only-the-upstream-should-see'
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const bearer = (token: string) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' })
-type Grant = { id: string; item: string; expiresAt: string | null; state: string }
+type Grant = { id: string; item: string; expiresAt: string | null; enforcement: string }
 type Snapshot = {
   type: string
   grants: { id: string; agentId: string; item: string }[]
@@ -118,7 +118,7 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
         id: row.slice(0, row.indexOf('"')),
         item: /<code>(.*?)<\/code>/.exec(row)?.[1] ?? '',
         expiresAt: /<time datetime="([^"]*)"/.exec(row)?.[1] ?? null,
-        state: /data-state="(granted|waiting)"/.test(row) ? 'granted' : 'active',
+        enforcement: /data-state="([a-z-]+)"/.exec(row)?.[1] ?? 'enforced',
       }))
   const saved = await ownerForm('/services/save', {
     id: 'notes',
@@ -311,11 +311,11 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   await f.decide(pending.id, 'approve', { duration: '1h' })
   const grant = (await until((s) => s.grants.length)).grants[0]
   assert.deepEqual([grant.item, grant.agentId], ['site:example.com', agent.id])
-  assert.equal((await f.grants())[0].state, 'granted')
+  assert.equal((await f.grants())[0].enforcement, 'sent')
 
   ws.send(JSON.stringify({ type: 'applied', grantIds: [grant.id] }))
-  for (let i = 0; i < 100 && (await f.grants())[0].state !== 'active'; i++) await sleep(20)
-  assert.equal((await f.grants())[0].state, 'active')
+  for (let i = 0; i < 100 && (await f.grants())[0].enforcement !== 'enforced'; i++) await sleep(20)
+  assert.equal((await f.grants())[0].enforcement, 'enforced')
 
   inbox = []
   await f.ownerForm('/grants/revoke', { id: grant.id })
@@ -326,6 +326,33 @@ test('sandbox host channel: snapshot, agent request, approval, applied, revoke',
   const gone = await f.call(`/_speaker/hosts/agents/${agent.id}`, { method: 'DELETE', headers: bearer('host-token') })
   assert.equal(gone.status, 200)
   assert.equal((await f.call('/_speaker/catalog', { headers: bearer(agent.token) })).status, 403)
+})
+
+test('GET /hosts/self confirms an approved host, and refuses pending hosts and agent tokens', async (t) => {
+  const f = await setup(t)
+  const created = await f.call('/_speaker/hosts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'test', kinds: ['site'], tokenHash: sha('host-token') }),
+  })
+  const { id } = (await created.json()) as { id: string }
+  const pending = await f.call('/_speaker/hosts/self', { headers: bearer('host-token') })
+  assert.equal(pending.status, 401)
+  assert.equal(((await pending.json()) as { error: string }).error, 'approval_required')
+  assert.equal((await f.ownerForm(`/hosts/${id}/approve`, {})).status, 303)
+  const self = await f.call('/_speaker/hosts/self', { headers: bearer('host-token') })
+  assert.equal(self.status, 200)
+  assert.deepEqual(await self.json(), { id, name: 'test', status: 'approved' })
+  const agent = (await (
+    await f.call('/_speaker/hosts/agents', {
+      method: 'POST',
+      headers: bearer('host-token'),
+      body: JSON.stringify({ label: 'pi' }),
+    })
+  ).json()) as { token: string }
+  const denied = await f.call('/_speaker/hosts/self', { headers: bearer(agent.token) })
+  assert.equal(denied.status, 403)
+  assert.equal(((await denied.json()) as { error: string }).error, 'denied')
 })
 
 test('a sandbox host records the shares it reports, and a grant is applying for the agent until the host reports it', async (t) => {

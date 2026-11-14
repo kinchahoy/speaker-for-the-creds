@@ -693,4 +693,3 @@ export async function createJump(env: Env) {
     },
   }
 }
-export type Jump = Awaited<ReturnType<typeof createJump>>
