@@ -1,4 +1,4 @@
-// Explicit lifecycles for requests, grants and sandbox hosts.
+// Explicit lifecycles for requests and sandbox hosts (grants have none: they exist only while in force).
 // Every status change goes through transition(); a move missing from a table throws.
 
 export type Table<S extends string, E extends string> = Readonly<Record<S, Readonly<Partial<Record<E, S>>>>>
@@ -29,15 +29,6 @@ export const requestTable: Table<RequestState, RequestEvent> = {
   pending: { decide: 'decided', expire: 'expired' },
   decided: {},
   expired: {},
-}
-
-export const grantStates = ['active', 'expired', 'revoked'] as const
-export type GrantState = (typeof grantStates)[number]
-export type GrantEvent = 'expire' | 'revoke'
-export const grantTable: Table<GrantState, GrantEvent> = {
-  active: { expire: 'expired', revoke: 'revoked' },
-  expired: {},
-  revoked: {},
 }
 
 export const hostStates = ['pending', 'approved'] as const

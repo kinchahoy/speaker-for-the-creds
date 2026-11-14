@@ -75,11 +75,11 @@ Each service has a rule for read and one for write:
 
 ## Lifecycles
 
-**Request:** `pending` → `decided`, or `expired` if not decided within 2 hours. A decided request records `granted` or `denied` per item.
+**Request:** `pending` → `decided`, or `expired` if not decided within 2 hours. A request holds one outcome per item (`pending`, `granted` or `denied`); it is `pending` while any item is, then `decided`.
 
-**Grant:** `active` → `expired` at its end time, or `revoked` by the owner. The owner can extend an active grant by one more span of its original length. A later approval of the same item for the same agent replaces the earlier grant. Ending a grant immediately ends any session or mount it allowed.
+**Grant:** a grant exists only while it is in force. It ends (and is logged as `grant_expired`) at its end time, or (logged as `grant_revoked`) when the owner revokes it; either way it is gone from speaker's list. The owner can extend an active grant by one more span of its original length. A later approval of the same item for the same agent replaces the earlier grant. Ending a grant immediately ends any session or mount it allowed.
 
-**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once.
+**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once. The agent stays as a revoked tombstone (with the time) until speaker restarts, so its token keeps answering `denied` instead of `enroll`; an idle agent that is not revoked is removed as above.
 
 **Sandbox host:** registers once, the owner approves it, and it stays until removed.
 
@@ -128,13 +128,13 @@ Speaker runs an SSH jump server in its container (see The jump server and relay)
 
 ### Knowing where it stands
 
-`GET /_speaker/catalog` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force), every secret the owner set up (name, hosts, variable, and `state` `granted` or `ask`; the placeholder and setup hints only once granted), the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. For a sandboxed agent it also lists `extensions` and `mcp` from its sandbox host's catalog, each with its state. `text` is the same list as plain markdown for a weak model, with one line per item; the `request_capability` tool pastes it into its description, so it names no routes. What it leaves out, and why, is in What an agent can see. `GET /_speaker/me`, its old name, answers 404 with `next` pointing here.
+`GET /_speaker/catalog` returns the agent's status, the services it may ask for with read and write state and end times, its live grants (with `applying` until a sandbox host reports one in force; speaker tracks each grant as `enforced`, `granted` (sent to a connected sandbox host, not yet reported) or `waiting` (its host is not connected)), every secret the owner set up (name, hosts, variable, and `state` `granted` or `ask`; the placeholder and setup hints only once granted), the exact commands for its SSH and folder grants, the groups it may ask for, and its requests with per-item outcomes. For a sandboxed agent it also lists `extensions` and `mcp` from its sandbox host's catalog, each with its state. `text` is the same list as plain markdown for a weak model, with one line per item; the `request_capability` tool pastes it into its description, so it names no routes. What it leaves out, and why, is in What an agent can see.
 
 ### Errors
 
-Every error is JSON with `error`, and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; when it sends the agent to the docs it names a section, for example `read "Folders and SSH" in GET /_speaker/help`; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
+Every error is JSON with `error` (a code), `message` (a human sentence), and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; when it sends the agent to the docs it names a section, for example `read "Folders and SSH" in GET /_speaker/help`; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
 
-Error codes: `locked` (speaker waits for the owner to sign in), `enroll` (unknown, expired or wrongly placed token: run setup again; the cause is not disclosed), `approval_required`, `denied` (with `retry_after` only after three denials), `invalid` (malformed input; lists the accepted values), `rate_limited`.
+Error codes: `locked` (speaker has no owner password yet, or waits for the owner to sign in after a restart; it carries `next` and `tell_user`), `no_key` (a service has no key yet), `upstream_unavailable` (the service did not answer), `enroll` (unknown, expired or wrongly placed token: run setup again; the cause is not disclosed), `approval_required`, `denied` (with `retry_after` only after three denials), `invalid` (malformed input; lists the accepted values), `rate_limited`.
 
 ### Denials
 
@@ -192,7 +192,7 @@ For every SSH session: grant, agent, key fingerprint, source address, target, th
 
 All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in speaker and are encrypted with one random data key (AES-256-GCM). Secret values never leave speaker except inside requests to their allowed hosts (see Secrets). The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
 
-- Speaker starts **locked**. It sends a push "speaker restarted: sign in to unlock"; signing in to `/admin` unwraps the data key, and secrets exist in clear only in memory. While locked, agents get `locked` with a `tell_user` line.
+- Speaker starts **locked**. It sends a push "speaker restarted: sign in to unlock"; signing in to `/admin` unwraps the data key, and secrets exist in clear only in memory. One rule covers the first run too: until the owner has set a password and signed in, agent, sandbox-host, secrets-proxy and proxy-certificate calls are refused (`locked` over HTTP, a refusal line from the proxy).
 - Changing the password re-wraps the data key. A forgotten password means re-entering the service keys and re-adding speaker's key on targets; nothing else is lost.
 - A copied disk or backup reveals no secret. A takeover of the running process can, which is why grants stay short and target accounts limited.
 

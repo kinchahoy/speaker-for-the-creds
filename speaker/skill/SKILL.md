@@ -13,7 +13,7 @@ In a bottle sandbox, use the `request_capability` tool instead of this page.
 - Call a service: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" $SPEAKER_URL/<service>/<path>`
 - No header file, or error `enroll`: read "Set up" below. It takes four commands, once.
 - No access yet: repeat the call with `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`. Speaker asks the owner and answers when they decide. Without `Speaker-Wait` it answers at once, so you would never see the decision.
-- Every error has `next`. Do exactly that, and tell the user what `tell_user` says. On `denied`, stop: asking again only annoys the owner.
+- Every error is JSON with `error` and `message`, and has `next` where there is a next step. Do exactly that, and tell the user what `tell_user` says. On `denied`, stop: asking again only annoys the owner.
 - What you may ask for, and where you stand: `GET $SPEAKER_URL/_speaker/catalog`.
 - One service's usage and your state for it: `GET $SPEAKER_URL/_speaker/help/<service>`.
 
@@ -97,5 +97,7 @@ A service in the catalog with `mcp: true` is a remote MCP server. Ask for `<serv
 - `denied`: stop. Tell the user.
 - `invalid`: fix the input. The message says what is accepted and `next` says where to look.
 - `rate_limited`: wait and retry.
+- `locked`: the owner has not signed in to speaker yet. Tell the user, then repeat the call later.
+- `no_key`: the service has no key yet. Tell the user.
 
 Always do `next`, and tell the user what `tell_user` says.
