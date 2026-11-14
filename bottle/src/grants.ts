@@ -1,4 +1,3 @@
-import { isIPv4 } from "node:net";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { durationNames, type ErrorCode } from "../../speaker/items.ts";
@@ -39,6 +38,7 @@ export type Template = z.infer<typeof Template>;
 /** The error code for each status bottle answers with, the same codes speaker uses (see `errorBody`). */
 export const codes = {
   400: "invalid",
+  401: "denied",
   403: "denied",
   404: "not_found",
   409: "conflict",
@@ -87,9 +87,6 @@ export const unexpired = <T extends Timed>(entries: T[]) => entries.filter((entr
 
 /** What follows an item's kind prefix: `example.com` for `site:example.com`, `docs:rw` for `folder:docs:rw`; a service item is its own ref. */
 export const refOf = (item: string) => item.slice(item.indexOf(":") + 1);
-
-/** Guest egress currently supports IPv4 destinations only. */
-export const ipv4Destination = (ip: string) => isIPv4(ip);
 
 /** Speaker owns approvals and the item grammar (speaker/items.ts); bottle adds the stricter shape of a site ref. */
 const host = z.hostname().refine((value) => value === value.toLowerCase());

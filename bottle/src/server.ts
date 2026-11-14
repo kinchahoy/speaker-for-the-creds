@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { serve } from "@hono/node-server";
 import { Hono, type ErrorHandler } from "hono";
 import { bearerAuth } from "hono/bearer-auth";
+import { HTTPException } from "hono/http-exception";
 import { validator } from "hono/validator";
 import { z } from "zod";
 import { reconcile } from "./sandbox.ts";
@@ -28,9 +29,11 @@ const NewTask = z
   })
   .strict();
 
-/** Every error answers speaker's shape, `{ error, message, next? }`: a StatusError carries its status, bad input is 400, anything else 500. */
-const failure: ErrorHandler = (error, context) => {
-  const status = error instanceof StatusError ? error.status : error instanceof z.ZodError ? 400 : 500;
+/** Every error answers speaker's shape, `{ error, message, next? }`: a StatusError or Hono's own HTTPException (a bad token, malformed JSON) carries its status, bad input is 400, anything else 500. */
+export const failure: ErrorHandler = (error, context) => {
+  const status = (
+    error instanceof StatusError || error instanceof HTTPException ? error.status : error instanceof z.ZodError ? 400 : 500
+  ) as keyof typeof codes;
   const message = error instanceof z.ZodError ? z.prettifyError(error) : error.message;
   const next = error instanceof StatusError ? error.next : undefined;
   return context.json(errorBody(codes[status], message, next === undefined ? {} : { next }), status);
@@ -48,25 +51,21 @@ export const startControl = (config: Config, tasks: Tasks) => {
   });
 
   const listTasks = () =>
-    Promise.all(
-      tasks.list().map(async (task) => ({
-        id: task.id,
-        name: task.name,
-        state: task.state,
-        attended: task.attended,
-        model: task.model,
-        startedAt: task.startedAt,
-        sessionId: task.guest.sessionId,
-        agentId: task.agentId,
-        pendingRequests: tasks.pendingRequests(task),
-        mcpPending: tasks.mcpPending(task),
-        extPending: tasks.extPending(task),
-        done: tasks.done(task),
-        summary: task.lastMessage,
-      })),
-    );
+    tasks.list().map((task) => ({
+      id: task.id,
+      name: task.name,
+      state: task.state,
+      attended: task.attended,
+      model: task.model,
+      startedAt: task.startedAt,
+      sessionId: task.guest.sessionId,
+      agentId: task.agentId,
+      pendingRequests: tasks.pendingRequests(task),
+      done: tasks.done(task),
+      summary: task.lastMessage,
+    }));
 
-  app.get("/api/state", async (context) => context.json({ tasks: await listTasks() }));
+  app.get("/api/state", (context) => context.json({ tasks: listTasks() }));
   app.post(
     "/api/tasks",
     validator("json", (body) => NewTask.parse(body)),
@@ -110,17 +109,15 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
       const task = context.get("task");
       const { busy, summary } = context.req.valid("json");
       tasks.report(task, busy);
-      if (summary) {
-        task.lastMessage = summary;
-        task.lastMessageAt = new Date().toISOString();
-      }
+      if (summary) task.lastMessage = summary;
       return context.json({ state: task.state });
     },
   );
 
   app.onError(failure);
-  serve({ fetch: app.fetch, hostname: "127.0.0.1", port: config.guestPort });
+  const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: config.guestPort });
   console.log(`guest    127.0.0.1:${config.guestPort}`);
+  return server;
 };
 
 /** Starts the trusted service: catalog, launch templates, task manager, and both listeners. */

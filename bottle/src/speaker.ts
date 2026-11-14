@@ -72,17 +72,14 @@ export const registerHost = async (config: Config, configPath: string, name: str
   return id;
 };
 
-/**
- * Whether the owner has approved this host. An approved host token has no agent view, so speaker answers 400; a pending
- * or unknown one gets 401, and a locked speaker 503, both of which mean not yet.
- */
+/** Whether the owner has approved this host: speaker answers `GET /_speaker/hosts/self` 200 for an approved host token, 401 for a pending or unknown one. */
 export const hostApproved = async (config: Config) => {
-  const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
+  const response = await fetch(`${config.speaker.url}/_speaker/hosts/self`, {
     headers: { authorization: `Bearer ${readHostToken(config)}` },
     signal: AbortSignal.timeout(10_000),
   });
   await response.body?.cancel();
-  return response.status === 400;
+  return response.ok;
 };
 
 export const speakerClient = (config: Config, hostToken: string) => {
@@ -129,7 +126,7 @@ export const speakerCa = async (config: Config) => {
  * value. bottle authenticates as the task's agent (its token is bound to this host's address) and trusts speaker's
  * proxy certificate authority (`ca`, from speakerCa) for the tunnel only; the secret itself never reaches bottle.
  */
-export const speakerProxy = async (config: Config, agentToken: string, ca: string) => {
+export const speakerProxy = (config: Config, agentToken: string, ca: string) => {
   const { proxyPort } = config.speaker;
   if (!proxyPort)
     throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle register` again to learn it");
@@ -161,8 +158,7 @@ export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, re
  */
 const probeSpeaker = async (config: Config, hostToken: string) => {
   try {
-    // A sandbox host has no agent view: speaker answers an approved host token with 400 and an unknown one with 401.
-    const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
+    const response = await fetch(`${config.speaker.url}/_speaker/hosts/self`, {
       headers: { authorization: `Bearer ${hostToken}` },
       signal: AbortSignal.timeout(5_000),
     });
@@ -175,7 +171,7 @@ const probeSpeaker = async (config: Config, hostToken: string) => {
           `approved yet, was removed, or speaker's data was reset. Approve the sandbox host in speaker /admin, or run ` +
           `"mise run bottle register" again.`,
       };
-    return { fatal: false, message: `speaker answered HTTP ${response.status}` };
+    return { fatal: false, message: response.ok ? "speaker answered but the connection failed" : `speaker answered HTTP ${response.status}` };
   } catch (error) {
     const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
     return { fatal: false, message: `cannot reach speaker at ${config.speaker.url} (${cause})` };
@@ -184,10 +180,16 @@ const probeSpeaker = async (config: Config, hostToken: string) => {
 
 /**
  * The link to speaker. `connecting` until speaker first answers, `open` while connected, `down` after losing it,
- * `stopped` for good (stop() or a fatal error). `heardAt` is when speaker last spoke; `null` marks the link stale: it
- * was silent for `dropMs`, so every grant was dropped until the next snapshot. `since` is when the outage began.
+ * `stopped` for good (stop() or a fatal error). `heardAt` is when speaker last spoke. `stale` is a link silent for
+ * `dropMs`: every grant was dropped until the next snapshot, whatever the connection is doing (`was`). `since` is when the
+ * outage began.
  */
-type Link = { state: "connecting" | "down"; since: number; heardAt: number | null } | { state: "open"; heardAt: number | null } | { state: "stopped" };
+type Link =
+  | { state: "connecting" | "down"; since: number; heardAt: number }
+  | { state: "open"; heardAt: number }
+  | { state: "stale"; since: number; was: "connecting" | "down" | "open" }
+  | { state: "stopped" };
+type Outage = Exclude<Link, { state: "open" | "stopped" }>;
 
 /**
  * Holds the sandbox host WebSocket. Each snapshot replaces the grant set and request statuses. When speaker has not been
@@ -217,12 +219,13 @@ export const watchGrants = (
     link = { state: "stopped" };
     onFatal(message);
   };
-  const retry = async () => {
+  const retry = async (outage: Outage) => {
     const probe = await probeSpeaker(config, hostToken);
     if (link.state === "stopped") return;
     if (probe.fatal) return fail(probe.message);
-    const down = Date.now() - (link.state === "open" ? Date.now() : link.since);
-    if (down >= (link.state === "down" ? limits.outageMs : limits.firstConnectMs))
+    const down = Date.now() - outage.since;
+    const reached = outage.state === "stale" ? outage.was !== "connecting" : outage.state === "down";
+    if (down >= (reached ? limits.outageMs : limits.firstConnectMs))
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
           `Check that speaker is running and that speaker.url is right in the bottle config.json.`,
@@ -241,7 +244,7 @@ export const watchGrants = (
       if (link.state === "stopped") return;
       if (link.state === "connecting") console.log(`speaker connected at ${config.speaker.url}`);
       // A stale link stays stale until the first snapshot arrives.
-      link = { state: "open", heardAt: link.heardAt === null ? null : Date.now() };
+      link = link.state === "stale" ? { ...link, was: "open" } : { state: "open", heardAt: Date.now() };
       backoff = limits.retryMs;
       send({ type: "shares", shares: shareReport(config) });
       send({ type: "catalog", ...catalogReport(catalog) });
@@ -249,20 +252,21 @@ export const watchGrants = (
     };
     socket.onmessage = (event) => {
       if (link.state === "stopped") return;
-      link.heardAt = Date.now();
+      link = { state: "open", heardAt: Date.now() };
       const { grants, requests, secrets } = Snapshot.parse(JSON.parse(String(event.data)));
       onSnapshot({ grants, requests, secrets });
     };
     socket.onclose = () => {
       if (link.state === "stopped") return;
       if (link.state === "open") link = { state: "down", since: Date.now(), heardAt: link.heardAt };
-      void retry();
+      else if (link.state === "stale" && link.was === "open") link = { state: "stale", since: Date.now(), was: "down" };
+      void retry(link);
     };
   };
   const dropTimer = setInterval(
     () => {
-      if (link.state === "stopped" || link.heardAt === null || Date.now() - link.heardAt < limits.dropMs) return;
-      link.heardAt = null;
+      if (link.state === "stopped" || link.state === "stale" || Date.now() - link.heardAt < limits.dropMs) return;
+      link = { state: "stale", since: link.state === "open" ? Date.now() : link.since, was: link.state };
       console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
       onSnapshot({ grants: [], requests: [] });
     },

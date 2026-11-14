@@ -6,7 +6,7 @@ import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { attendedFor, ipv4Destination, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
+import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce } from "../src/tasks.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
 import { grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
@@ -116,11 +116,6 @@ test("enforcer reads items by the shared grammar and rejects malformed secret ho
   assert.deepEqual(["site:example.com", "folder:docs:rw", "notes.read"].map(refOf), ["example.com", "docs:rw", "notes.read"]);
 });
 
-test("guest destinations reject all IPv6 forms", () => {
-  assert.ok(ipv4Destination("192.168.1.5"));
-  for (const ip of ["::1", "fc00::1", "fe80::1", "::ffff:192.168.1.5", "2606:4700:4700::1111"]) assert.equal(ipv4Destination(ip), false, ip);
-});
-
 test("model HTTP exchanges become timed llm runs with bounded-body references", () => {
   const [run] = createModelRuns(
     [
@@ -161,7 +156,7 @@ test("model HTTP exchanges become timed llm runs with bounded-body references", 
   assert.equal(run.end_time, "2026-10-20T10:00:01.000Z");
   assert.equal(run.inputs.request_body.path, "blobs/request.bin");
   assert.equal(run.outputs.response_body.truncated, true);
-  assert.equal(run.extra.metadata.broker.capture_status, "truncated");
+  assert.equal(run.extra.metadata.bottle.capture_status, "truncated");
 });
 
 test("transport failures become failed llm runs without invented responses", () => {
@@ -230,7 +225,7 @@ test("Pi tool runs pair executions by native call id and retain unmatched record
   assert.equal(runs[0].parent_run_id, "harness-1");
   assert.equal(runs[0].inputs.path, "notes.txt");
   assert.deepEqual(runs[0].outputs, result.message.content);
-  assert.deepEqual(runs[0].extra.metadata.broker.native_records, [call, result]);
+  assert.deepEqual(runs[0].extra.metadata.bottle.native_records, [call, result]);
   assert.deepEqual(unassignedRecords, [session, unmatched]);
 });
 

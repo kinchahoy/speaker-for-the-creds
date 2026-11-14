@@ -140,7 +140,7 @@ test("an approved grant reaches the task's live view and is reported to speaker 
     ["site:example.com"],
   );
   assert.match(readFileSync(`${task.outputDir}/_control/grants.jsonl`, "utf8"), /"item":"site:example.com"/);
-  assert.ok(task.events.some((event) => event.text === "grants now: site:example.com"));
+  assert.ok(task.live.events.some((event) => event.text === "grants now: site:example.com"));
   // Speaker hears it applied: the grant is no longer marked as waiting or granted-not-applied.
   await until(async () => {
     const active = await f.panel("active");

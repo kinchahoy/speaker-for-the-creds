@@ -68,7 +68,6 @@ export type Task = {
   guestConfigDir: string;
   prompt?: string;
   lastMessage?: string;
-  lastMessageAt?: string;
   /** The deadline and the DONE watch; the close path clears them. */
   timers: Set<NodeJS.Timeout>;
   /** Work in flight, shared by concurrent callers: the archive and the next Pi restart. */
@@ -79,7 +78,6 @@ export type Task = {
   mcpRunning: string[];
   /** The catalog extensions Pi started with. */
   extRunning: string[];
-  events: Live["events"];
   /** Placeholders speaker issued for this task's hosted-model key (provider secret name to placeholder). */
   keys: Map<string, string>;
   live: Live;
@@ -220,7 +218,7 @@ export class Tasks {
         { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, capture: `${outputDir}/_control/blobs` },
         { BOTTLE_TOKEN: guestToken, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
         { url: this.config.speaker.url, agentToken: agent.agentToken, ...(ca ? { ca } : {}) },
-        () => speakerProxy(this.config, agent.agentToken, ca ?? ""),
+        ca === undefined ? undefined : speakerProxy(this.config, agent.agentToken, ca),
       );
     } catch (error) {
       rmSync(`${this.config.stateRoot}/tasks/${id}`, { recursive: true, force: true });
@@ -251,7 +249,6 @@ export class Tasks {
       grants: [],
       mcpRunning: [],
       extRunning: [],
-      events,
       live,
       guest,
       keys,
@@ -366,8 +363,6 @@ export class Tasks {
     const known = kind === "mcp" ? this.catalog.mcps : this.catalog.extensions;
     return [...new Set(this.#granted(task, kind).map((grant) => refOf(grant.item)))].filter((id) => known[id]);
   };
-  mcpPending = (task: Task) => this.#wanted(task, "mcp").filter((id) => !task.mcpRunning.includes(id));
-  extPending = (task: Task) => this.#wanted(task, "ext").filter((id) => !task.extRunning.includes(id));
 
   /** Moves the live task view to its grants. Hosts and shares are replaced as a whole, so no grant outlives its snapshot. */
   #apply(task: Task) {

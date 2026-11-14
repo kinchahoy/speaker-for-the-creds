@@ -72,6 +72,8 @@ mise run bottle register   # prints the approve link; approve the sandbox host i
 mise run bottle serve
 ```
 
+bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whether the host is approved: 200 means approved, 401 means pending or unknown. `init` waits on it, and a lost connection to speaker uses it to tell a rejected token (fatal) from an outage (retried).
+
 From another terminal, launch and inspect a task:
 {.ai}
 
@@ -119,7 +121,7 @@ Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USE
 
 Finished tasks are listed below with `archived` or `failed-archive` (the work folder is kept). `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
 
-The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input, 403 `denied`, 404 `not_found` for an unknown task, 409 `conflict` when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
+The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input or malformed JSON, 401 or 403 `denied` (a wrong guest token, a request not from the CLI), 404 `not_found` for an unknown task, 409 `conflict` when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
 {.ai}
 
 Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when it is complete.
@@ -309,7 +311,7 @@ bottle mounts `/input` for granted shares, `/work` for disposable scratch and th
 At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `trace.jsonl`.
 {.ai}
 
-The trace retains project and harness records, matched tool calls and results, and captured model exchanges. It keeps unmatched native records and records failures and truncation. Capture limits are 8 MiB per model request, 32 MiB per model response, and 1 MiB per ordinary HTTP body. bottle stages bodies in `_control/blobs`, embeds them as text or base64 at close, then removes the staging blobs. It assembles streamed model replies into finished messages. Whether LangSmith and Phoenix can ingest the trace is unverified.
+The trace retains project and harness records, matched tool calls and results, and captured model exchanges. It keeps unmatched native records and records failures and truncation. Capture limits are 8 MiB per model request, 32 MiB per model response, and 1 MiB per ordinary HTTP body. bottle stages bodies in `_control/blobs`, embeds them as text or base64 at close, then removes the staging blobs. It assembles streamed model replies into finished messages. Whether LangSmith and Phoenix can ingest the trace is unverified. Each record's metadata sits under a `bottle` key (the project record's `source` is `bottle`).
 {.ai}
 
 You delete archives manually. If archiving fails, bottle keeps the work tree for recovery and reports the failure. You cannot retroactively revoke a completed write or a note the agent already read. Treat captured prompts, replies, and artifacts as private data.

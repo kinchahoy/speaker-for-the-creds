@@ -22,7 +22,7 @@ const live = (extra: Partial<Live> = {}): Live => ({
   modelCapNoted: false,
   ...extra,
 });
-const speakerProxy = (): Promise<Dispatcher> => Promise.resolve({ close: async () => {} } as Dispatcher);
+const speakerProxy = { close: async () => {} } as Dispatcher;
 const root = mkdtempSync(join(tmpdir(), "pi-ms-"));
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -49,16 +49,17 @@ describe("egress proxy decision", () => {
     assert.equal(await egressDecision(view, route, "old.example.org"), "refuse");
     assert.equal(await egressDecision(view, route, "10.0.0.5"), "refuse");
     assert.match(view.events.at(-1)!.text, /blocked a request to 10\.0\.0\.5/);
+    for (const ip of ["::1", "fc00::1", "::ffff:192.168.1.5", "2606:4700:4700::1111"]) assert.equal(await egressDecision(view, route, ip), "refuse", ip);
   });
 
   test("a grant change applies to the next request, and a secret host is never sent direct when speaker's proxy is down", async () => {
     const view = state();
-    const route = secretRoute(view, () => Promise.reject(new Error("no PROXY_PORT")));
+    const route = secretRoute(view, undefined);
     assert.equal(await egressDecision(view, route, "new.test"), "refuse");
     view.hosts.push({ host: "new.test", expiresAt: null });
     assert.equal(await egressDecision(view, route, "new.test"), "direct");
     assert.equal(await egressDecision(view, route, "httpbin.org"), "refuse");
-    assert.match(view.events.at(-1)!.text, /blocked a request to httpbin\.org: no PROXY_PORT/);
+    assert.match(view.events.at(-1)!.text, /blocked a request to httpbin\.org: speaker's proxy is not configured/);
   });
 
   test("the proxy answers a refused host with 403", async () => {
