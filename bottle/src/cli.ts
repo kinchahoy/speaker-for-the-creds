@@ -88,8 +88,9 @@ nobody is watching, so it records assumptions instead of asking. Without --promp
     help: `usage: ${SELF} ls
 
 Lists live tasks with state, mode (attended or unattended), pending approvals, age, model, name, and Pi's
-latest message. Below them it lists the last five finished tasks with their state (archived or failed-archive)
-and archive folder.`,
+latest message. A state is starting, awaiting-key (a hosted model's key is not granted yet), idle, busy,
+reconfiguring, pi-down (a restart failed), start-failed, closing, or done once Pi wrote /output/DONE. Below the
+tasks are the last five finished ones with their state (archived or failed-archive) and archive folder.`,
   },
   attach: {
     positional: 1,
@@ -211,8 +212,8 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
       throw new Error(`cannot reach ${url} (${cause}). Is bottle running? Config: ${configPath}`);
     }
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    if (!response.ok) throw new Error(plain(payload.error ?? `HTTP ${response.status} from ${url}`));
+    const payload = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    if (!response.ok) throw new Error(plain(payload.error?.message ?? `HTTP ${response.status} from ${url}`));
     return payload as T;
   };
 
@@ -304,7 +305,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     if (finished.length > 0) console.log(`\nLast finished tasks (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
     const task = await resolveTask(positionals[0]!);
-    if (["closing", "archived", "failed", "failed-archive"].includes(task.state))
+    if (!["starting", "idle", "busy", "reconfiguring"].includes(task.state))
       throw new Error(`task ${task.id} is ${task.state}, so it has no terminal to attach to`);
     console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches, and Pi keeps running.`);
     const terminal = attach(task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);

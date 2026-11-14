@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see The VM). Speaker approves capabilities. bottle applies their leases.
+bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see The VM). Speaker approves capabilities. bottle applies their grants.
 {.ai}
 
 <!-- author: ai -->
@@ -54,7 +54,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
-- `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker leases.
+- `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
 - `shareRoots`: bottle reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `~/.bottle/config.json`.
 
@@ -104,7 +104,22 @@ WantedBy=default.target
 
 Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USER`. Read its output with `journalctl --user -u bottle -f`. A stop sends TERM, which `serve` passes on so the service shuts down cleanly.
 
-`ls` shows each task's state, mode (attended or unattended), pending speaker approvals (with the request ID), age, model, name, and Pi's latest message. `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
+`ls` shows each task's state, mode (attended or unattended), pending speaker approvals (with the request ID), age, model, name, and Pi's latest message. A task's state is one of:
+
+| State | Meaning |
+| --- | --- |
+| `starting` | The VM is up and Pi is starting |
+| `awaiting-key` | A `--prompt` task on a hosted model: Pi has not started and waits for you to approve the model key |
+| `idle`, `busy` | Pi is waiting or working, as the guest reports |
+| `reconfiguring` | Pi is restarting with new MCP servers or extensions |
+| `pi-down` | A restart failed after Pi had run; the task keeps its transcript and `stop` still exports it |
+| `start-failed` | Pi never started; `stop` archives without a transcript |
+| `closing` | The task is being archived |
+| `done` (shown for any live task) | Pi wrote `/output/DONE` |
+
+Finished tasks are listed below with `archived` or `failed-archive` (the work folder is kept). `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
+
+The control API (`/api/state`, `/api/tasks`, `/api/tasks/<id>/close`) and the VM's doors answer every error as `{"error": {"message": "..."}}`: 400 for bad input, 404 for an unknown task, 409 when the task's state forbids it (stopping a task already closing, or launching past `maxTasks`), 502 when speaker fails. There is no status page: `bottle ls` (or `GET /api/state`) shows the tasks.
 {.ai}
 
 Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. Inside herdr, the CLI opens a pane and reports working, idle, or blocked. A one-shot task writes `/output/DONE` only when it is complete.
@@ -172,12 +187,12 @@ The guest has no network device. Its only doors are host unix sockets on guest v
 When `speaker.sshPort` is set, a fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
 {.ai}
 
-Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, trace records, archive writing), `src/tasks.ts` (task lifecycle as a transition table: starting, idle, busy, reconfiguring, closing, archived, failed, failed-archive), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped).
+Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, trace records, archive writing), `src/tasks.ts` (task lifecycle as a transition table; see `ls` states above), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).
 {.ai}
 
-- Egress: one `proxy-chain` server per task decides every request from the live lease view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: it fetches the certificate from `/_speaker/proxy/ca.pem` at boot, installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
+- Egress: one `proxy-chain` server per task decides every request from the live grant view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the task launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
 - Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
-- Speaker: the speaker door allows only speaker's subject-facing routes and adds the task's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
+- Speaker: the speaker door allows only speaker's agent-facing routes and adds the task's agent token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
 - Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
 - Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
   - Each task gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle adds it to the task's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
@@ -189,7 +204,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
 
 <!-- author: ai -->
 
-## Templates, catalogs, and leases
+## Templates, catalogs, and grants
 
 <sub>AI-written</sub>
 
@@ -199,7 +214,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, tra
 A template is the runtime profile bottle owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items you approve together. To change what tasks start with, edit a template's `want` or the group in speaker. To change how big or how long a task is, edit the template's limits.
 {.ai}
 
-A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp` or `extension` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
+A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline. The optional `maxModelRequests` caps the model request count.
@@ -210,7 +225,7 @@ A task with a local model starts Pi at once and does not wait for its first requ
   - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), and an optional system-prompt note. An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
-- Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported refs. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
+- Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
 - On every connection, bottle reports the names in `shareRoots` to speaker, each as not mountable, because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
 
 <!-- author: ai -->
@@ -227,7 +242,7 @@ The grant snapshot for a secret carries the secret's hosts, not its value. bottl
 
 ### Hosted model providers
 
-A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and leases).
+A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
 {.ai}
 
 <!-- author: ai -->
@@ -236,7 +251,7 @@ A hosted provider's key is a speaker secret like any other. In `config.json`, se
 
 <sub>AI-written</sub>
 
-The `research` group (the `research` template asks for it) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle writes the extension's `~/.pi/agent/web-search.json` (`pi-launch` copies it like `settings.json`). Search uses only keyless Exa through its hosted MCP endpoint, and pages are fetched directly over HTTP. Hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv.
+The `research` group (the `research` template asks for it) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. bottle writes the extension's `~/.pi/agent/web-search.json` (`pi-launch` copies it like `settings.json`). Search uses only keyless Exa through its hosted MCP endpoint, and pages are fetched directly over HTTP. Hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site:` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv.
 {.ai}
 
 The group leaves out Parallel Search. It duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site grant. Parallel Search is a speaker service (`parallel-search.read`) that the agent can request explicitly.
@@ -252,6 +267,18 @@ The `loop` template is unattended. It runs at most 24 hours and 300 model reques
 
 <!-- author: ai -->
 
+## Names and tokens
+
+bottle uses speaker's words: a **grant** is an approved item for an **agent** (`agentId`), and extensions are `ext:<id>` items. Each task has three tokens, named the same in the code:
+
+| Name in code | Guest sees | What it is |
+| --- | --- | --- |
+| `hostToken` | nothing | This sandbox host's login to speaker (`state/speaker.token`) |
+| `agentToken` | `SPEAKER_TOKEN`, a placeholder | The task's agent token at speaker; the speaker door adds it to the guest's requests |
+| `guestToken` | `BOTTLE_TOKEN` | bottle's per-task token for the guest's status reports to the control channel |
+
+VMs are named `bottle-<id>`; at startup the service removes any left behind by a crash.
+
 ## Who receives credentials
 
 <sub>AI-written</sub>
@@ -260,7 +287,7 @@ The `loop` template is unattended. It runs at most 24 hours and 300 model reques
 | --- | --- | --- |
 | A speaker secret (`secret:<NAME>`, including a hosted model provider's key) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle never has it |
 | Remote MCP server | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
-| Speaker agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle, which created the agent; the speaker door adds it only to requests to speaker. It is bound to this host's address |
+| Agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle, which created the agent; the speaker door adds it only to requests to speaker. It is bound to this host's address |
 | Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
 | stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
 
@@ -276,10 +303,10 @@ Placeholder substitution keeps the real value off the guest and off bottle. It d
 
 <sub>AI-written</sub>
 
-bottle mounts `/input` for leased shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
+bottle mounts `/input` for granted shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
 {.ai}
 
-At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker subject, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, lease and policy events, a hashed artifact manifest, the Pi session and transcript, and `trace.jsonl`.
+At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `trace.jsonl`.
 {.ai}
 
 The trace retains project and harness records, matched tool calls and results, and captured model exchanges. It keeps unmatched native records and records failures and truncation. Capture limits are 8 MiB per model request, 32 MiB per model response, and 1 MiB per ordinary HTTP body. bottle stages bodies in `_control/blobs`, embeds them as text or base64 at close, then removes the staging blobs. It assembles streamed model replies into finished messages. Whether LangSmith and Phoenix can ingest the trace is unverified.
@@ -323,8 +350,8 @@ Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concur
 You trust the host, bottle, the sandbox runtime, the pinned image, and every peer that can reach the private control listener. You do not trust the guest, model decisions, downloaded code, files, or remote tool output. The control API has no application login, so restrict access to the control listener through host networking.
 {.ai}
 
-- The host enforces lease expiry, revocation, network access, and shared-folder permissions independently of Pi. Validate those boundaries in a real guest before deployment.
+- The host enforces grant expiry, revocation, network access, and shared-folder permissions independently of Pi. Validate those boundaries in a real guest before deployment.
 - Every approved destination can receive anything the guest can read. Placeholder substitution in speaker's proxy protects secret values. It does not prevent misuse of granted authority.
-- The speaker exception permits the configured origin and subject-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
+- The speaker exception permits the configured origin and agent-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
 - Provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or the duration of a single generation.
 - Review artifacts before you run them or promote them onto the host. Archives may contain private task content.

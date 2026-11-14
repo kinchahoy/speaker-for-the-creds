@@ -2,7 +2,7 @@
   "name": "bottle",
   "version": "3.0.0",
   "private": true,
-  "description": "microsandbox micro-VMs for local agents, enforcing speaker-for-the-creds leases.",
+  "description": "microsandbox micro-VMs for local agents, enforcing speaker-for-the-creds grants.",
   "bin": {
     "bottle": "src/cli.ts"
   },

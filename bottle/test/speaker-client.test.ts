@@ -21,9 +21,9 @@ import * as x509 from "../../speaker/node_modules/@peculiar/x509/build/index.js"
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { secretRoute } from "../src/sandbox.ts";
-import { launchRequest, Template } from "../src/leases.ts";
+import { launchRequest, Template } from "../src/grants.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
-import { hostApproved, registerHost, SPEAKER_LIMITS, type Snapshot, speakerClient, speakerProxy, watchLeases as watch } from "../src/speaker.ts";
+import { hostApproved, registerHost, SPEAKER_LIMITS, type Snapshot, speakerClient, speakerCa, speakerProxy, watchGrants as watch } from "../src/speaker.ts";
 
 // speaker's own WebSocket library, typed from speaker's @types/ws.
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -38,8 +38,8 @@ const freePort = async () => {
   await once(probe, "close");
   return free;
 };
-// watchLeases reconnects until stopped, which would keep this process alive: stop each watcher when its test ends.
-const watchLeases = (t: TestContext, ...args: Parameters<typeof watch>) => {
+// watchGrants reconnects until stopped, which would keep this process alive: stop each watcher when its test ends.
+const watchGrants = (t: TestContext, ...args: Parameters<typeof watch>) => {
   const report = watch(...args);
   t.after(report.stop);
   return report;
@@ -149,7 +149,7 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
   return { url, config, owner, ownerPost, ownerForm, approve, live, host, listen, servers, dropConnections };
 }
 
-test("watchLeases receives granted items as leases and reports applied ids to speaker", async (t) => {
+test("watchGrants receives granted items and reports applied ids to speaker", async (t) => {
   const f = await fixture(t);
   const { url, config, owner, ownerPost } = f;
 
@@ -166,7 +166,7 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
 
   // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
   const fatal: string[] = [];
-  watchLeases(
+  watchGrants(
     t,
     config,
     "unknown-token",
@@ -177,7 +177,7 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
   assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle register/);
 
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchLeases(
+  const reportApplied = watchGrants(
     t,
     config,
     token,
@@ -198,12 +198,12 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
     body: new URLSearchParams({ duration: "1h", items: "site:example.com", shown: "site:example.com" }),
     redirect: "manual",
   });
-  await until(() => snapshots.some((s) => s.leases.length === 1));
-  const lease = snapshots.findLast((s) => s.leases.length)?.leases[0];
-  assert.ok(lease);
-  assert.deepEqual([lease.kind, lease.ref, lease.subjectId], ["site", "example.com", subject.id]);
+  await until(() => snapshots.some((s) => s.grants.length === 1));
+  const grant = snapshots.findLast((s) => s.grants.length)?.grants[0];
+  assert.ok(grant);
+  assert.deepEqual([grant.item, grant.agentId], ["site:example.com", subject.id]);
 
-  reportApplied([lease.id]);
+  reportApplied([grant.id]);
   const active = async () => {
     const grants = await (await fetch(`${url}/admin/panel/active`, { headers: owner })).text();
     return grants.includes('<li id="grant-') && !grants.includes("data-state=");
@@ -258,7 +258,7 @@ test("bottle reports its shares to speaker as not mountable, since its folders a
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
   t.after(() => rm(documents, { recursive: true, force: true }));
   const config = { ...f.config, shareRoots: { documents } } as Config;
-  watchLeases(
+  watchGrants(
     t,
     config,
     token,
@@ -274,7 +274,7 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   const { token, speaker } = await f.host(["site"]);
   const received: Snapshot[] = [];
   const dropMs = 600;
-  watchLeases(
+  watchGrants(
     t,
     f.config,
     token,
@@ -285,7 +285,7 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: agent.id, want: ["site:example.com"], reason: "docs", duration: "30m" });
   await f.approve(request.id, ["site:example.com"]);
-  await until(() => received.some((s) => s.leases.length === 1));
+  await until(() => received.some((s) => s.grants.length === 1));
 
   // Speaker goes away. A short loss changes nothing; the grants are dropped once dropMs has passed.
   const lost = Date.now();
@@ -296,15 +296,15 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   first.close();
   await sleep(dropMs / 3);
   assert.ok(
-    received.slice(before).every((s) => s.leases.length),
+    received.slice(before).every((s) => s.grants.length),
     "grants must survive a short loss",
   );
-  await until(() => received.slice(before).some((s) => s.leases.length === 0));
+  await until(() => received.slice(before).some((s) => s.grants.length === 0));
   assert.ok(Date.now() - lost >= dropMs, `dropped after ${Date.now() - lost} ms, before the limit`);
 
   // Speaker returns: the next snapshot brings the grants back.
   f.servers.push(f.listen(Number(new URL(f.url).port)));
-  await until(() => received.at(-1)?.leases.length === 1);
+  await until(() => received.at(-1)?.grants.length === 1);
 });
 
 test("a grant counts as decided for the agent only once the sandbox host reports it in force", async (t) => {
@@ -316,7 +316,7 @@ test("a grant counts as decided for the agent only once the sandbox host reports
     mcps: { filesystem: { label: "Files", transport: "stdio" as const, command: "/usr/bin/true", args: [], tools: ["read_file"], write: false } },
     extensions: {},
   };
-  const reportApplied = watchLeases(
+  const reportApplied = watchGrants(
     t,
     f.config,
     token,
@@ -329,11 +329,11 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
       method: "POST",
-      headers: { authorization: `Bearer ${agent.token}`, "content-type": "application/json", "speaker-wait": "10" },
+      headers: { authorization: `Bearer ${agent.agentToken}`, "content-type": "application/json", "speaker-wait": "10" },
       body: JSON.stringify({ want, reason: "docs", duration: "30m" }),
     }).then((response) => response.json() as Promise<{ status: string; granted: string[]; applying?: string[]; next?: string }>);
   const me = async () =>
-    (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
+    (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as {
       grants: { item: string; applying?: boolean }[];
     };
 
@@ -343,15 +343,15 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const requestId = (await f.live()).approvals.match(/id="request-([a-f0-9]+)"/)?.[1];
   assert.ok(requestId);
   await f.approve(requestId, ["site:example.com"]);
-  await until(() => snapshots.some((s) => s.leases.some((lease) => lease.kind === "site")));
+  await until(() => snapshots.some((s) => s.grants.some((grant) => grant.item === "site:example.com")));
   await sleep(700); // the held call is polling, and nothing has been reported yet
   assert.deepEqual(
     (await me()).grants.map((g) => [g.item, g.applying]),
     [["site:example.com", true]],
   );
-  const lease = snapshots.findLast((s) => s.leases.length)?.leases[0];
-  assert.ok(lease);
-  reportApplied([lease.id]);
+  const grant = snapshots.findLast((s) => s.grants.length)?.grants[0];
+  assert.ok(grant);
+  reportApplied([grant.id]);
   const answered = await site;
   assert.deepEqual([answered.status, answered.granted, answered.applying], ["decided", ["site:example.com"], undefined]);
   assert.deepEqual(
@@ -369,9 +369,9 @@ test("a grant counts as decided for the agent only once the sandbox host reports
   const decided = await mcp;
   assert.deepEqual([decided.status, decided.granted, decided.applying], ["decided", [], ["mcp:filesystem"]]);
   assert.match(decided.next ?? "", /sandbox is applying it/);
-  await until(() => snapshots.some((s) => s.leases.some((l) => l.kind === "mcp")));
-  const leases = snapshots.findLast((s) => s.leases.length === 2)?.leases ?? [];
-  reportApplied(leases.map((l) => l.id));
+  await until(() => snapshots.some((s) => s.grants.some((g) => g.item.startsWith("mcp:"))));
+  const grants = snapshots.findLast((s) => s.grants.length === 2)?.grants ?? [];
+  reportApplied(grants.map((g) => g.id));
   await until(async () => (await me()).grants.every((g) => !g.applying));
 });
 
@@ -393,7 +393,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   const { token, speaker } = await f.host(["secret"]);
   const wire: string[] = [];
   const snapshots: Snapshot[] = [];
-  watchLeases(
+  watchGrants(
     t,
     f.config,
     token,
@@ -403,24 +403,25 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: agent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
   await f.approve(request.id, ["secret:GITHUB_TOKEN"]);
-  await until(() => snapshots.some((s) => s.leases.length === 1));
-  const { leases, secrets } = snapshots.findLast((s) => s.leases.length)!;
+  await until(() => snapshots.some((s) => s.grants.length === 1));
+  const { grants, secrets } = snapshots.findLast((s) => s.grants.length)!;
   wire.push(JSON.stringify(snapshots));
   // The grant carries the hosts the owner bound the secret to; the snapshot also lists what a task may ask for.
-  assert.deepEqual([leases[0].kind, leases[0].ref, leases[0].hosts], ["secret", "GITHUB_TOKEN", ["localhost"]]);
+  assert.deepEqual([grants[0].item, grants[0].hosts], ["secret:GITHUB_TOKEN", ["localhost"]]);
   assert.deepEqual(secrets, [{ name: "GITHUB_TOKEN", hosts: ["localhost"], env: "GH_TOKEN" }]);
 
   // What the agent is told: the variable to set to a placeholder, and no proxy settings (the sandbox route is built in).
-  const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.token}` } })).json()) as {
+  const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as {
     secrets: Record<string, { environment: Record<string, string>; hosts: string[] }>;
   };
-  const placeholder = await speaker.placeholder(agent.token, "GITHUB_TOKEN");
+  const placeholder = await speaker.placeholder(agent.agentToken, "GITHUB_TOKEN");
   assert.match(placeholder, /^speaker-placeholder-[0-9a-f]{48}$/);
   assert.deepEqual(me.secrets.GITHUB_TOKEN.environment, { GH_TOKEN: placeholder });
 
   // The sandbox's route for the secret's hosts: speaker's proxy.
-  const live = { secretHosts: [{ name: "GITHUB_TOKEN", hosts: leases[0].hosts!, expiresAt: leases[0].expiresAt }], events: [] };
-  const route = secretRoute(live, () => speakerProxy(f.config, agent.token));
+  const live = { secretHosts: [{ name: "GITHUB_TOKEN", hosts: grants[0].hosts!, expiresAt: grants[0].expiresAt }], events: [] };
+  const ca = await speakerCa(f.config);
+  const route = secretRoute(live, () => speakerProxy(f.config, agent.agentToken, ca));
   t.after(() => route.close());
   assert.equal(await route.allow("localhost"), true);
   assert.equal(await route.allow("example.org"), undefined);
@@ -446,7 +447,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
     Catalog.parse({ mcps: {}, extensions: {} }),
     { name: "t", model: "local/m", attended: false },
     new Map(),
-    leases,
+    grants,
     [],
     [],
   );

@@ -3,21 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
+import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import {
-  attendedFor,
-  folderRef,
-  ipv4Destination,
-  launchRequest,
-  loadTemplates,
-  secretHosts,
-  secretRef,
-  speakerRequestAllowed,
-  Template,
-} from "../src/leases.ts";
+import { attendedFor, ipv4Destination, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce } from "../src/tasks.ts";
-import { catalogReport, type Lease } from "../src/speaker.ts";
+import { catalogReport, type Grant } from "../src/speaker.ts";
 import { grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace.ts";
 
@@ -113,15 +104,16 @@ test("speaker exception permits agent routes only at the configured origin", () 
     assert.equal(allowed(path), false, path);
 });
 
-test("enforcer parses refs and rejects malformed secrets and folder modes", () => {
+test("enforcer reads items by the shared grammar and rejects malformed secret hosts and folder modes", () => {
   // A secret grant names a secret in speaker and arrives with the hosts speaker bound it to.
-  assert.ok(secretRef.safeParse("GITHUB_TOKEN").success);
+  assert.ok(itemPatterns.secret.test("secret:GITHUB_TOKEN"));
   assert.ok(secretHosts.safeParse(["api.github.com", "*.example.org"]).success);
-  for (const ref of ["", "KEY@example.com", "KEY@", "KEY.x", "two words"]) assert.equal(secretRef.safeParse(ref).success, false, ref);
+  for (const item of ["secret:", "secret:KEY@example.com", "secret:KEY.x", "secret:two words"]) assert.equal(itemPatterns.secret.test(item), false, item);
   for (const hosts of [[], undefined, ["https://example.com"], ["Example.com"], [""]])
     assert.equal(secretHosts.safeParse(hosts).success, false, JSON.stringify(hosts));
-  assert.ok(folderRef.safeParse("documents:rw").success);
-  assert.equal(folderRef.safeParse("documents:unknown").success, false);
+  assert.ok(itemPatterns.folder.test("folder:documents:rw"));
+  assert.equal(itemPatterns.folder.test("folder:documents:unknown"), false);
+  assert.deepEqual(["site:example.com", "folder:docs:rw", "notes.read"].map(refOf), ["example.com", "docs:rw", "notes.read"]);
 });
 
 test("guest destinations reject all IPv6 forms", () => {
@@ -326,7 +318,7 @@ test("attended defaults to no-prompt launches, follows the launch flag, and a te
   assert.throws(() => attendedFor(forced, { attended: true }), /always unattended/);
 });
 
-test("attended mode loads ask-user-question; extension leases load catalog extensions and their tools", () => {
+test("attended mode loads ask-user-question; ext: grants load catalog extensions and their tools", () => {
   const config = loadConfig(writeConfig());
   const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
   const write = (attended: boolean, extensions: string[], prompt?: string) => {
@@ -382,18 +374,18 @@ test("a template's want, label and duration become the task's first request", ()
 });
 
 test("grants count as in force when installed, MCP and extension ones once Pi runs them, expired ones never", () => {
-  const lease = (id: string, kind: string, ref: string, expiresAt: string | null = null): Lease => ({ id, kind, ref, expiresAt, subjectId: "s" });
-  const leases = [
-    lease("site", "site", "example.com"),
-    lease("secret", "secret", "GITHUB_TOKEN"),
-    lease("folder", "folder", "documents"),
-    lease("mcp", "mcp", "docs"),
-    lease("ext", "extension", "pi-web-access"),
-    lease("gone", "site", "old.example", "2000-01-01T00:00:00Z"),
+  const grant = (id: string, item: string, expiresAt: string | null = null): Grant => ({ id, item, expiresAt, agentId: "s" });
+  const grants = [
+    grant("site", "site:example.com"),
+    grant("secret", "secret:GITHUB_TOKEN"),
+    grant("folder", "folder:documents"),
+    grant("mcp", "mcp:docs"),
+    grant("ext", "ext:pi-web-access"),
+    grant("gone", "site:old.example", "2000-01-01T00:00:00Z"),
   ];
-  assert.deepEqual(inForce(leases, { mcp: [], extensions: [] }), ["site", "secret", "folder"]);
-  assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: [] }), ["site", "secret", "folder", "mcp"]);
-  assert.deepEqual(inForce(leases, { mcp: ["docs"], extensions: ["pi-web-access"] }), ["site", "secret", "folder", "mcp", "ext"]);
+  assert.deepEqual(inForce(grants, { mcp: [], ext: [] }), ["site", "secret", "folder"]);
+  assert.deepEqual(inForce(grants, { mcp: ["docs"], ext: [] }), ["site", "secret", "folder", "mcp"]);
+  assert.deepEqual(inForce(grants, { mcp: ["docs"], ext: ["pi-web-access"] }), ["site", "secret", "folder", "mcp", "ext"]);
 });
 
 test("remote MCP servers are not catalog entries; the shipped catalog keeps only in-VM servers and extensions", () => {

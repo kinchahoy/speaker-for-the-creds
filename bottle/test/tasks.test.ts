@@ -14,7 +14,7 @@ import { serve } from "../../speaker/node_modules/@hono/node-server/dist/index.m
 import { createApp, readConfig } from "../../speaker/server.ts";
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
-import { Template } from "../src/leases.ts";
+import { Template } from "../src/grants.ts";
 import { Catalog } from "../src/pi.ts";
 import type { Boot, Guest } from "../src/sandbox.ts";
 import { Tasks } from "../src/tasks.ts";
@@ -34,7 +34,7 @@ const limits = { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHo
  * A real speaker with an approved sandbox host, and Tasks over a stand-in VM: every guest command is recorded and
  * succeeds, and Pi reports "not running" so a close needs no grace period.
  */
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions: {} }) {
   const root = await mkdtemp(join(tmpdir(), "bottle-tasks-"));
   const dirs = { configRoot: join(root, "config"), stateRoot: join(root, "state"), outputRoot: join(root, "output") };
   for (const dir of Object.values(dirs)) await mkdir(dir);
@@ -80,20 +80,22 @@ async function fixture(t: TestContext) {
   );
   const commands: string[] = [];
   let closed = 0;
+  let restartFails = false;
   const boot: Boot = async (_config, _live, _limits, paths) => {
     // Pi's session as the guest would have written it, for the archive.
     await mkdir(`${paths.work}/.pi-session`, { recursive: true });
     await writeFile(`${paths.work}/.pi-session/task.jsonl`, `${JSON.stringify({ type: "session", id: "s1" })}\n`);
     return {
-      sessionId: "bs-test",
+      sessionId: "bottle-test",
       exec: async (command) => {
         commands.push(command);
-        return { exitCode: command.startsWith("ps -C pi") ? 1 : 0, stdout: "", stderr: "" };
+        // Pi reports "not running", and a restart (which starts with pkill) fails when the test says so.
+        return { exitCode: command.startsWith("ps -C pi") || (restartFails && command.startsWith("pkill -x pi;")) ? 1 : 0, stdout: "", stderr: "" };
       },
       close: async () => void closed++,
     } satisfies Guest;
   };
-  const tasks = new Tasks(config, templates, Catalog.parse({ mcps: {}, extensions: {} }), hostToken, boot);
+  const tasks = new Tasks(config, templates, Catalog.parse(catalog), hostToken, boot);
   t.after(async () => {
     tasks.stop();
     for (const client of wss.clients) client.terminate();
@@ -102,7 +104,7 @@ async function fixture(t: TestContext) {
     server.close();
     await rm(root, { recursive: true, force: true });
   });
-  return { url, tasks, commands, closed: () => closed, ownerPost, panel, config };
+  return { url, tasks, commands, closed: () => closed, failRestarts: () => (restartFails = true), ownerPost, panel, config };
 }
 
 test("a launch boots the VM, starts Pi, writes its configuration and files the template's first request", async (t) => {
@@ -134,11 +136,11 @@ test("an approved grant reaches the task's live view and is reported to speaker 
   assert.equal((await f.ownerPost(`/requests/${request!.id}/approve`, body)).status, 303);
   await until(() => task.live.hosts.some((entry) => entry.host === "example.com"));
   assert.deepEqual(
-    task.leases.map((lease) => [lease.kind, lease.ref]),
-    [["site", "example.com"]],
+    task.grants.map((grant) => grant.item),
+    ["site:example.com"],
   );
-  assert.match(readFileSync(`${task.outputDir}/_control/leases.jsonl`, "utf8"), /"ref":"example.com"/);
-  assert.ok(task.events.some((event) => event.text === "leases now: site example.com"));
+  assert.match(readFileSync(`${task.outputDir}/_control/grants.jsonl`, "utf8"), /"item":"site:example.com"/);
+  assert.ok(task.events.some((event) => event.text === "grants now: site:example.com"));
   // Speaker hears it applied: the grant is no longer marked as waiting or granted-not-applied.
   await until(async () => {
     const active = await f.panel("active");
@@ -179,6 +181,31 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
   assert.equal(existsSync(`${f.config.stateRoot}/tasks/${task.id}`), false, "the work tree is removed");
   assert.equal(existsSync(`${control}/blobs`), false);
   // The task's agent is gone from speaker.
-  const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.speakerToken}` } });
+  const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.agentToken}` } });
   assert.equal(response.status, 403);
+});
+
+test("a task whose Pi restart failed is pi-down, and closing it still exports the transcript", async (t) => {
+  const catalog = {
+    mcps: {},
+    extensions: { notes: { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] } },
+  };
+  const f = await fixture(t, catalog);
+  const task = await f.tasks.create({ template: "offline", name: "restarts" });
+  f.failRestarts();
+  await f.tasks.speaker.request({ agentId: task.agentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
+  await until(() => f.tasks.pendingRequests(task).length === 1);
+  const [request] = f.tasks.pendingRequests(task);
+  const body = new URLSearchParams({ duration: "1h", items: "ext:notes", shown: "ext:notes" });
+  assert.equal((await f.ownerPost(`/requests/${request!.id}/approve`, body)).status, 303);
+  await until(() => task.state === "pi-down");
+  f.commands.length = 0;
+  await f.tasks.close(task);
+  assert.equal(task.state, "archived");
+  assert.ok(f.commands.includes("printf '/quit\\r' | dtach -p /run/pi.dtach"), "Pi asked to quit");
+  assert.ok(
+    f.commands.some((command) => command.startsWith("pi --export /work/.pi-session/task.jsonl")),
+    "transcript exported",
+  );
+  assert.ok(existsSync(`${task.outputDir}/_control/pi-session.jsonl`));
 });

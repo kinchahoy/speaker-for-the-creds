@@ -51,7 +51,7 @@ describe("egress proxy decision", () => {
     assert.match(view.events.at(-1)!.text, /blocked a request to 10\.0\.0\.5/);
   });
 
-  test("a lease change applies to the next request, and a secret host is never sent direct when speaker's proxy is down", async () => {
+  test("a grant change applies to the next request, and a secret host is never sent direct when speaker's proxy is down", async () => {
     const view = state();
     const route = secretRoute(view, () => Promise.reject(new Error("no PROXY_PORT")));
     assert.equal(await egressDecision(view, route, "new.test"), "refuse");
@@ -63,7 +63,7 @@ describe("egress proxy decision", () => {
 
   test("the proxy answers a refused host with 403", async () => {
     const view = state();
-    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { token: "t" });
+    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { agentToken: "t" });
     const socket = join(root, "egress.sock");
     const server = await serveEgress(proxy, socket);
     const client = connect(socket);
@@ -81,7 +81,7 @@ describe("egress proxy decision", () => {
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     const { port } = upstream.address() as { port: number };
     const view = live({ secretHosts: [{ name: "TOKEN", hosts: ["api.test"], expiresAt: new Date(Date.now() + 60_000).toISOString() }] });
-    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { proxy: `127.0.0.1:${port}`, token: "t" });
+    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { proxy: `127.0.0.1:${port}`, agentToken: "t" });
     const server = await serveEgress(proxy, join(root, "tunnel.sock"));
     const client = connect(join(root, "tunnel.sock"));
     client.write("CONNECT api.test:443 HTTP/1.1\r\nHost: api.test:443\r\n\r\n");
@@ -205,7 +205,7 @@ describe("folders over SSH", () => {
     await new Promise<void>((resolve) => speaker.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${(speaker.address() as { port: number }).port}`;
     const socket = join(root, "speaker.sock");
-    const door = await listen(socket, speakerDoor({ url, token: "t" }, "ssh-ed25519 AAAA"));
+    const door = await listen(socket, speakerDoor({ url, agentToken: "t" }, "ssh-ed25519 AAAA"));
     const client = new Client("http://speaker.internal", { socketPath: socket });
     await (
       await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })

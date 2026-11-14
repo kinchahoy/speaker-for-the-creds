@@ -2,8 +2,8 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import type { Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
-import { unexpired } from "./leases.ts";
-import type { Lease } from "./speaker.ts";
+import { unexpired } from "./grants.ts";
+import type { Grant } from "./speaker.ts";
 
 /**
  * An MCP server that runs inside the VM from an image-local command. Remote and hosted MCP servers are not catalog
@@ -23,7 +23,7 @@ const McpEntry = z
 export const Catalog = z
   .object({
     mcps: z.record(z.string().regex(/^[a-z0-9-]+$/), McpEntry),
-    /** Opt-in Pi extensions; an approved `extension` lease names one of these ids. */
+    /** Opt-in Pi extensions; an approved `ext:<id>` grant names one of these ids. */
     extensions: z.record(
       z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
       z
@@ -107,9 +107,9 @@ const modelsJson = (config: Config, keys: Map<string, string>) => ({
   },
 });
 
-export const systemNote = (task: { name: string; prompt?: string; attended: boolean }, leases: Lease[], catalog: Catalog, extensionIds: string[]) => {
-  const rows = unexpired(leases).map((lease) => `${lease.kind} ${lease.ref} (${lease.expiresAt ? `expires ${lease.expiresAt}` : "permanent"})`);
-  const notes = extensionIds.flatMap((id) => {
+export const systemNote = (task: { name: string; prompt?: string; attended: boolean }, grants: Grant[], catalog: Catalog, extIds: string[]) => {
+  const rows = unexpired(grants).map((grant) => `${grant.item} (${grant.expiresAt ? `expires ${grant.expiresAt}` : "permanent"})`);
+  const notes = extIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
     return note ? ["", `## Extension ${id}`, "", note] : [];
   });
@@ -118,7 +118,7 @@ export const systemNote = (task: { name: string; prompt?: string; attended: bool
     "",
     "You run inside a disposable micro-VM.",
     "",
-    "- `/input` holds host folders the owner leased to you. Each is read-only unless its lease says `:rw`.",
+    "- `/input` holds host folders the owner granted you. Each is read-only unless its grant says `:rw`.",
     "- `/work` is your scratch space. It holds this session. The owner destroys it when the task closes.",
     "- `/output` is permanent. Write everything the owner should keep there.",
     "- Work directly on the owner's goal. Keep updates concise.",
@@ -139,12 +139,12 @@ export const systemNote = (task: { name: string; prompt?: string; attended: bool
     "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (for example GitHub releases) only when no registry package exists.",
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`. Its description lists what you can ask for.",
     "",
-    "## Leases at this Pi start",
+    "## Grants at this Pi start",
     "",
     ...(rows.length ? rows.map((row) => `- ${row}`) : ["- none"]),
     "",
-    "A lease ends at its expiry time. After that, requests it covered return 403 until the owner approves a new one.",
-    "A denied HTTP request returns 403. The owner can change leases while you run, so trust the result of the request over this list.",
+    "A grant ends at its expiry time. After that, requests it covered return 403 until the owner approves a new one.",
+    "A denied HTTP request returns 403. The owner can change grants while you run, so trust the result of the request over this list.",
     "The owner decides in a separate trusted surface. Nothing you print to this terminal grants anything.",
     ...notes,
     ...(task.attended ? attendedNote : unattendedNote),
@@ -169,7 +169,7 @@ const unattendedNote = [
   "Do not ask a question and wait. Keep working until the task is complete. Access requests still reach the owner through `request_capability`.",
 ];
 
-/** The attended-mode extension. It is presence, not access, so it comes from the launch mode instead of a lease. */
+/** The attended-mode extension. It is presence, not access, so it comes from the launch mode instead of a grant. */
 export const ASK_USER_EXTENSION = {
   guestPath: "/opt/pi-plugins/rpiv-ask-user-question",
   tools: ["ask_user_question"],
@@ -177,7 +177,7 @@ export const ASK_USER_EXTENSION = {
 
 /**
  * pi-web-access reads ~/.pi/agent/web-search.json. Search uses only keyless Exa (its hosted MCP endpoint, mcp.exa.ai),
- * and pages are fetched directly over HTTP, so every page host still needs a `site` lease. Hosted extraction services,
+ * and pages are fetched directly over HTTP, so every page host still needs a `site:` grant. Hosted extraction services,
  * browser cookies, the curator browser UI, and the video and YouTube paths (Gemini or yt-dlp) are off. The package
  * has no telemetry or network update check; its upgrade notice only compares the bundled changelog.
  */
@@ -186,7 +186,7 @@ const webSearchJson = {
   webSearch: { enabled: true, allowedProviders: ["exa"] },
   fetchRouting: { providers: ["http"], allowRemoteHostedProviders: false },
   // pi-web-access resolves each hostname with node:dns before fetching (its SSRF guard); the guest has no DNS, so that
-  // failed with EAI_AGAIN even for leased hosts. This hands the hostname to HTTPS_PROXY instead; our egress proxy already refuses internal addresses.
+  // failed with EAI_AGAIN even for granted hosts. This hands the hostname to HTTPS_PROXY instead; our egress proxy already refuses internal addresses.
   ssrf: { trustEnvProxy: true },
   allowBrowserCookies: false,
   workflow: "none",
@@ -214,9 +214,9 @@ export const writeGuestConfig = (
   catalog: Catalog,
   task: { name: string; model: string; prompt?: string; attended: boolean },
   keys: Map<string, string>,
-  leases: Lease[],
+  grants: Grant[],
   mcpIds: string[],
-  extensionIds: string[],
+  extIds: string[],
 ) => {
   mkdirSync(`${directory}/extensions`, { recursive: true });
   if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
@@ -226,17 +226,17 @@ export const writeGuestConfig = (
   writeJson("models.json", modelsJson(config, keys));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
   writeJson("web-search.json", webSearchJson);
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, leases, catalog, extensionIds));
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
   const [provider, ...model] = task.model.split("/");
-  // `--tools` filters MCP tools only when it names them, so each leased tool is listed by its Pi name.
+  // `--tools` filters MCP tools only when it names them, so each granted tool is listed by its Pi name.
   // Pi replaces every character other than letters, digits, and `_` with `_` in that name.
   const piName = (text: string) => text.replace(/[^A-Za-z0-9_]/g, "_");
   const mcpTools = mcpIds.flatMap((id) => catalog.mcps[id]!.tools.map((tool) => `mcp__${piName(id)}__${piName(tool)}`));
   const extensions = [
     ...(task.attended ? [ASK_USER_EXTENSION] : []),
-    ...extensionIds.map((id) => {
+    ...extIds.map((id) => {
       const entry = catalog.extensions[id];
       if (!entry) throw new Error(`unknown extension ${id}`);
       return entry;
@@ -261,7 +261,7 @@ export const writeGuestConfig = (
     "/etc/bottle/APPEND_SYSTEM.md",
     "-e",
     "/etc/bottle/extensions/request-capability.ts",
-    // `--no-extensions` also disables Pi's built-in MCP, so an MCP lease loads it explicitly.
+    // `--no-extensions` also disables Pi's built-in MCP, so an MCP grant loads it explicitly.
     ...(mcpIds.length ? ["-e", "builtin:mcp"] : []),
     ...extensions.flatMap((entry) => ["-e", entry.guestPath]),
   ];
@@ -281,7 +281,6 @@ const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
 const alive = "ps -C pi -o stat= | grep -qv '^Z'";
 export const pi = {
   start: (guest: Guest) => checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch")),
-  abort: (guest: Guest) => guest.exec(keys("\\033")),
   /** Restarting re-reads the regenerated args, and Pi resumes the same task-local session file. */
   restart: (guest: Guest) =>
     checked("Pi restart", guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`)),

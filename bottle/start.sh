@@ -29,11 +29,11 @@ node -e '
 '
 
 setsid node "$root/src/server.ts" &
-broker=$!
+service=$!
 stop() {
 	trap - INT TERM
-	kill -TERM "$broker" 2>/dev/null || true
-	wait "$broker" || true
+	kill -TERM "$service" 2>/dev/null || true
+	wait "$service" || true
 }
 trap 'stop; exit 0' INT TERM
-wait "$broker"
+wait "$service"

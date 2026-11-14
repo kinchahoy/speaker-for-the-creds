@@ -332,7 +332,7 @@ export type Archived = {
   slug: string;
   templateId: string;
   attended: boolean;
-  subjectId: string;
+  agentId: string;
   model: string;
   startedAt: string;
   deadline: string;
@@ -427,8 +427,8 @@ export function writeArchive(task: Archived, modelOrigins: Set<string>, status: 
   );
   const lines = (records: object[]) => records.map((record) => JSON.stringify(record)).join("\n");
   writeFileSync(`${control}/trace.jsonl`, `${lines([projectRun, harnessRun, ...modelRuns, ...toolTrace.runs])}\n`);
-  const { id, name, slug, templateId, attended, subjectId, model, startedAt, deadline } = task;
-  const record = { id, name, slug, state: status, templateId, attended, subjectId, model, startedAt, deadline, closedAt, ...(error ? { error } : {}) };
+  const { id, name, slug, templateId, attended, agentId, model, startedAt, deadline } = task;
+  const record = { id, name, slug, state: status, templateId, attended, agentId, model, startedAt, deadline, closedAt, ...(error ? { error } : {}) };
   writeFileSync(`${control}/task.json`, JSON.stringify(record, null, 2));
   writeFileSync(`${control}/policy-events.jsonl`, lines(task.live.events));
   const manifest = { closed: status === "archived", files: walk(`${task.outputDir}/artifacts`), ...(error ? { error } : {}) };

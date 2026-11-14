@@ -1,6 +1,7 @@
 import { isIPv4 } from "node:net";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { durationNames } from "../../speaker/items.ts";
 
 const Limits = z
   .object({
@@ -30,10 +31,19 @@ export const Template = z
     /** Items and groups the task asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
     want: z.array(z.string().trim().min(1)).max(50).default([]),
     /** How long the first request asks for. */
-    duration: z.enum(["30m", "1h", "2h", "1d", "30d"]).default("2h"),
+    duration: z.enum(durationNames).default("2h"),
   })
   .strict();
 export type Template = z.infer<typeof Template>;
+
+/** A failure with the HTTP status the control API answers it with: 400 bad input, 404 unknown task, 409 wrong state, 502 speaker failed. */
+export class StatusError extends Error {
+  readonly status: 400 | 404 | 409 | 502;
+  constructor(status: StatusError["status"], message: string) {
+    super(message);
+    this.status = status;
+  }
+}
 
 /** The task's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
 export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
@@ -48,7 +58,7 @@ export const launchRequest = (template: Template, agentId: string, extra: string
  */
 export const attendedFor = (template: Template, input: { prompt?: string; attended?: boolean }) => {
   if (template.attended !== undefined && input.attended !== undefined && input.attended !== template.attended)
-    throw new Error(`template ${template.id} is always ${template.attended ? "attended" : "unattended"}`);
+    throw new StatusError(400, `template ${template.id} is always ${template.attended ? "attended" : "unattended"}`);
   return template.attended ?? input.attended ?? input.prompt === undefined;
 };
 
@@ -62,15 +72,13 @@ export const loadTemplates = (path: string) => {
 export type Timed = { expiresAt: string | null };
 export const unexpired = <T extends Timed>(entries: T[]) => entries.filter((entry) => entry.expiresAt === null || Date.parse(entry.expiresAt) > Date.now());
 
-export const hostMatches = (patterns: readonly string[], host: string) => {
-  const normalized = host.toLowerCase();
-  return patterns.some((pattern) => (pattern.startsWith("*.") ? normalized.endsWith(pattern.slice(1)) : pattern === normalized));
-};
+/** What follows an item's kind prefix: `example.com` for `site:example.com`, `docs:rw` for `folder:docs:rw`; a service item is its own ref. */
+export const refOf = (item: string) => item.slice(item.indexOf(":") + 1);
 
 /** Guest egress currently supports IPv4 destinations only. */
 export const ipv4Destination = (ip: string) => isIPv4(ip);
 
-/** Speaker owns approvals; bottle owns the syntax and local meaning of refs. */
+/** Speaker owns approvals and the item grammar (speaker/items.ts); bottle adds the stricter shape of a site ref. */
 const host = z.hostname().refine((value) => value === value.toLowerCase());
 export const siteRef = z.union([
   host,
@@ -80,9 +88,7 @@ export const siteRef = z.union([
     .refine((value) => host.safeParse(value.slice(2)).success),
 ]);
 /** A `secret:<NAME>` grant names a secret in speaker and arrives with the hosts the owner bound it to. */
-export const secretRef = z.string().regex(/^[A-Za-z0-9_]+$/);
 export const secretHosts = z.array(siteRef).min(1);
-export const folderRef = z.string().regex(/^[a-zA-Z0-9_-]+(:rw)?$/);
 
 /** Guests may use only the agent-facing speaker API and service proxy. */
 export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) => {
