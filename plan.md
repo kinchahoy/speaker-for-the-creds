@@ -73,32 +73,34 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 1a | **Speaker low-risk cuts**: the `core` unpacking blocks in `api.ts` and `admin.ts`, old-host defaults, unused `version` field | cheap subagent A (speaker files only) | `tsc`, lint, speaker tests |
 | 1b | **Bottle low-risk cuts**: Herdr TUI integration in `cli.ts`, dead trace branches, `shareRoots`, the reload route, the duplicate check in `start.sh`, the CLI error prettifier; matching README lines | cheap subagent B (bottle files only), in parallel with A | `tsc`, lint, bottle tests |
 | 1c | **One copy of the init helpers** | cheap subagent C, after A and B (it touches both packages and their init tests) | both test suites |
-| 2 | **Reformat speaker at width 160**, as its own commit so the diff stays readable | main session, one command | `mise run check` |
-| 3 | **Feature cuts you approve** (table below), one commit per feature, docs updated in the same commit | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
+| 2a | **Slim trace**: replace the trace export with one JSON line per model call (see below) | cheap subagent, bottle files | bottle tests; a task archive holds `model-calls.jsonl` |
+| 2b | **Cut VM-mount folder delivery** from speaker; `DESIGN.md` updated in the same commit | cheap subagent, speaker files, in parallel with 2a | speaker tests |
+| 2c | **In-VM MCP servers stay**: add a test that an approved `mcp:<id>` puts the server into Pi's MCP config and a revoke removes it (no VM needed), and a short README example of a catalog entry | cheap subagent, after 2a | the new test passes |
+| 3 | **Further feature cuts**, if you approve any from the table below, one commit per feature with docs | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
 Rules for the subagents: each gets an exact file list and the audit's line ranges, removes only what is listed, never edits a test to make it pass (a failing test is reported back), and does not commit. A and B run together because their files do not overlap; nothing else runs in parallel in the one tree.
 
-Agreed so far: all low-risk cuts (steps 1a to 1c), including the Herdr TUI integration. Steps 2 and 3 wait on the open decisions.
+Agreed: all low-risk cuts (1a to 1c) including the Herdr TUI integration, the slim trace (2a), cutting VM-mount delivery (2b), and keeping in-VM MCP servers with a test (2c). Step 3 waits on your picks.
+
+Not doing: reformatting speaker to width 160. It removes 363 lines without removing any code, and 160 is not a common width (formatter defaults are 80 to 100, and 120 is a common wider choice), so speaker's 120 is the more standard of the two. The packages keep their current widths.
 
 ## Open
 
-1. **Reformat speaker at 160?** 363 fewer lines, no code removed.
-2. **Which feature cuts to take** (table below). The trace export has a slim alternative, described there.
+1. **Which further feature cuts to take** (table below).
 
 ## Line-reduction audit of the existing code
 
 A read-only audit by a subagent, which read every non-test source file (8,752 lines) and did not run the tests. Only the reformat and Herdr counts are measured; the rest are estimates of about ±25%. Nothing is cut yet.
 
-### Low risk, no feature lost (about 230 lines of code, plus 363 from formatting)
+### Low risk, no feature lost (about 230 lines) — agreed
 
 | Cut | Lines |
 | --- | --- |
-| Format speaker at width 160 like bottle (cosmetic: same code, fewer lines, one big diff) | -363, measured |
 | Drop the blocks in `speaker/api.ts` and `admin.ts` that only unpack `core` into locals | ~-60 |
 | One copy of the prompt helpers duplicated between `speaker/init.ts` and `bottle/init.ts` | ~-50 |
-| Herdr TUI integration in `bottle/src/cli.ts` (open question 1) | -42, exact |
+| Herdr TUI integration in `bottle/src/cli.ts` | -42, exact |
 | Small items: old-host defaults, an unused `version` field, a duplicate storage check in `start.sh`, a CLI error prettifier | ~-35 |
 | Dead branches in `bottle/src/trace.ts` left from when all egress was recorded | ~-20 |
 | `shareRoots`, which no longer does anything (old configs containing it stop loading) | ~-10, plus ~15 in tests |
@@ -106,20 +108,25 @@ A read-only audit by a subagent, which read every non-test source file (8,752 li
 
 One medium-risk extra: replace speaker's hand-written upstream forwarding with Hono's proxy helper (~-15 to -20). The header strip list must survive, and the helper's behaviour is unchecked.
 
-### Changes a feature: your decision (about 1,270 lines in total)
+### Feature cuts already decided
+
+| Cut | Lines | Decision |
+| --- | --- | --- |
+| Trace export, replaced by the slim version below | ~-320 | do it |
+| VM-mount folder delivery in speaker | ~-45, plus ~60 in tests | cut |
+| In-VM MCP servers (`mcp:` items) | 0 | keep, add a test and a README example |
+
+### Further feature cuts: your decision (about 780 lines in total)
 
 | Cut | Lines | What you lose |
 | --- | --- | --- |
-| `trace.jsonl` and model body capture | ~-380 | Raw model requests and replies in the archive. The Pi session, transcript, policy events and grants stay. Nothing in the repo reads the trace. |
-| Narrow `init` (update-in-place, owner-password auto-approve, smoke test, reverse-proxy questions) | ~-185 | Setup conveniences. Flags-only init would be ~-400. |
+| Narrow `init`, four separable pieces | ~-185 | Re-running `init` to update an install with your old answers as defaults (~45); `init bottle` unlocking speaker and approving the sandbox host with the owner password, instead of you doing it in `/admin` (~65); the smoke-test task at the end (~55); the reverse-proxy questions in `init speaker` (~20). Flags-only init would be ~-400. |
 | Read/write classification of remote MCP tools | ~-120 | `.read` grants for MCP services; every tool call would need `.full`. Coarser grants. |
 | `/admin` extras: filter bar, custom confirm dialog, per-agent counts, countdown meters | ~-125 | Polish on the owner pages. |
 | Hosted model providers in bottle | ~-110 | Hosted models through a speaker secret; local models only. Removes the `awaiting-key` task state. |
 | Simpler speaker link in bottle (keep the 30-second grant drop) | ~-60 | The specific "token rejected" message and auto-shutdown after 5 minutes without speaker. |
-| In-VM MCP servers (`mcp:` items) | ~-60 | Grantable stdio MCP servers in the VM. The shipped catalog has none. |
 | `bottle doctor` | ~-59 | The preflight command; `init` and `start.sh` check most of the same things. |
 | Docker path for speaker | -47 | The hardened container. This is the planned NAS deployment, so probably keep. |
-| VM-mount folder delivery in speaker | ~-45, plus ~60 in tests | A delivery mode no sandbox host here implements. |
 | Require `PROXY_PORT` and `SSH_PORT` | ~-40 | Running speaker without the secrets proxy or jump server. |
 | Extension-bundled sites | ~-30 | Site grants ending automatically with their extension. |
 | Three-denials lock | ~-25 | Auto-deny for 15 minutes after three denials. |
@@ -134,9 +141,9 @@ One medium-risk extra: replace speaker's hand-written upstream forwarding with H
 - reassembling streamed replies into finished messages (~25);
 - shaping all of it into a linked run tree in the format LangSmith and Phoenix import (~55). That import is unverified.
 
-**Slim version, about 25 lines:** the model door appends one JSON line per model call to `model-calls.jsonl`: time, status, duration, the request body and the raw reply, each cut off at a size cap. It keeps the one thing nothing else records, which is exactly what the model was sent and what it answered. It drops the header capture, the reassembled messages (the raw stream is kept instead), the tool-call records (Pi's session file already has them) and the importable run tree. Net saving about 320 lines instead of 380.
+**Slim version, about 25 lines (decided):** the model door appends one JSON line per model call to `model-calls.jsonl`: time, status, duration, the request body and the raw reply, each cut off at a size cap. It keeps the one thing nothing else records, which is exactly what the model was sent and what it answered. It drops the header capture, the reassembled messages (the raw stream is kept instead), the tool-call records (Pi's session file already has them) and the importable run tree. Net saving about 320 lines instead of 380.
 
-### Two of the smaller cuts, in plain words
+### In-VM MCP and VM-mount delivery, in plain words
 
 - **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. A task asks for `mcp:<id>`; when you approve, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
 - **VM-mount folder delivery.** Speaker can deliver a `folder:` grant two ways. Over SSH, the sandbox mounts the share with `sshfs` through speaker's jump server, which is what happens today. As a VM mount, a sandbox host that has the folder on its own disk would map it straight into the VM, which is much faster for `grep -r`, `find` and `git status`. bottle always tells speaker it cannot mount, so speaker's VM-mount branch never runs. Cutting it removes the unused branch and closes the door on the fast path until it is rebuilt.
