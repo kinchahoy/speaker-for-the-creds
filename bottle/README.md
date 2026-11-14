@@ -56,7 +56,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
 - `shareRoots`: bottle reports its names to speaker as not mountable. It checks the paths only at config load. It has no effect on folder delivery, because folders always arrive over SSH. It stays so older configs still load.
-- `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `guest-build`. It defaults to `~/.bottle/config.json`.
+- `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `build`. It defaults to `~/.bottle/config.json`.
 
 <!-- author: ai -->
 
@@ -147,7 +147,7 @@ An attended task loads the ask-user-question extension (the `ask_user_question` 
 Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi. The extensions stay pinned, and everything else takes the latest release.
 {.ai}
 
-`guest-build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into `~/.bottle/microsandbox` (or `MSB_HOME`). It needs `config.json`, so run `mise run init bottle` first. Builds need internet access and about 10 GiB of disk space.
+`bottle build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into `~/.bottle/microsandbox` (or `MSB_HOME`). It needs `config.json`, so run `mise run init bottle` first. Builds need internet access and about 10 GiB of disk space.
 {.ai}
 
 The image holds:
