@@ -9,7 +9,18 @@ import { loadConfig } from "../src/config.ts";
 import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce } from "../src/tasks.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
-import { changeMessage, grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
+import {
+  alreadyPendingText,
+  changeMessage,
+  decisionMessage,
+  FIXED_GUIDANCE,
+  filedText,
+  grantedLine,
+  pendingKey,
+  piToolNames,
+  reply,
+  type CatalogView,
+} from "../guest/extensions/reply.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace.ts";
 
 const roots: string[] = [];
@@ -426,13 +437,38 @@ test("replies tell the agent what to do, per item kind", () => {
     line("vault.read"),
     /It is an MCP server\. Send JSON-RPC with POST to \$SPEAKER_URL\/vault: first initialize, then tools\/list, then tools\/call\./,
   );
-  assert.match(line("ext:pi-web-access"), /\(web_search, fetch_content\) are not loaded yet[\s\S]*make no more tool calls/);
+  assert.match(
+    line("ext:pi-web-access"),
+    /\(web_search, fetch_content\) load the next time you pause; you will get a message when they are available\. Keep working/,
+  );
   assert.deepEqual(piToolNames("ext:pi-web-access", catalog), ["web_search", "fetch_content"]);
   assert.match(
     reply({ status: "decided", denied: ["folder:temp"] }, catalog),
     /^Denied: folder:temp\. Do not ask for it again in this task\..*\/output\/NOTES\.md\.$/,
   );
   assert.throws(() => line("secret:MISSING"), /does not show/);
+});
+
+test("request_capability answers at once and delivers the decision as one [speaker] message", () => {
+  const catalog: CatalogView = { extensions: { "web-search": { tools: ["web_search"] } } };
+  assert.match(filedText(7), /^Filed as request 7\. Not decided yet\. Keep working .*starting `\[speaker\]`.*Don't ask again for the same items\.$/);
+  assert.match(alreadyPendingText(7), /^Already pending as request 7\. Not decided yet\./);
+  assert.equal(pendingKey(["site:b", "site:a", "site:b"]), pendingKey(["site:a", "site:b"]));
+  assert.equal(FIXED_GUIDANCE.includes("30 minutes"), false);
+  const granted = decisionMessage({ status: "decided", granted: ["site:pypi.org"] }, ["site:pypi.org"], catalog);
+  assert.match(granted, /^\[speaker\] Granted: site:pypi\.org.*Retry what failed\.$/);
+  assert.match(
+    decisionMessage({ status: "decided", denied: ["secret:X"] }, ["secret:X"], catalog),
+    /^\[speaker\] Denied: secret:X\. Do not ask for it again.*Do the work without it/,
+  );
+  assert.match(
+    decisionMessage({ status: "decided", granted: ["ext:web-search"] }, ["ext:web-search"], catalog),
+    /^\[speaker\] Granted: ext:web-search.*\(web_search\) load the next time you pause; you will get a message when they are available\. Keep working/,
+  );
+  assert.equal(
+    decisionMessage({ status: "expired" }, ["site:a", "site:b"], catalog),
+    "[speaker] The owner did not decide on site:a, site:b. Ask again only if you still need it.",
+  );
 });
 
 test("a hosted model's key in models.json is the placeholder speaker issued, never a secret", () => {

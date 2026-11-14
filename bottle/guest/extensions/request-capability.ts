@@ -1,14 +1,29 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { changeMessage, needsRestart, reply, toolDescription, UNDECIDED, type CatalogView, type Decision, type GrantChange } from "./reply.ts";
+import {
+  alreadyPendingText,
+  changeMessage,
+  decisionMessage,
+  filedText,
+  needsRestart,
+  pendingKey,
+  reply,
+  toolDescription,
+  type CatalogView,
+  type Decision,
+  type GrantChange,
+} from "./reply.ts";
 
 const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TOKEN! };
 // SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token (and the task's SSH public key,
 // which the host provisions, to every request body).
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
 const PROMPT = "/etc/bottle/prompt.md";
-const WAIT_MS = 30 * 60_000;
+/** Requests filed and not yet delivered, kept so a Pi restart re-arms them. */
+const PENDING = "/work/.speaker/pending.json";
+const FILE_WAIT_S = 3;
+const RETRY_MS = 10_000;
 /** Bottle's note of what the last restart changed, and the last change this guest told the agent about (/etc/bottle is read-only). */
 const CHANGE = "/etc/bottle/change.json";
 const REPORTED = "/work/.speaker/last-change-id";
@@ -64,19 +79,92 @@ const lastMessage = (entries: { type: string; message?: { role?: string; content
 export default async function (pi: ExtensionAPI) {
   const report = (busy: boolean, summary?: string) => void call(control, "POST", "guest/status", { busy, summary }).catch(() => undefined);
   // A run spans every model and tool step; Pi settles only when it will not continue on its own.
-  pi.on("agent_start", () => report(true));
-  pi.on("agent_settled", (_event, ctx) => report(false, lastMessage(ctx.sessionManager.getBranch())));
+  let idle = true;
+  pi.on("agent_start", () => {
+    idle = false;
+    report(true);
+  });
+  pi.on("agent_settled", (_event, ctx) => {
+    idle = true;
+    report(false, lastMessage(ctx.sessionManager.getBranch()));
+  });
+  // Requests the owner has not decided yet, by item set. A background watcher per request delivers the decision.
+  type Pending = { id: number | string; params: { want: string[]; reason: string; duration: string } };
+  const pending: Record<string, Pending> = existsSync(PENDING) ? JSON.parse(readFileSync(PENDING, "utf8")) : {};
+  const watching = new Set<string>();
+  const savePending = () => {
+    mkdirSync("/work/.speaker", { recursive: true });
+    writeFileSync(PENDING, JSON.stringify(pending));
+  };
+  const tell = (text: string) => {
+    if (idle) {
+      idle = false;
+      pi.sendUserMessage(text);
+    } else pi.sendUserMessage(text, { deliverAs: "steer" });
+  };
+  /** The reply for a decided request, after waiting (up to 2 minutes) for items that apply at once to be in force. */
+  const settle = async (decision: Decision, want: string[], signal: AbortSignal | undefined, asMessage: boolean) => {
+    // Speaker lists a granted item under `applying` until the sandbox reports it in force (ext: and mcp: stay
+    // there until Pi restarts), so both count as granted here.
+    decision = { ...decision, granted: [...(decision.granted ?? []), ...(decision.applying ?? [])] };
+    const granted = decision.granted ?? [];
+    // Sites, secrets, folders and services reach the VM within seconds; wait so the message is true when read.
+    const waitFor = granted.filter((item) => !needsRestart(item));
+    const fetchCatalog = async () => (await call(speaker, "GET", "catalog", undefined, signal)) as CatalogView;
+    const applying = (view: CatalogView) => (view.grants ?? []).filter((grant) => grant.applying && waitFor.includes(grant.item)).map((grant) => grant.item);
+    let catalog = await fetchCatalog();
+    for (const start = Date.now(); applying(catalog).length && Date.now() - start < APPLY_MAX_MS;) {
+      await sleep(APPLY_POLL_MS);
+      catalog = await fetchCatalog();
+    }
+    const help: Record<string, string> = {};
+    for (const item of granted.filter((entry) => /\.(read|full)$/.test(entry))) {
+      const service = item.replace(/\.(read|full)$/, "");
+      const response = await fetch(`${speaker.url}/help/${service}`, { headers: { authorization: `Bearer ${speaker.token}` }, signal });
+      if (response.ok) help[service] = (await response.text()).trim();
+    }
+    let text = asMessage ? decisionMessage(decision, want, catalog, help) : reply(decision, catalog, help);
+    const late = applying(catalog);
+    if (late.length) text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
+    return { text, decision };
+  };
+  // One long-poll at a time per request; re-posting the same items joins the request speaker already holds.
+  const watch = async (key: string) => {
+    if (watching.has(key)) return;
+    watching.add(key);
+    const entry = pending[key]!;
+    for (;;) {
+      try {
+        const decision = (await call(speaker, "POST", "requests", entry.params, undefined, 60)) as Decision;
+        if (decision.status === "pending") continue;
+        const { text } = await settle(decision, entry.params.want, undefined, true);
+        delete pending[key];
+        savePending();
+        watching.delete(key);
+        return tell(text);
+      } catch (error) {
+        if (error instanceof SpeakerError && error.status === 400) {
+          delete pending[key];
+          savePending();
+          watching.delete(key);
+          return tell(`[speaker] Request for ${entry.params.want.join(", ")} was refused: ${error.body.message ?? error.message}`);
+        }
+        await sleep(RETRY_MS);
+      }
+    }
+  };
   pi.on("session_start", (_event, ctx) => {
     report(false);
+    for (const key of Object.keys(pending)) void watch(key);
     // The owner's one-shot prompt starts a fresh session once; a restart resumes without replaying it.
-    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) pi.sendUserMessage(readFileSync(PROMPT, "utf8"));
+    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) tell(readFileSync(PROMPT, "utf8"));
     // After a restart that changed ext:/mcp: grants, tell the agent once what loaded, what did not and what is gone.
     else if (existsSync(CHANGE)) {
       const change = JSON.parse(readFileSync(CHANGE, "utf8")) as GrantChange;
       if (change.id > (existsSync(REPORTED) ? Number(readFileSync(REPORTED, "utf8")) : 0)) {
         mkdirSync("/work/.speaker", { recursive: true });
         writeFileSync(REPORTED, String(change.id));
-        pi.sendUserMessage(changeMessage(change, pi.getActiveTools()));
+        tell(changeMessage(change, pi.getActiveTools()));
       }
     }
   });
@@ -105,42 +193,23 @@ export default async function (pi: ExtensionAPI) {
       async execute(_id, params, signal) {
         if (catalogFailed) throw new Error(catalogText);
         const done = (text: string, details: object = {}) => ({ content: [{ type: "text" as const, text }], details });
-        // Re-posting the same items joins the pending request, so each hold is at most a minute.
-        const deadline = Date.now() + WAIT_MS;
-        let decision: Decision;
+        const key = pendingKey(params.want);
+        if (pending[key]) return done(alreadyPendingText(pending[key].id), pending[key]);
+        let decision: Decision & { id?: number | string };
         try {
-          decision = (await call(speaker, "POST", "requests", params, signal, 60)) as Decision;
-          while (decision.status === "pending" && Date.now() < deadline) decision = (await call(speaker, "POST", "requests", params, signal, 60)) as Decision;
+          decision = (await call(speaker, "POST", "requests", params, signal, FILE_WAIT_S)) as typeof decision;
         } catch (error) {
           if (error instanceof SpeakerError && error.status === 400) return done(`Not requested: ${error.body.message ?? error.message}`);
           throw error;
         }
-        if (decision.status === "pending") return done(UNDECIDED, decision);
-        // Speaker lists a granted item under `applying` until the sandbox reports it in force (ext: and mcp: stay
-        // there until Pi restarts), so both count as granted here.
-        decision = { ...decision, granted: [...(decision.granted ?? []), ...(decision.applying ?? [])] };
-        const granted = decision.granted ?? [];
-        // Sites, secrets, folders and services reach the VM within seconds; wait so the reply is true when read.
-        // ext: and mcp: items only take effect after a Pi restart, which cannot happen during this call.
-        const waitFor = granted.filter((item) => !needsRestart(item));
-        const fetchCatalog = async () => (await call(speaker, "GET", "catalog", undefined, signal)) as CatalogView;
-        const applying = (view: CatalogView) =>
-          (view.grants ?? []).filter((grant) => grant.applying && waitFor.includes(grant.item)).map((grant) => grant.item);
-        let catalog = await fetchCatalog();
-        for (const start = Date.now(); applying(catalog).length && Date.now() - start < APPLY_MAX_MS;) {
-          await sleep(APPLY_POLL_MS);
-          catalog = await fetchCatalog();
+        if (decision.status === "pending") {
+          pending[key] = { id: decision.id ?? "(no id)", params };
+          savePending();
+          void watch(key);
+          return done(filedText(pending[key].id), decision);
         }
-        const help: Record<string, string> = {};
-        for (const item of granted.filter((entry) => /\.(read|full)$/.test(entry))) {
-          const service = item.replace(/\.(read|full)$/, "");
-          const response = await fetch(`${speaker.url}/help/${service}`, { headers: { authorization: `Bearer ${speaker.token}` }, signal });
-          if (response.ok) help[service] = (await response.text()).trim();
-        }
-        let text = reply(decision, catalog, help);
-        const late = applying(catalog);
-        if (late.length) text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
-        return done(text, decision);
+        const settled = await settle(decision, params.want, signal, false);
+        return done(settled.text, settled.decision);
       },
     }),
   );
