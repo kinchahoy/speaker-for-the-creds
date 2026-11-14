@@ -1,15 +1,15 @@
 <!-- author: ai -->
 
-# Plan: speaker approvals and sandboxed agents inside Herdr
+# Plan: a smaller speaker-for-the-creds, with Herdr as a place to work
 
 <sub>AI-written, 2026-11-14. Nothing here is built yet. Line counts are estimates.</sub>
 
-**Priority: fewest lines of code across the whole project.** That rules out a second full frontend. The web `/admin` stays the one complete UI; Herdr gets the smallest thing that works.
+## Intent
 
-Goals:
-
-1. See each bottle task as an agent in the Herdr app and type to it there.
-2. Know in Herdr when a card is waiting, and later approve it there.
+1. **Make the project smaller before making it bigger.** Fewest lines of custom code is the first priority: remove what nothing uses, and let well-kept libraries do what custom code does today. No feature you use is lost; where a feature is cool but heavy, it is simplified, not removed.
+2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle task shows up as an agent in the Herdr app that you can talk to, and Herdr tells you when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
+3. **Keep it easy for others to deploy.** One laptop or several boxes, minimal setup on remote machines, latest dependencies by default with a tested lockfile available.
+4. **Security boundaries do not move.** No cut or library swap weakens grants, token binding, secret handling, audit logging or share containment.
 
 ## What decides the design
 
