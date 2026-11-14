@@ -8,7 +8,7 @@ import { WebSocketServer } from 'ws'
 import { z } from 'zod'
 import { adminApp } from './admin.ts'
 import { agentApi } from './api.ts'
-import { createCore, type Env, readConfig } from './core.ts'
+import { agentError, createCore, type Env, readConfig } from './core.ts'
 import { IllegalTransition } from './lifecycle.ts'
 
 export { readConfig }
@@ -21,9 +21,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     if (error instanceof HTTPException) {
       // Agent routes answer in JSON; admin pages keep their plain-text messages.
       if (error.res || c.req.path.startsWith('/admin')) return error.getResponse()
-      return c.json({ error: 'invalid', message: error.message }, error.status)
+      return agentError(c, error.status, 'invalid', error.message)
     }
-    if (error instanceof IllegalTransition) return c.json({ error: 'conflict', message: error.message }, 409)
+    if (error instanceof IllegalTransition) return agentError(c, 409, 'conflict', error.message)
     // A malformed body from an authenticated agent counts as refused on the owner's page.
     const caller = c.get('caller')
     if ((error instanceof z.ZodError || error instanceof SyntaxError) && caller?.role === 'agent')
@@ -33,20 +33,20 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
         error instanceof z.ZodError ? z.prettifyError(error).replaceAll('\n', ' ') : 'Body is not valid JSON',
       )
     if (error instanceof z.ZodError)
-      return c.json(
-        {
-          error: 'invalid',
-          fields: error.issues.map((issue) => ({
-            path: issue.path.join('.'),
-            message: issue.message,
-            ...('values' in issue ? { accepted: issue.values } : {}),
-          })),
-        },
-        400,
-      )
-    if (error instanceof SyntaxError) return c.json({ error: 'invalid', message: 'Body is not valid JSON' }, 400)
+      return agentError(c, 400, 'invalid', 'The request body is invalid', {
+        next: 'Fix the listed fields and repeat the call',
+        fields: error.issues.map((issue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+          ...('values' in issue ? { accepted: issue.values } : {}),
+        })),
+      })
+    if (error instanceof SyntaxError)
+      return agentError(c, 400, 'invalid', 'Body is not valid JSON', { next: 'Send a JSON body' })
     core.audit('request_failed', { type: error.name, message: error.message })
-    return c.json({ error: 'internal_error' }, 500)
+    return agentError(c, 500, 'internal_error', 'Speaker failed on this call', {
+      tell_user: 'Speaker hit an internal error; the owner can find the cause in its log',
+    })
   })
   // Clock-driven transitions apply before every request.
   app.use('*', async (_c, next) => {

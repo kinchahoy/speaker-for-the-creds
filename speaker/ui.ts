@@ -11,7 +11,7 @@ type Owned = Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>
 export type McpSummary = Record<string, { read: number; write: number; unannotated: number }>
 export type Setup = {
   services: Record<string, Service>
-  secrets: Map<string, string>
+  secrets: Record<string, string>
   owned: Owned
   groups: Record<string, Group>
   ssh: SshSetup
@@ -398,7 +398,7 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
 }
 
 // --- Active: agents with live grants/sessions first, idle agents below, and approved sandbox hosts ---
-const chips = { active: '', granted: 'granted, not yet applied', waiting: 'waiting for sandbox host' }
+const chips = { enforced: '', granted: 'granted, not yet applied', waiting: 'waiting for sandbox host' }
 const uses = (n: number, query: string) =>
   n ? html`<a href="/admin/log?${query}">${plural(n, 'use', 'uses')}</a>` : 'unused'
 // One line of counts: what the agent asked, what was decided, and what speaker turned away (warned when non-zero).
@@ -456,8 +456,8 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
   const tools = (id: string) =>
     html`<div class="actions">${error === 'tools' ? html`<p class="warn" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<small>${mcp[id] ? `Tools: ${mcp[id].read} read · ${mcp[id].write} write${mcp[id].unannotated ? ` (${mcp[id].unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</small>${button('/admin/services/tools', hidden('id', id), 'Refresh tools')}</div>`
   const serviceRows = Object.entries(services).map(([id, s]) => {
-    const keyed = s.auth.type === 'none' || secrets.get(id) !== undefined
-    return html`<li class="row"><div class="row-main">${mark('service')}<div><strong>${id}</strong> <code>${s.baseUrl}</code><br><small><span class="chip ${keyed ? 'good' : 'bad'}">${s.auth.type === 'none' ? 'No credential' : `Credential: ${secrets.get(id) !== undefined ? 'configured' : 'missing'}`}</span> · read ${s.read} · write ${s.write} · notes ${s.notes ? 'yes' : 'no'}${s.mcp ? ' · MCP' : ''}${s.auth.type === 'path' ? ' · path secret' : ''}</small></div></div><div class="actions"><a class="action-btn" href="/admin?section=services&amp;service=${encodeURIComponent(id)}">Edit</a><a class="action-btn" href="/admin/log?service=${encodeURIComponent(id)}">Log</a>${button('/admin/services/delete', hidden('id', id), 'Delete', `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></li>`
+    const keyed = s.auth.type === 'none' || secrets[id] !== undefined
+    return html`<li class="row"><div class="row-main">${mark('service')}<div><strong>${id}</strong> <code>${s.baseUrl}</code><br><small><span class="chip ${keyed ? 'good' : 'bad'}">${s.auth.type === 'none' ? 'No credential' : `Credential: ${secrets[id] !== undefined ? 'configured' : 'missing'}`}</span> · read ${s.read} · write ${s.write} · notes ${s.notes ? 'yes' : 'no'}${s.mcp ? ' · MCP' : ''}${s.auth.type === 'path' ? ' · path secret' : ''}</small></div></div><div class="actions"><a class="action-btn" href="/admin?section=services&amp;service=${encodeURIComponent(id)}">Edit</a><a class="action-btn" href="/admin/log?service=${encodeURIComponent(id)}">Log</a>${button('/admin/services/delete', hidden('id', id), 'Delete', `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`)}</div></li>`
   })
   const secretRows = Object.entries(owned).map(
     ([name, { hosts, env }]) =>

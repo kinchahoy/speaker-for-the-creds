@@ -86,10 +86,9 @@ All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/sto
 
 - `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
 - In scripts, form posts to `/admin` (sign-in, approvals) need an `Origin` header matching the URL, such as `Origin: http://192.168.1.10:3000`. A successful sign-in answers `303` with the session cookie to send on later posts. Do not retry a failed sign-in blindly: after 5 failures speaker refuses for 15 minutes.
-- When a store exists, speaker starts locked. Agent and sandbox-host calls answer `503` `locked` with a `tell_user` line. `/admin` shows only sign-in. If ntfy is set, one push asks you to sign in. Signing in unlocks.
+- One lock rule: speaker serves agents, sandbox hosts, the secrets proxy and the proxy certificate only after you have set the owner password and signed in. Until then (first run, or after every restart) agent and sandbox-host calls answer `503` `locked` with a `next` and a `tell_user` line, and the proxy refuses. `/admin` shows only sign-in or the first-run password page. If ntfy is set, one push after a restart asks you to sign in. Signing in unlocks.
 - Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.
-- Upgrading: when you set the password, speaker imports plaintext key files from earlier versions (`DATA_DIR/secrets/`) into the store and deletes them.
 
 <!-- author: ai -->
 
@@ -203,7 +202,7 @@ Agents run commands on your hosts and use your folders through a jump server ins
 Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker serves it without authentication so a new agent can bootstrap. It is one document: a top part that fits one screen (the call form, how to wait, where things are), then sections for setup (sh and PowerShell, a token kept in a curl header file, nothing to install), what an agent can ask for, asking, folders and SSH, secrets, remote MCP servers and errors. `/_speaker/help` and `/` serve the same document, also without a token. Services, rules, and groups stay behind auth, at `GET /_speaker/catalog`, which also lists every secret by name and state (never folders or SSH targets). Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
 {.ai}
 
-- Every agent error carries a `next` step. Where an approval is needed, it also carries a `tell_user` line with the approval link.
+- Every agent error is JSON with `error` and a `message`, and carries a `next` step where one exists. Where an approval is needed, it also carries a `tell_user` line with the approval link.
 - An agent works only from the address it enrolled from, and a sandbox host only from the address it registered from: the socket address. Behind a reverse proxy, set `TRUSTED_PROXY` to the proxy's IP. Speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from every other sender.
 - Only you extend access. Extend on a grant adds the span you originally granted.
 - If you deny the same item to the same agent three times within 15 minutes, speaker answers further requests as denied without asking you, until 15 minutes after the third denial.

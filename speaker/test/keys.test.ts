@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -14,6 +14,8 @@ import { ownerPassword, sessionCookie, setOwnerPassword } from './owner.ts'
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const locked = {
   error: 'locked',
+  message: 'Speaker is locked',
+  next: 'Wait until the owner has signed in, then repeat the call',
   tell_user: 'Speaker restarted: sign in at http://localhost/admin to unlock',
 }
 
@@ -147,6 +149,26 @@ test('agents and sandbox hosts get `locked` until the owner signs in, and a push
   assert.equal((await restarted.enroll('tok')).status, 201)
 })
 
+test('until the owner has set a password, agent, host and proxy-certificate calls are refused', async (t) => {
+  const fresh = await start(await dataDir(t))
+  for (const [path, init] of [
+    ['/_speaker/agents', { method: 'POST', body: '{}' }],
+    ['/_speaker/hosts', { method: 'POST', body: '{}' }],
+    ['/_speaker/catalog', { headers: { authorization: 'Bearer anything' } }],
+  ] as const) {
+    const response = await fresh.call(path, init)
+    assert.equal(response.status, 503, path)
+    assert.deepEqual(await response.json(), {
+      error: 'locked',
+      message: 'Speaker has no owner password yet',
+      next: 'Wait until the owner has signed in, then repeat the call',
+      tell_user: 'The owner sets one at http://localhost/admin',
+    })
+  }
+  await setOwnerPassword(fresh.call)
+  assert.equal((await fresh.enroll('tok')).status, 201)
+})
+
 test('keys and secrets are stored only encrypted, and come back after sign-in', async (t) => {
   const dir = await dataDir(t)
   const first = await start(dir)
@@ -228,47 +250,4 @@ test('changing the password re-wraps the keys: the old password stops working, t
     await restarted.call('/admin?section=services', { headers: { cookie: sessionCookie(back) } })
   ).text()
   assert.match(page, /Credential: configured/)
-})
-
-test('plaintext key files are imported into the store when the owner sets the password, then deleted', async (t) => {
-  const dir = await dataDir(t)
-  const seen: (string | undefined)[] = []
-  const upstream = createServer((req, res) => {
-    seen.push(req.headers.authorization)
-    res.end('{}')
-  }).listen(0, '127.0.0.1')
-  await once(upstream, 'listening')
-  t.after(() => upstream.close())
-  const notes = {
-    baseUrl: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/base`,
-    auth: { type: 'bearer', secret: 'notes' },
-  }
-  await writeFile(join(dir, 'services.json'), JSON.stringify({ notes }))
-  await writeFile(join(dir, '.starter-services-imported'), 'done')
-  await mkdir(join(dir, 'secrets'))
-  await writeFile(join(dir, 'secrets', 'notes'), 'legacy-plaintext-key')
-
-  const before = await start(dir)
-  assert.match(await (await before.call('/admin')).text(), /Set the owner password/)
-  await setOwnerPassword(before.call)
-  assert.ok(!(await readdir(dir)).includes('secrets'))
-  for (const { name, text } of await filesOf(dir)) assert.ok(!text.includes('legacy-plaintext-key'), name)
-
-  // The imported key still reaches the upstream, after a restart and a sign-in.
-  const restarted = await start(dir)
-  const cookie = { cookie: sessionCookie(await restarted.signIn()) }
-  const enrolled = await restarted.enroll('tok', { want: ['notes.read'], reason: 'read notes' })
-  const { request } = (await enrolled.json()) as { request: { id: string } }
-  assert.equal(
-    (
-      await restarted.form(
-        `/admin/requests/${request.id}/approve`,
-        { duration: '30m', items: 'notes.read', shown: 'notes.read' },
-        cookie,
-      )
-    ).status,
-    303,
-  )
-  assert.equal((await restarted.call('/notes/x', { headers: { authorization: 'Bearer tok' } })).status, 200)
-  assert.deepEqual(seen, ['Bearer legacy-plaintext-key'])
 })

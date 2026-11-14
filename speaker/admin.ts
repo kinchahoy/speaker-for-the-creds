@@ -12,6 +12,7 @@ import {
   groupDescriptionSchema,
   groupItemsSchema,
   idSchema,
+  itemsWhere,
   newPasswordSchema,
   ownerSecretSchema,
   serviceSchema,
@@ -25,19 +26,17 @@ export function adminApp(core: Core) {
   const {
     config,
     services,
-    secrets,
     groups,
     hosts,
-    agents,
+    enrolled,
     grants,
     requests,
-    sockets,
+    connections,
     sessions,
     readLog,
     mcpTools,
     jump,
     unlocked,
-    persistServiceKeys,
     createOwnerStore,
     signIn,
     checkPassword,
@@ -127,7 +126,7 @@ export function adminApp(core: Core) {
   const authPage = (c: Context, error?: string, status: 200 | 400 | 401 = 200) => {
     // Plain HTTP from another machine sends the password in clear.
     const exposed = !baseOf(c).startsWith('https:') && !/^(127\.|::1$)/.test(sourceOf(c))
-    return c.html(core.hasStore ? signInPage(exposed, error) : setPasswordPage(exposed, error), status)
+    return c.html(core.vault.state !== 'unset' ? signInPage(exposed, error) : setPasswordPage(exposed, error), status)
   }
   const startSession = (c: Context) => {
     const id = rid()
@@ -149,7 +148,7 @@ export function adminApp(core: Core) {
     return startSession(c)
   })
   admin.post('/signin', signInLimit, async (c) => {
-    if (!core.hasStore) return c.redirect('/admin', 303)
+    if (core.vault.state === 'unset') return c.redirect('/admin', 303)
     const { password } = z.object({ password: z.string() }).parse(await c.req.parseBody())
     try {
       await signIn(password)
@@ -221,7 +220,7 @@ export function adminApp(core: Core) {
       const ssh = jump.setup(c.req.query('sshError'))
       const data = {
         services,
-        secrets,
+        secrets: unlocked().vault.services,
         owned,
         groups,
         ssh,
@@ -275,10 +274,13 @@ export function adminApp(core: Core) {
       if (/[\r\n]/.test(input.secret)) throw new HTTPException(400, { message: 'Credential must be a single line' })
       if (input.authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(input.secret))
         throw new HTTPException(400, { message: 'A path credential must be one URL path segment' })
-      secrets.set(input.id, input.secret)
-      await persistServiceKeys()
+      unlocked().vault.services[input.id] = input.secret
+      await unlocked().save()
     }
-    if (input.authType === 'none' && secrets.delete(input.id)) await persistServiceKeys()
+    if (input.authType === 'none' && Object.hasOwn(unlocked().vault.services, input.id)) {
+      delete unlocked().vault.services[input.id]
+      await unlocked().save()
+    }
     services[input.id] = service
     mcpTools.delete(input.id)
     await saveServices()
@@ -299,16 +301,16 @@ export function adminApp(core: Core) {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
     if (!Object.hasOwn(services, id)) throw new HTTPException(404, { message: 'Unknown service' })
     delete services[id]
-    secrets.delete(id)
+    delete unlocked().vault.services[id]
     await saveServices()
-    await persistServiceKeys()
+    await unlocked().save()
     revokeGrants((grant) => grant.item.startsWith(`${id}.`))
     for (const [key, request] of requests)
-      if (request.items.some((item) => item.startsWith(`${id}.`))) requests.delete(key)
+      if (itemsWhere(request, 'pending').some((item) => item.startsWith(`${id}.`))) requests.delete(key)
     audit('service_deleted', { service: id })
     return c.redirect('/admin?section=services', 303)
   })
-  // Secrets agents may use without seeing them (inserted by the secrets proxy of a later phase). A blank value keeps
+  // Secrets agents may use without seeing them (inserted by the secrets proxy). A blank value keeps
   // the stored one.
   admin.post('/secrets/save', async (c) => {
     const input = ownerSecretSchema.parse(await fields(c))
@@ -390,8 +392,8 @@ export function adminApp(core: Core) {
   // Removing a host (pending or approved) also ends its agents; its tokens stop working.
   admin.post('/hosts/:id/remove', async (c) => {
     const host = hostById(c.req.param('id'))
-    for (const agent of [...agents.values()]) if (agent.host === host.id) endAgent(agent.id)
-    sockets.get(host.id)?.close(1008, 'removed')
+    for (const agent of enrolled()) if (agent.host === host.id) endAgent(agent.id)
+    connections.get(host.id)?.ws.close(1008, 'removed')
     hosts.delete(host.id)
     audit('host_removed', { host: host.id })
     await saveHosts()

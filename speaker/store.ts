@@ -17,7 +17,7 @@ export type Vault = {
   services: Record<string, string>
   // Secrets agents may use without seeing them, by name: the hosts they may be sent to and the variable the agent sees.
   secrets: Record<string, OwnerSecret>
-  // Speaker's SSH key for its targets (phase 4).
+  // Speaker's SSH key for its targets.
   ssh: { private: string; public: string }
   // Certificate authority of the secrets proxy (PEM), made at first need.
   ca?: { cert: string; key: string }

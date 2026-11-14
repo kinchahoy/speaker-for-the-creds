@@ -992,15 +992,3 @@ test('a sandbox host reports its catalog: unknown ext and mcp ids are refused, a
   for (let i = 0; i < 100 && Object.keys((await catalog()).extensions).length; i++) await sleep(20)
   assert.deepEqual((await catalog()).extensions, {})
 })
-
-test('/_speaker/me answers 404 and points to the catalog', async (t) => {
-  const f = await setup(t)
-  await enroll(f, 'tok')
-  const response = await f.call('/_speaker/me', { headers: bearer('tok') })
-  assert.equal(response.status, 404)
-  assert.deepEqual(await response.json(), {
-    error: 'invalid',
-    message: '/_speaker/me is now /_speaker/catalog',
-    next: 'GET /_speaker/catalog',
-  })
-})

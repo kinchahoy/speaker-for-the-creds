@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import {
-  grantStates,
-  grantTable,
   hostStates,
   hostTable,
   IllegalTransition,
@@ -22,7 +20,6 @@ import { setOwnerPassword } from './owner.ts'
 test('every table target is a known state and terminal states accept no event', () => {
   for (const [states, table] of [
     [requestStates, requestTable],
-    [grantStates, grantTable],
     [hostStates, hostTable],
     [['connecting', 'open', 'closed'], sessionTable],
   ] as const) {
@@ -31,14 +28,11 @@ test('every table target is a known state and terminal states accept no event', 
       for (const to of Object.values(moves)) assert.ok((states as readonly string[]).includes(to as string))
   }
   for (const state of ['decided', 'expired'] as const) assert.deepEqual(requestTable[state], {})
-  for (const state of ['expired', 'revoked'] as const) assert.deepEqual(grantTable[state], {})
 })
 
 test('transitions: legal moves land on the table state, illegal moves throw', () => {
   assert.equal(transition('request', requestTable, 'pending', 'decide'), 'decided')
   assert.equal(transition('request', requestTable, 'pending', 'expire'), 'expired')
-  assert.equal(transition('grant', grantTable, 'active', 'revoke'), 'revoked')
-  assert.equal(transition('grant', grantTable, 'active', 'expire'), 'expired')
   assert.equal(transition('host', hostTable, 'pending', 'approve'), 'approved')
   const illegal: [(typeof requestStates)[number], RequestEvent][] = [
     ['decided', 'decide'],
@@ -47,7 +41,6 @@ test('transitions: legal moves land on the table state, illegal moves throw', ()
   ]
   for (const [from, event] of illegal)
     assert.throws(() => transition('request', requestTable, from, event), IllegalTransition, `${from} + ${event}`)
-  assert.throws(() => transition('grant', grantTable, 'revoked', 'expire'), IllegalTransition)
   assert.throws(() => transition('host', hostTable, 'approved', 'approve'), IllegalTransition)
 })
 
