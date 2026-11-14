@@ -18,7 +18,8 @@ export const FIXED_GUIDANCE = [
   "Put every item you need in one call. The owner approves the items together in one decision, so several calls make the owner decide several times.",
   "If a website returns 403, ask for `site:<that hostname>` and retry after it is granted.",
   "Folder and SSH target names come from your task or from the owner. Do not guess them.",
-  "The call waits for the decision, up to 30 minutes, then replies with one line per item saying what to do next. Do what the line says.",
+  "The call does not wait. If the owner has not decided yet it replies at once that the request is filed. Keep working on anything that does not need it, and do not ask again for the same items.",
+  "When the owner decides, you get a message starting `[speaker]` with one line per item saying what to do next. Do what the line says. A request can stay open for hours.",
 ].join("\n");
 
 export const toolDescription = (catalogText: string) => `${FIXED_GUIDANCE}\n\nWhat you can ask for right now:\n${catalogText}`;
@@ -89,9 +90,8 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
   if (needsRestart(item)) {
     const tools = piToolNames(item, catalog).join(", ") || "its tools";
     return (
-      `${head}. Its tools (${tools}) are not loaded yet. They load when Pi restarts, and Pi restarts only after you stop. ` +
-      "Reply with one line saying you are waiting for these tools, and make no more tool calls. " +
-      "Within a few seconds you will get a message listing the new tools. Continue the task from there."
+      `${head}. Its tools (${tools}) load the next time you pause; you will get a message when they are available. ` +
+      "Keep working on anything that does not need them."
     );
   }
   if (/\.(read|full)$/.test(item)) {
@@ -107,11 +107,25 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
 export const deniedLine = (item: string) =>
   `Denied: ${item}. Do not ask for it again in this task. Do the work without it. If you can't, write what you could not do, and why, in /output/NOTES.md.`;
 
-export const UNDECIDED =
-  "The owner has not decided after 30 minutes. The request stays open. Work on anything that doesn't need it. To check again later, call request_capability with the same items.";
+/** Items in a request, as a stable key: the same set asked in any order is the same request. */
+export const pendingKey = (want: string[]) => [...new Set(want)].sort().join(" ");
+
+/** What the tool answers when speaker has not decided yet. */
+export const filedText = (id: number | string) =>
+  `Filed as request ${id}. Not decided yet. Keep working on anything that doesn't need it; you will get a message starting \`[speaker]\` when it is decided. Don't ask again for the same items.`;
+
+/** What the tool answers when these items are already waiting for the owner. */
+export const alreadyPendingText = (id: number | string) =>
+  `Already pending as request ${id}. Not decided yet. Keep working on anything that doesn't need it; you will get a message starting \`[speaker]\` when it is decided. Don't ask again for the same items.`;
 
 export const reply = (decision: Decision, catalog: CatalogView, help: Record<string, string> = {}) =>
   [
     ...(decision.granted ?? []).map((item) => grantedLine(item, catalog, decision.expiresAt, help[item.replace(/\.(read|full)$/, "")])),
     ...(decision.denied ?? []).map(deniedLine),
   ].join("\n") || "The owner answered but granted and denied nothing. Work without it.";
+
+/** The one message the agent gets when a filed request is decided (`want` is what it asked for). */
+export const decisionMessage = (decision: Decision, want: string[], catalog: CatalogView, help: Record<string, string> = {}) =>
+  decision.status === "expired"
+    ? `[speaker] The owner did not decide on ${want.join(", ")}. Ask again only if you still need it.`
+    : `[speaker] ${reply(decision, catalog, help)}`;

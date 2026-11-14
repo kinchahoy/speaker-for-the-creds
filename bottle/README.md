@@ -232,6 +232,10 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
 - On every connection, bottle reports the names in `shareRoots` to speaker, each as not mountable, because folders come over SSH. For `folder:` items, speaker uses this report, not the kinds the host registered with, to choose between a VM mount (reported mountable) and delivery over SSH (otherwise). It sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
 
+### Asking for access without waiting
+
+`request_capability` never holds the agent. It files the request with speaker and answers at once: with the decision if there already is one (auto-denied, invalid, or granted and in force), otherwise "Filed as request <id>. Not decided yet." and the agent keeps working. A background loop in the guest extension long-polls each pending request, one at a time; when the owner decides, it waits for items that apply at once to be in force and sends the agent one message starting `[speaker]` (steered into the current run, or a new turn if Pi is idle). Repeat calls for the same items answer "already pending". Pending requests live in `/work/.speaker/pending.json`, so a Pi restart re-arms them and a decision that landed meanwhile is delivered on start. `ext:` and `mcp:` grants no longer ask the agent to stop: bottle restarts Pi at its next idle, and the existing "now available / did not load / removed" message follows.
+
 <!-- author: ai -->
 
 ## Secrets and speaker's proxy
