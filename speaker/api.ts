@@ -87,17 +87,23 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     await next()
   }
   const enrollNext = 'Enroll again with a new token: read "Set up" in GET /_speaker/help'
-  // Resolves a bearer token to an approved sandbox host or an agent.
+  const revokedReply = (c: Context<Env>) =>
+    c.json({ error: 'denied', next: 'Stop: the owner revoked this agent. Tell the user.' }, 403)
+  // Resolves a bearer token to an approved sandbox host or an agent. Every token, host or agent, only works from the
+  // address it registered or enrolled from.
   const auth: MiddlewareHandler<Env> = async (c, next) => {
     const token = /^Bearer +(\S+) *$/i.exec(c.req.header('authorization') ?? '')?.[1]
     if (!token) return unauthorized(c, 'enroll', { next: `Send Authorization: Bearer <token>. ${enrollNext}` })
     const digest = hash(token)
-    if (revoked.has(digest))
-      return c.json({ error: 'denied', next: 'Stop: the owner revoked this agent. Tell the user.' }, 403)
+    if (revoked.has(digest)) return revokedReply(c)
     const byToken = <T extends { tokenHash: string }>(items: Map<string, T>) =>
       [...items.values()].find((item) => same(item.tokenHash, digest))
     const host = byToken(hosts),
       agent = byToken(agents)
+    if (host && host.source !== sourceOf(c))
+      return unauthorized(c, 'register', {
+        next: 'This sandbox host token was registered from another address. Register again: bottle register',
+      })
     if (host?.status === 'approved') c.set('caller', { role: 'host', host })
     else if (host) return unauthorized(c, 'approval_required', { tell_user: tellUser(c, `host-${host.id}`) })
     else if (agent && agent.source === sourceOf(c)) {
@@ -317,6 +323,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   )
   app.post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
     const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
+    // A revoked token stays dead; asking again means a new token, which reaches the owner as a new agent.
+    if (revoked.has(tokenHash)) return revokedReply(c)
     const source = sourceOf(c)
     let agent = [...agents.values()].find((a) => same(a.tokenHash, tokenHash))
     if (agent && agent.source !== source)
@@ -349,7 +357,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   })
   app.post('/_speaker/hosts', locked, enrollmentLimit, async (c) => {
     const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
-    const host: Host = { id: rid(), ...input, status: 'pending' }
+    const host: Host = { id: rid(), ...input, status: 'pending', source: sourceOf(c) }
     hosts.set(host.id, host)
     await saveHosts()
     audit('host_registered', { host: host.id, name: host.name })

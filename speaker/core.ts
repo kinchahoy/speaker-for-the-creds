@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Context } from 'hono'
@@ -94,7 +95,7 @@ export const serviceSchema = z.object({
 export const itemPatterns = {
   service: /^[a-zA-Z0-9_-]+\.(read|full)$/,
   site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
-  secret: /^secret:[A-Za-z0-9_]+(@[^@\s]+)?$/,
+  secret: /^secret:[A-Za-z0-9_]+$/,
   ssh: /^ssh:[a-zA-Z0-9_-]+$/,
   folder: /^folder:[a-zA-Z0-9_-]+(:rw)?$/,
   mcp: /^mcp:[a-zA-Z0-9_-]+$/,
@@ -144,6 +145,9 @@ export const hostSchema = z.object({
   kinds: z.array(z.enum(hostKinds)).max(hostKinds.length),
   tokenHash: hashSchema,
   status: z.enum(hostStates),
+  // The address it registered from: like an agent token, a host token only works from there. A host saved before
+  // this field matches no address and is told to register again.
+  source: z.string().default(''),
 })
 export const reasonSchema = z.string().trim().min(1).max(500)
 export const identitySchema = z.object({
@@ -404,8 +408,15 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   // What each connected sandbox host can start inside its VMs: MCP servers and Pi extensions (with the sites they need).
   const hostCatalog = new Map<string, HostCatalog>()
   const strikes = new Map<string, number[]>()
-  // The log: every event goes to standard output and into this buffer, which the admin Log page reads.
-  const logged: LogEntry[] = []
+  // The log: every event goes to standard output and is appended to audit.jsonl, which the admin Log page reads, so
+  // the record outlives a restart. It is never trimmed; delete or rotate the file by hand.
+  const auditFile = file('audit.jsonl')
+  const readLog = async (): Promise<LogEntry[]> =>
+    ((await optionalFile(auditFile)) ?? '')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as LogEntry)
+      .reverse()
   const audit = (event: string, fields: Record<string, unknown> = {}) => {
     const who = typeof fields.agent === 'string' ? agents.get(fields.agent) : undefined
     const entry: LogEntry = {
@@ -414,11 +425,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       ...fields,
       ...(who ? { label: who.label, agentName: who.agent } : {}),
     }
-    console.log(JSON.stringify(entry))
+    const line = JSON.stringify(entry)
+    console.log(line)
+    appendFileSync(auditFile, `${line}\n`, { mode: 0o600 })
     // SSH, folder and secrets-proxy refusals are logged by their own modules; each names the agent it turned away.
     if (['ssh_refused', 'secret_proxy_refused'].includes(event) && who)
       tally(who, 'blocked', String(fields.why ?? fields.reason))
-    if (logged.unshift(entry) > 500) logged.pop()
   }
   const tally = (agent: Agent, field: 'refused' | 'blocked', message: string) => {
     agent.counts[field]++
@@ -984,7 +996,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     hostShares,
     hostCatalog,
     sessions,
-    logged,
+    readLog,
     mcpTools,
     jump,
     proxy,

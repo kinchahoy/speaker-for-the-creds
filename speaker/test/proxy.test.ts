@@ -814,6 +814,31 @@ test('revoking an agent ends its grants, and its token then answers denied rathe
   assert.equal(after.status, 403)
   const body = (await after.json()) as { error: string; next: string }
   assert.deepEqual([body.error, body.next], ['denied', 'Stop: the owner revoked this agent. Tell the user.'])
+  // The revoked token cannot enroll again (and so cannot reach the owner with new cards); a new token can.
+  assert.equal((await enroll(f, 'tok')).status, 403)
+  assert.equal((await enroll(f, 'tok2')).status, 201)
+})
+
+test('a sandbox host token works only from the address it registered from', async (t) => {
+  const f = await setup(t, {}, { TRUSTED_PROXY: '127.0.0.1' })
+  const from = (address: string) => ({ 'x-forwarded-for': address })
+  const created = await f.call('/_speaker/hosts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...from('100.64.0.7') },
+    body: JSON.stringify({ name: 'test', kinds: ['site'], tokenHash: sha('host-token') }),
+  })
+  const { id } = (await created.json()) as { id: string }
+  assert.equal((await f.ownerForm(`/hosts/${id}/approve`, {})).status, 303)
+  const createAgent = (address: string) =>
+    f.call('/_speaker/hosts/agents', {
+      method: 'POST',
+      headers: { ...bearer('host-token'), ...from(address) },
+      body: JSON.stringify({ label: 'pi', agent: 'Test LLM · Pi on test' }),
+    })
+  const stolen = await createAgent('6.6.6.6')
+  assert.equal(stolen.status, 401)
+  assert.equal(((await stolen.json()) as { error: string }).error, 'register')
+  assert.equal((await createAgent('100.64.0.7')).status, 201)
 })
 
 test('an agent token works only from the address it enrolled from, and X-Forwarded-For is ignored from strangers', async (t) => {

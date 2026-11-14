@@ -175,7 +175,7 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 - Bring your own proxy: it forwards to speaker and serves HTTPS. Raise its timeout above 120 s, because speaker holds requests for up to 120 s. The sample binds loopback, so a containerized proxy needs a shared Docker network or another explicit route. The public example configures no proxy or external login service.
 - Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching `PUBLIC_URL` for form submissions. Speaker blocks cross-origin browser form and JSON writes. Do not disable CSRF checks or add wildcard origins.
-- Run one replica. `/data` persists services, groups, sandbox hosts, and the encrypted store. Agents, grants, and requests live in memory. A restart ends them, and agents enroll and ask again.
+- Run one replica. `/data` persists services, groups, sandbox hosts, the encrypted store, and the log (`audit.jsonl`, append-only; rotate or delete it by hand). Agents, grants, and requests live in memory. A restart ends them, and agents enroll and ask again.
 - Keep the data volume outside the agents' filesystem access. Keys are encrypted at rest, so a copied volume or backup reveals none. Keep the owner password safe: without it, nobody can read the keys, and you re-enter every key.
 - The admin page uses speaker's own sign-in (a session cookie). Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their tokens.
 
@@ -204,7 +204,7 @@ Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker ser
 {.ai}
 
 - Every agent error carries a `next` step. Where an approval is needed, it also carries a `tell_user` line with the approval link.
-- An agent works only from the address it enrolled from: the socket address. Behind a reverse proxy, set `TRUSTED_PROXY` to the proxy's IP. Speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from every other sender.
+- An agent works only from the address it enrolled from, and a sandbox host only from the address it registered from: the socket address. Behind a reverse proxy, set `TRUSTED_PROXY` to the proxy's IP. Speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from every other sender.
 - Only you extend access. Extend on a grant adds the span you originally granted.
 - If you deny the same item to the same agent three times within 15 minutes, speaker answers further requests as denied without asking you, until 15 minutes after the third denial.
 

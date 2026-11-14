@@ -84,6 +84,26 @@ mise run bottle stop <id>
 mise run bottle help run         # per-command usage (mise intercepts --help after the task name)
 ```
 
+Every `mise run bottle <command>` also works as plain `bottle <command>` after `pnpm -C bottle link --global` (run `pnpm setup` once first if pnpm's global bin directory is not on your PATH).
+
+To keep the service running across logouts and reboots, run it as a systemd user service. Replace `<repo>` with this checkout's path, and `/usr/bin/mise` with what `command -v mise` prints:
+
+```ini
+# ~/.config/systemd/user/bottle.service
+[Unit]
+Description=bottle
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/mise -C <repo> run bottle serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USER`. Read its output with `journalctl --user -u bottle -f`. A stop sends TERM, which `serve` passes on so the service shuts down cleanly.
+
 `ls` shows each task's state, mode (attended or unattended), pending speaker approvals (with the request ID), age, model, name, and Pi's latest message. `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
 {.ai}
 

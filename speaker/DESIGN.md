@@ -28,7 +28,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 4. **One call should be enough.** If access is missing, the agent's call waits for the owner and then succeeds. Every failure says what to do next.
 5. **Speaker does the controlling.** Limits are enforced by speaker (or by the sandbox host), not by special configuration on each target machine.
 6. **Nothing to install for agents.** Plain `curl`, `ssh`, `scp`, `sftp` and, where present, `sshfs`.
-7. **Brutally simple state.** Only durable settings and encrypted keys are written to disk. Agents, grants and requests live in memory; after a restart, agents ask again.
+7. **Brutally simple state.** Only durable settings, encrypted keys and the append-only log are written to disk. Agents, grants and requests live in memory; after a restart, agents ask again.
 
 ## Names
 
@@ -269,7 +269,7 @@ Placement:
 
 ## Security model
 
-- **Agent tokens** are random, stored by speaker only as SHA-256 hashes, kept by agents in a user-only header file, and bound to the address they enrolled from. That address is the socket address; when the connection comes from `TRUSTED_PROXY`, it is the last `X-Forwarded-For` entry, the one that proxy appended. `X-Forwarded-For` from any other sender is ignored.
+- **Agent tokens** are random, stored by speaker only as SHA-256 hashes, kept by agents in a user-only header file, and bound to the address they enrolled from. Sandbox host tokens are bound the same way, to the address the host registered from; from anywhere else the host is told to register again. A revoked agent token stays refused, at enrollment too: asking again takes a new token, which reaches the owner as a new agent. That address is the socket address; when the connection comes from `TRUSTED_PROXY`, it is the last `X-Forwarded-For` entry, the one that proxy appended. `X-Forwarded-For` from any other sender is ignored.
 - **Enrollment** is unauthenticated but rate limited (20 per 15 minutes in total). It refuses malformed hashes and the hash of an empty token; enrolling again with the same token returns the existing agent.
 - **Approval** happens only in `/admin`, behind the owner's sign-in, with same-origin checks on every change. Card details supplied by the agent (label, agent string, reason) are shown as claims; the source address and fingerprint are speaker's own.
 - **Upstream calls** do not follow redirects; a key embedded in an upstream URL is redacted from replies and logs.

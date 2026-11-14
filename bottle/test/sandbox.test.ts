@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { connect } from "node:net";
+import { connect, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -73,6 +73,27 @@ describe("egress proxy decision", () => {
     assert.match(String(reply), /evil\.test is not approved for this task\. To get access, call request_capability with site:evil\.test\./);
     client.destroy();
     server.close();
+  });
+
+  test("revoking a grant closes a tunnel already open to that host", async () => {
+    // Stands in for speaker's proxy: accepts the CONNECT and then holds the tunnel open.
+    const upstream = createNetServer((socket) => socket.once("data", () => socket.write("HTTP/1.1 200 Connection Established\r\n\r\n")));
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const { port } = upstream.address() as { port: number };
+    const view = live({ secretHosts: [{ name: "TOKEN", hosts: ["api.test"], expiresAt: new Date(Date.now() + 60_000).toISOString() }] });
+    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { proxy: `127.0.0.1:${port}`, token: "t" });
+    const server = await serveEgress(proxy, join(root, "tunnel.sock"));
+    const client = connect(join(root, "tunnel.sock"));
+    client.write("CONNECT api.test:443 HTTP/1.1\r\nHost: api.test:443\r\n\r\n");
+    assert.match(String((await once(client, "data"))[0]), /^HTTP\/1\.1 200 /);
+    proxy.sweep();
+    assert.equal(client.destroyed, false, "a granted host's tunnel stays open");
+    view.secretHosts = [];
+    proxy.sweep();
+    await once(client, "close");
+    assert.ok(view.events.some((event) => event.text === "closed a connection to api.test: its grant ended"));
+    server.close();
+    upstream.close();
   });
 });
 

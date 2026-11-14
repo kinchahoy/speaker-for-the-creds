@@ -80,6 +80,19 @@ test('the first visit sets the owner password, a restart asks for it again, and 
   assert.match(await (await restarted.call('/admin', { headers: { cookie: sessionCookie(signedIn) } })).text(), /Inbox/)
 })
 
+test('the log survives a restart and can be searched', async (t) => {
+  const dir = await dataDir(t)
+  const first = await start(dir)
+  await setOwnerPassword(first.call)
+  assert.equal((await first.enroll('tok')).status, 201)
+  const restarted = await start(dir)
+  const cookie = sessionCookie(await restarted.signIn())
+  const page = async (query: string) => (await restarted.call(`/admin/log${query}`, { headers: { cookie } })).text()
+  assert.match(await page(''), /agent enrolled/)
+  assert.match(await page('?q=enrolled'), /agent enrolled/)
+  assert.doesNotMatch(await page('?q=nothing-matches-this'), /agent enrolled/)
+})
+
 test('a wrong password is refused and sign-in is rate limited', async (t) => {
   const dir = await dataDir(t)
   await setOwnerPassword((await start(dir)).call)

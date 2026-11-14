@@ -162,7 +162,7 @@ async function setup(t: TestContext) {
   const revokeAll = async () => {
     for (const id of await grantIds()) await ownerForm('/grants/revoke', { id })
   }
-  return { call, proxyPort, sshPort, seen, keyless, agent, revokeAll, upstreamPort: port(upstream) }
+  return { call, proxyPort, sshPort, seen, keyless, agent, revokeAll, ownerForm, upstreamPort: port(upstream) }
 }
 type Me = {
   secrets: Record<
@@ -382,6 +382,20 @@ test('revoking the grant stops the proxy at once, inside an open tunnel and for 
   assert.equal(s.seen.length, 1)
   assert.equal((await through(s.proxyPort, ca, target, agent.token, [request]))[0].status, 403)
   assert.equal(s.seen.length, 1)
+})
+
+test('adding a host to a secret ends the grants already given for it; removing a host keeps them', async (t) => {
+  const s = await setup(t)
+  const agent = await s.agent('widen')
+  await agent.ask(['secret:GITHUB_TOKEN'])
+  assert.equal((await agent.me()).secrets.GITHUB_TOKEN.state, 'granted')
+  const save = (hosts: string) =>
+    s.ownerForm('/secrets/save', { name: 'GITHUB_TOKEN', value: '', hosts, env: 'GH_TOKEN' })
+  await save('localhost api.test')
+  assert.equal((await agent.me()).secrets.GITHUB_TOKEN.state, 'ask')
+  await agent.ask(['secret:GITHUB_TOKEN'])
+  await save('localhost')
+  assert.equal((await agent.me()).secrets.GITHUB_TOKEN.state, 'granted')
 })
 
 test('a keyless service forwards calls without any credential', async (t) => {

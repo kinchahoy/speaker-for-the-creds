@@ -33,7 +33,7 @@ export function adminApp(core: Core) {
     requests,
     sockets,
     sessions,
-    logged,
+    readLog,
     mcpTools,
     jump,
     unlocked,
@@ -166,12 +166,15 @@ export function adminApp(core: Core) {
     if (c.req.method !== 'GET') return c.text('Sign in at /admin', 401)
     return c.req.path === '/admin' ? authPage(c) : c.redirect('/admin', 303)
   })
-  // Newest entries first, optionally narrowed to one grant, agent, service, target or share.
-  admin.get('/log', (c) => {
+  // Newest entries first from audit.jsonl, optionally narrowed to one grant, agent, service, target or share, or to
+  // entries containing some text. The page shows the newest 500 matches.
+  admin.get('/log', async (c) => {
     const query = c.req.query()
     const { grant, agent, service, target, share } = query
-    const entries = logged.filter(
+    const text = query.q?.trim().toLowerCase()
+    const matches = (await readLog()).filter(
       (e) =>
+        (!text || JSON.stringify(e).toLowerCase().includes(text)) &&
         (!grant || e.grant === grant) &&
         (!agent || e.agent === agent) &&
         (!target || e.target === target) &&
@@ -187,7 +190,7 @@ export function adminApp(core: Core) {
       layout(
         c.get('secureHeadersNonce'),
         'log',
-        log(entries, query, {
+        log(matches.slice(0, 500), matches.length, query, {
           agent: now.agents.map((a) => [a.id, a.label]),
           grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
           service: ids(services),
@@ -312,6 +315,10 @@ export function adminApp(core: Core) {
     const { vault } = unlocked()
     const value = input.value || vault.secrets[input.name]?.value
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
+    // Grants read the hosts live, so a newly allowed host would quietly widen every grant already given: end them.
+    const before = vault.secrets[input.name]?.hosts ?? []
+    if (input.hosts.some((host) => !before.includes(host)))
+      revokeGrants((grant) => grant.item === `secret:${input.name}`)
     vault.secrets[input.name] = { value, hosts: input.hosts, env: input.env }
     await unlocked().save()
     audit('secret_saved', { secret: input.name })

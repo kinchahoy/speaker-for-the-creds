@@ -312,6 +312,8 @@ const riskTag = (item: string) =>
       : /\.full$|^folder:.+:rw$/.test(item)
         ? 'read/write'
         : ''
+// A wildcard over a whole top-level domain, such as *.com: approving it opens far more than one service.
+const broad = (host: string) => host.startsWith('*.') && !host.slice(2).includes('.')
 const empty = (text: string) => html`<p><small>${text}</small></p>`
 
 // A live panel: htmx asks again every 5 seconds with the hash of what it shows; an unchanged panel answers 204.
@@ -348,7 +350,13 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
   const pick = (agentId: string, item: string) => {
     const detail = details[`${agentId} ${item}`]
     const tag = riskTag(item)
-    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code>${tag ? html` <span class="badge badge-warn">${tag}</span>` : ''} <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}</span></label>`
+    const hosts = item.startsWith('site:')
+      ? [item.slice('site:'.length)]
+      : item.startsWith('secret:')
+        ? (owned[item.slice('secret:'.length)]?.hosts ?? [])
+        : []
+    const wide = hosts.filter(broad)
+    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code>${tag ? html` <span class="badge badge-warn">${tag}</span>` : ''} <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}${wide.length ? html` <mark>very broad: ${wide.join(', ')} matches every host under it</mark>` : ''}</span></label>`
   }
   const hostCards = hosts
     .filter((h) => h.status === 'pending')
@@ -478,7 +486,7 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
       html`<li class="stack-row"><div class="row"><div class="row-main"><div><strong>${id}</strong> ${group.description ? html`<small>${group.description}</small>` : ''}<br><small>${plural(group.items.length, 'item', 'items')}, granted together by one approval: ${group.items.join(', ')}</small></div></div><div class="actions">${button('/admin/groups/delete', hidden('id', id), 'Delete', `Delete group ${id}? Agents can no longer request it. Existing grants stay.`)}</div></div><details><summary>Edit items</summary>${groupForm(id, group)}</details></li>`,
   )
   const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH targets</a><a href="#setup-password">Password</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details></section><section class="panel" id="groups"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner password</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section><p><small>Credentials stay on this server.</small></p>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line (adding a host ends the grants already given for this secret)')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details></section><section class="panel" id="groups"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner password</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section><p><small>Credentials stay on this server.</small></p>`
 }
 
 // --- Log: newest first, narrowed by the filters in the address ---
@@ -512,12 +520,13 @@ const result = (e: LogEntry): Html | string =>
           : html`expires ${local(Date.parse(String(e.expiresAt)))}`
 export function log(
   entries: LogEntry[],
+  total: number,
   query: Record<string, string | undefined>,
   choices: Record<string, [string, string][]>,
 ) {
   const choose = (name: string, options: [string, string][]) =>
     html`<label>${name[0].toUpperCase() + name.slice(1)}<select name="${name}"><option value="">Any</option>${options.map(([value, text]) => html`<option value="${value}" ${raw(query[name] === value ? 'selected' : '')}>${text}</option>`)}</select></label>`
-  return html`<section class="panel"><h2>Log <small class="count">${plural(entries.length, 'entry', 'entries')}, newest first</small></h2><form method="get" action="/admin/log" class="log-filter">${Object.entries(choices).map(([name, options]) => choose(name, options))}<div class="log-filter-actions"><button>Filter</button><a class="action-btn" href="/admin/log">Clear</a></div></form>${
+  return html`<section class="panel"><h2>Log <small class="count">${plural(total, 'entry', 'entries')}${total > entries.length ? `, newest ${entries.length} shown` : ', newest first'}</small></h2><form method="get" action="/admin/log" class="log-filter"><label>Search<input type="search" name="q" value="${query.q ?? ''}"></label>${Object.entries(choices).map(([name, options]) => choose(name, options))}<div class="log-filter-actions"><button>Filter</button><a class="action-btn" href="/admin/log">Clear</a></div></form>${
     entries.length
       ? html`<table class="log-table"><thead><tr><th scope="col">Time</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Result</th></tr></thead><tbody>${entries.map(
           (e) => {

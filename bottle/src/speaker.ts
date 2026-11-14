@@ -88,14 +88,17 @@ export const registerHost = async (config: Config, configPath: string, name: str
   return id;
 };
 
-/** Whether the owner has approved this host: speaker answers 401 `approval_required` to a pending or unknown token. */
+/**
+ * Whether the owner has approved this host. An approved host token has no agent view, so speaker answers 400; a pending
+ * or unknown one gets 401, and a locked speaker 503, both of which mean not yet.
+ */
 export const hostApproved = async (config: Config) => {
   const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
     headers: { authorization: `Bearer ${readHostToken(config)}` },
     signal: AbortSignal.timeout(10_000),
   });
   await response.body?.cancel();
-  return response.status !== 401;
+  return response.status === 400;
 };
 
 export const speakerClient = (config: Config, token: string) => {
@@ -169,7 +172,7 @@ export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, re
  */
 const probeSpeaker = async (config: Config, token: string) => {
   try {
-    // A sandbox host has no agent view: speaker answers an approved host token with 403 and an unknown one with 401.
+    // A sandbox host has no agent view: speaker answers an approved host token with 400 and an unknown one with 401.
     const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(5_000),

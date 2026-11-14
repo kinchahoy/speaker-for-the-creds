@@ -83,9 +83,9 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | --- | --- |
 | `mise run init [speaker \| bottle]` | Guided setup (both on this machine without a name) |
 | `mise run install` | Install both packages with pnpm |
-| `mise run check` | Typecheck both packages and lint speaker |
+| `mise run check` | Typecheck, lint, and format-check both packages |
 | `mise run test` | Run both packages' tests |
-| `mise run format` | Format speaker |
+| `mise run format` | Format both packages |
 | `mise run speaker` | Run speaker with live reload |
 | `mise run bottle serve` | Run the bottle service |
 | `mise run bottle register` | Register the sandbox host again; approve it in speaker |

@@ -104,8 +104,11 @@ for (const [network, prefix] of [
   ["127.0.0.0", 8],
   ["169.254.0.0", 16],
   ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
   ["192.168.0.0", 16],
-  ["255.0.0.0", 8],
+  ["198.18.0.0", 15],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
 ] as const)
   internal.addSubnet(network, prefix, "ipv4");
 internal.addAddress("::1", "ipv6");
@@ -154,15 +157,30 @@ const publicLookup = ((hostname: string, options: dns.LookupOptions, callback: (
   })) as unknown as typeof dns.lookup;
 
 /** The guest's only route to the internet: allowed hosts go direct, secret hosts go through speaker's proxy, the rest get 403. */
-export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, speaker: { proxy?: string; token: string }) =>
-  new ProxyServer({
-    prepareRequestFunction: async ({ hostname }) => {
+export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, speaker: { proxy?: string; token: string }) => {
+  // Open connections by host. A CONNECT tunnel is checked once, so `sweep` closes any whose host lost its grant.
+  const open = new Map<number, string>();
+  const proxy = new ProxyServer({
+    prepareRequestFunction: async ({ hostname, connectionId }) => {
       const decision = await egressDecision(live, route, hostname);
       if (decision === "refuse")
         throw new RequestError(`${hostname} is not approved for this task. To get access, call request_capability with site:${hostname}.`, 403);
+      open.set(connectionId, hostname);
       return decision === "speaker" ? { upstreamProxyUrl: `http://agent:${speaker.token}@${speaker.proxy}` } : { dnsLookup: publicLookup };
     },
   });
+  proxy.on("connectionClosed", ({ connectionId }: { connectionId: number }) => open.delete(connectionId));
+  const sweep = () => {
+    const allowed = [...unexpired(live.hosts).map((entry) => entry.host), ...unexpired(live.secretHosts).flatMap((entry) => entry.hosts)];
+    for (const [id, host] of open)
+      if (!hostMatches(allowed, host)) {
+        open.delete(id);
+        proxy.closeConnection(id);
+        note(live, `closed a connection to ${host}: its grant ended`);
+      }
+  };
+  return Object.assign(proxy, { sweep });
+};
 
 /** proxy-chain drops a connection that has no remote address, as every unix socket one does, so each is handed over with a placeholder. */
 export const serveEgress = async (proxy: ProxyServer, path: string) => {
@@ -331,7 +349,8 @@ export const folderSync = (
   };
 };
 
-const Me = z.object({
+/** The part of speaker's `/catalog` that folder mounts read: each `ssh:`/`folder:` grant's commands. */
+const Catalog = z.object({
   ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()), knownHosts: z.object({ line: z.string() }) })),
 });
 
@@ -382,8 +401,11 @@ export async function boot(
     ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
   ];
   let folders: NodeJS.Timeout | undefined;
+  // Revoking or expiring a grant closes the task's open connections to that host within a second.
+  const sweeper = setInterval(egress.sweep, 1_000);
   const stopDoors = () => {
     clearInterval(folders);
+    clearInterval(sweeper);
     return Promise.all([route.close(), ...servers.map((server) => (server.close(), server.closeAllConnections()))]).finally(() =>
       rmSync(socketDir, { recursive: true, force: true }),
     );
@@ -443,15 +465,15 @@ export async function boot(
         if (result.code !== 0) throw new Error(result.stderr().trim() || `exit ${result.code}`);
       };
       const sync = folderSync(live, {
-        // speaker's own /me gives the complete sshfs command line for the grant, with the jump server's pinned host key.
+        // speaker's /catalog gives the complete sshfs command line for the grant, with the jump server's pinned host key.
         mount: async (share, writable) => {
-          const response = await fetch(`${config.speaker.url}/_speaker/me`, {
+          const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
             headers: { authorization: `Bearer ${speaker.token}` },
             signal: AbortSignal.timeout(10_000),
           });
-          if (!response.ok) throw new Error(`speaker GET me returned ${response.status}`);
+          if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}`);
           const item = `folder:${share}${writable ? ":rw" : ""}`;
-          const grant = Me.parse(await response.json()).ssh.find((entry) => entry.item === item);
+          const grant = Catalog.parse(await response.json()).ssh.find((entry) => entry.item === item);
           const command = grant?.commands[0];
           if (!grant || !command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
           const sshfs = command
