@@ -1,8 +1,8 @@
 ---
 project: speaker-for-the-creds
 topic: Agents & security
-state: blocked
-updated: 2026-11-08T03:15
+state: paused
+updated: 2026-11-14T14:00
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,15 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-14 14:00 · paused
+
+**Next**
+- Herdr integration is planned in `plan.md` (approvals as a Herdr app mod over a new owner JSON API; bottle tasks as attach terminals under herdr-core). Nothing built. First step: the four spikes in its "Order of work".
+- NAS deploy and the SSH certificate test below are still open.
+
+**Open**
+- The seven questions at the end of `plan.md` (blocked vs working for pending requests, who creates the tab, A0 stopgap, TUI effort, where the mod lives, bottle vs bottle-school).
 
 ## 2026-11-08 03:15 · blocked
 
