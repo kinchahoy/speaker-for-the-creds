@@ -20,7 +20,7 @@ import { serve } from '@hono/node-server'
 import 'reflect-metadata'
 import * as x509 from '@peculiar/x509'
 import { WebSocketServer } from 'ws'
-import { covers } from '../proxy.ts'
+import { covers } from '../items.ts'
 import { createApp, readConfig } from '../server.ts'
 import { setOwnerPassword } from './owner.ts'
 

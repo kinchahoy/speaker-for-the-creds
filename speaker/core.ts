@@ -7,6 +7,7 @@ import { HTTPException } from 'hono/http-exception'
 import type { WSContext } from 'hono/ws'
 import writeFile from 'write-file-atomic'
 import { z } from 'zod'
+import { durationNames, durations, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
 import {
   type GrantEvent,
@@ -36,8 +37,7 @@ export const sshKeySchema = z
     /^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/=]+( [^\r\n]*)?$/,
     'Send one ed25519 or ECDSA public key',
   )
-export const durations = { '30m': 1800_000, '1h': 3600_000, '2h': 7200_000, '1d': 86_400_000, '30d': 2_592_000_000 }
-export const durationSchema = z.enum(['30m', '1h', '2h', '1d', '30d']).default('2h')
+export const durationSchema = z.enum(durationNames).default('2h')
 export const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
 // Three denials of the same item for the same agent within this window lock it: it is answered as denied, without
 // asking the owner, until the window after the third denial has passed.
@@ -91,29 +91,6 @@ export const serviceSchema = z.object({
   // Streamable-HTTP MCP server: POST bodies are classified by JSON-RPC method and tool annotations.
   mcp: z.boolean().optional(),
 })
-// Items are strings; the pattern table doubles as the list of accepted forms in error messages.
-export const itemPatterns = {
-  service: /^[a-zA-Z0-9_-]+\.(read|full)$/,
-  site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
-  secret: /^secret:[A-Za-z0-9_]+$/,
-  ssh: /^ssh:[a-zA-Z0-9_-]+$/,
-  folder: /^folder:[a-zA-Z0-9_-]+(:rw)?$/,
-  mcp: /^mcp:[a-zA-Z0-9_-]+$/,
-  ext: /^ext:[a-zA-Z0-9_-]+$/,
-  group: /^group:[a-zA-Z0-9_-]+$/,
-}
-export const itemForms = [
-  '<service>.read',
-  '<service>.full',
-  'site:<host>',
-  'secret:<NAME>',
-  'ssh:<target>',
-  'folder:<share>[:rw]',
-  'mcp:<id>',
-  'ext:<id>',
-  'group:<name>',
-]
-export const kindOf = (item: string) => Object.entries(itemPatterns).find(([, pattern]) => pattern.test(item))?.[0]
 export const itemSchema = z
   .string()
   .trim()
@@ -273,6 +250,7 @@ export type View = {
   sessions: { id: string; agent: string; what: string; started: number }[]
   details: Record<string, { text: string; warning?: string }>
 }
+export { covers, durations, itemForms, itemPatterns, kindOf } from './items.ts'
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
 export type HostCatalog = {

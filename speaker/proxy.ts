@@ -15,6 +15,7 @@ import { createServer as createHttpsServer, request as httpsRequest } from 'node
 import { isIP, type Socket } from 'node:net'
 import 'reflect-metadata'
 import * as x509 from '@peculiar/x509'
+import { coversAny } from './items.ts'
 
 const { subtle } = globalThis.crypto
 const algorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' }
@@ -61,11 +62,6 @@ export async function createCa(): Promise<Ca> {
   return { cert: cert.toString('pem'), key: await exportKey(keys.privateKey) }
 }
 
-// `*.example.org` covers subdomains only, not example.org itself.
-export const covers = (pattern: string, host: string) => {
-  const [p, h] = [pattern.toLowerCase(), host.toLowerCase()]
-  return p.startsWith('*.') ? h.length > p.length - 1 && h.endsWith(p.slice(1)) : p === h
-}
 const swap = (text: string, secrets: ProxySecret[]) =>
   secrets.reduce((result, { placeholder, value }) => result.replaceAll(placeholder, value), text)
 // Replaces placeholders in an Authorization value, including inside HTTP Basic credentials.
@@ -137,7 +133,7 @@ export function createProxy(hooks: ProxyHooks): Server {
       hooks.log(event, { agent, host, method: req.method, path, status, reason: message })
       res.writeHead(status, { 'content-type': 'text/plain', connection: 'close' }).end(`${message}\n`)
     }
-    const secrets = hooks.secrets(agent).filter(({ hosts }) => hosts.some((pattern) => covers(pattern, host)))
+    const secrets = hooks.secrets(agent).filter(({ hosts }) => coversAny(hosts, host))
     if (!secrets.length)
       return answer(
         403,
@@ -193,7 +189,7 @@ export function createProxy(hooks: ProxyHooks): Server {
           'speaker: proxy credentials needed. Use http://agent:<your speaker token>@<speaker>:<proxy port>',
         )
       ;({ agent } = hooks.authenticate(token, socket.remoteAddress?.replace(/^::ffff:/, '')))
-      if (!hooks.secrets(agent).some(({ hosts }) => hosts.some((pattern) => covers(pattern, host))))
+      if (!hooks.secrets(agent).some(({ hosts }) => coversAny(hosts, host)))
         throw new Refusal(
           403,
           `speaker: no secret grant of yours covers ${host}; speaker is not a general proxy. Ask the owner for the secret with POST /_speaker/requests (see GET /_speaker/catalog).`,
