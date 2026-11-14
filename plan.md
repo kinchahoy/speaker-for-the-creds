@@ -2,158 +2,146 @@
 
 # Plan: speaker approvals and sandboxed agents inside Herdr
 
-<sub>AI-written, 2026-11-14. Nothing here is built yet.</sub>
+<sub>AI-written, 2026-11-14. Nothing here is built yet. Line counts are estimates.</sub>
 
-Two goals:
+**Priority: fewest lines of code across the whole project.** That rules out a second full frontend. The web `/admin` stays the one complete UI; Herdr gets the smallest thing that works.
 
-1. **Approve in Herdr.** Decide speaker's cards (and later configure speaker) from the Herdr app on the Mac or PC, without switching to the browser.
-2. **See and talk to sandboxed agents in Herdr.** Each bottle task (Pi today, other agents later) shows up as an agent in the Herdr app, with its status, and you type to it there.
+Goals:
 
-Decisions already taken with you: owner sign-in is **the password, typed once per Herdr start, kept in memory only**; agents appear by **attaching a terminal through the bottle host** (nothing new inside the VM except status reports). UI scope is open, so the options are laid out below with a recommended order.
+1. See each bottle task as an agent in the Herdr app and type to it there.
+2. Know in Herdr when a card is waiting, and later approve it there.
 
-## What I found
+## What decides the design
 
-Verified by reading the installed app's own docs (`~/.config/herdr-app/AGENTS.md`, `herdr.d.ts`), the `hc` and `herdr` CLIs, the Redline mod in `~/code/checkouts/herdr-redline`, and this repo.
+- **Herdr is two products.** The Herdr app is a window (`herdr-app`) plus `herdr-core` / `hc`, which runs every terminal. The older Herdr TUI (`herdr`) is a separate program with its own server.
+- **A Herdr app pane is a terminal**, so anything that runs in a terminal already works there.
+- **A core terminal with the labels `herdr.space` and `herdr.tab` shows up in the app**, on its machine, even when a script started it. Other machines are added with `hc machine add <ssh target>`, which copies `hc` there.
+- **App mods are native JavaScript with no web view.** `/admin` cannot be embedded. A mod reuses nothing from the web UI except an HTTP endpoint, so every mod feature is new code.
+- **Speaker has no owner JSON API**; the owner side is HTML forms behind a cookie. It already pushes new cards to ntfy.
 
-**Herdr is two products.**
+## Chunk 1: agents in Herdr, cards announced (about 60 new lines)
 
-| | Herdr app (the target) | Herdr TUI (`herdr` 0.9.5) |
+| Change | Where | Lines |
 | --- | --- | --- |
-| Parts | `herdr-app` (the window) + `herdr-core` / `hc` (runs every terminal, survives the window) | one terminal app with its own server |
-| Extending it | **mods**: JavaScript (gpui-kit) drawn natively, hot-reloaded from `~/.config/herdr-app/mods/<name>/` | plugins: manifest actions, event hooks, panes that run a command |
-| Other machines | `hc machine add <ssh target>` or `--via '<command>'`; `hc` copies itself there | `herdr machine add`, `herdr --machine` |
-| Agent status | the program prints OSC 7501 reports (`idle`, `working`, `done`, `blocked`, `error`; blocked has a kind: `permission`, `question`, `auth`) | `herdr pane report-agent` over its socket |
+| **Launch hook.** When a task starts, bottle runs `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. Herdr shows a **bottle** space on that machine with one tab per task, however the task was started. On by default when `hc` is on `PATH`, off otherwise; `"herdr": false` in `config.json` turns it off. | `bottle/src/tasks.ts`, `config.ts` | ~15 |
+| **Status: nothing added.** Whatever Pi itself reports reaches Herdr through dtach and the attach terminal. A pending speaker request does not show as blocked; the toast below covers it. | none | 0 |
+| **Notify mod.** Listens to the ntfy topic, shows a Herdr toast per new card, click opens `/admin` in the browser. Needs ntfy configured. | `herdr/mods/speaker/` | ~40 |
+| **"Pi (sandbox)" in Herdr's + menu.** A `programs.json` entry that runs `bottle run`. Config, documented in the README. | docs | 0 |
 
-bottle already integrates with the **TUI only** (`bottle/src/cli.ts:173-179`, `:256`, `:318`: it splits a pane and calls `herdr pane report-agent`). None of that reaches the app.
+Spikes first, because these are unverified:
 
-**What a mod can do** (this decides the UI options):
+- Pi's status reports reach Herdr through dtach and `msb exec -t`. If Pi reports nothing, the fallback is a guest extension of about 20 lines.
+- A labelled `hc run` on a remote machine appears as a tab, and the tab closes when the task archives.
+- A mod can hold an ntfy subscription (or poll it) with `fetch`.
+- Terminal resize through dtach.
 
-- Draw native UI: lists, inputs, textareas, checkboxes, markdown, popovers. **No HTML and no web view**, so `/admin` cannot be embedded; anything inside Herdr is rebuilt natively.
-- Live in several places: a dialog on a key (Redline does this), a docked sidebar or status block, a floating block, a **pane beside a terminal** (`pane.split {mod, props}`), a whole tab.
-- `fetch` URLs, run programs **on any machine** (`exec(cmd, args, {on: machine})`, 30 s limit, rides hc's ssh link), read files there, post toasts whose click runs a command (`notify({action})`), keep shared state.
-- Know every space, tab, pane, terminal and agent, focus one (`agent.focus`), start one (`tab.new {argv, task}`).
-- Mods are trusted code on the machine showing the window. Shipped layouts are read-only, so an always-visible badge needs a docked `mod.json` placement or a floating block (Redline hit this: a kept overlay window blocks clicks).
+## Chunk 2: approve in Herdr (about 150 lines), only if the browser hop annoys
 
-**How a terminal becomes visible in the app:** any core terminal carrying the labels `herdr.space=<id>` and `herdr.tab=<id>` shows up there, on its machine, even one started from a script: `hc run --label herdr.space=… --label herdr.tab=… -- <cmd>`. An unknown id becomes a new space or tab. Machines added with `--temp` are hidden from the app's spaces.
+| Change | Where | Lines |
+| --- | --- | --- |
+| **Owner API, three routes**: sign in with the password (returns a bearer token held in the same in-memory session map), view (pending cards, locked state), decide. They call the core functions the forms already call. Bearer only, never the cookie, so no CSRF surface is added. | `speaker/admin.ts` | ~50 |
+| **The notify mod becomes an inbox**: password field, pending cards, a duration picker and one **Approve as asked** button per card, and **Deny**. Everything finer (unticking items, Extend, Revoke, Setup, Log) is an **Open in browser** button. | `herdr/mods/speaker/` | ~100 |
 
-**Speaker today:** the owner side is HTML forms behind a cookie session with same-origin checks (`speaker/admin.ts`); there is **no owner JSON API**. Pending cards and the locked state already go out as ntfy pushes. bottle's control API (`/api/state`, `/api/tasks`) has no login and listens on a private address.
+The password is typed once per Herdr start and the token lives in a variable, never on disk. Signing in here also unlocks speaker after a restart, as `/admin` does.
 
-## The shape I recommend
+Security level: sandboxed agents cannot reach the Mac, the mod or the token. Direct agents running as you on the same Mac could edit the mod's files, which matches what `DESIGN.md` already says about a single machine (accident protection, not a hostile local agent). A stored token in the OS keystore is a possible later step; through the `security` CLI any process running as you can read it back, so it only helps with a signed helper and Touch ID.
 
-```
- Mac / PC                         always-on box            bottle host (mi60, NUC, WSL, or the Mac)
-┌──────────────────────────┐     ┌──────────────────┐     ┌───────────────────────────────────────┐
-│ Herdr app                │     │ speaker          │     │ herdr-core (hc), pushed over ssh      │
-│  mod "speaker"           │────▶│  /admin (as now) │     │  terminal: `bottle attach <task>`  ───┼─▶ VM: dtach ─ Pi
-│   inbox · active · badge │HTTPS│  /admin/api  NEW │◀────│ bottle serve (WebSocket, as now)      │
-│  agents list, panes      │     └──────────────────┘     └───────────────────────────────────────┘
-│  herdr-core (hc) ────────┼───────────── ssh (hc machine) ───────────▲
-└──────────────────────────┘
-```
+## Not building
 
-- The mod talks to **speaker directly over HTTP(S)** for approvals, and to **bottle through `exec(..., {on})`**, so bottle's control API stays private and nothing new listens anywhere.
-- Remote setup stays small: speaker gets new routes only; the bottle host needs `bottle` on `PATH` and `hc`, which the Mac installs over ssh with `hc machine add <host> --install`.
+- **A terminal UI for speaker.** At inbox-only scope it is no smaller than the mod, and adds a dependency.
+- **Setup and Active in Herdr.** They stay in the browser.
+- **herdr-core inside each VM.** The guest stays sealed.
+- **A web-to-TUI or TUI-to-web bridge.** No converter is good enough to replace the phone cards.
 
-| Your model | Speaker | bottle host as a Herdr machine | Notes |
+## Deployment models
+
+| Model | Speaker | bottle host in Herdr | Note |
 | --- | --- | --- | --- |
-| 1: all on the MacBook | `localhost` | this machine, no `hc machine` needed | Blocked on bottle running on macOS at all (README: not yet verified). |
-| 2: always-on box + mi60 / NUC | LAN or tailnet URL | `hc machine add mi60` | The always-on box needs no hc. |
-| 2 with bottle in WSL on the desktop | same | from Windows Herdr: `hc machine add --via 'wsl.exe -d Ubuntu -e sh -c' --name wsl`; from the Mac: ssh to WSL | |
+| Everything on the MacBook | `localhost` | this machine | Needs bottle to run on macOS, which the README lists as unverified. |
+| Always-on box + mi60 or a NUC | LAN or tailnet URL | `hc machine add <host>` from the Mac | The speaker box needs nothing new. |
+| bottle in WSL on the desktop | same | `hc machine add --via 'wsl.exe -d Ubuntu -e sh -c' --name wsl` | |
 
-## Part A: approvals in Herdr
+Remote setup is `bottle` on `PATH` on the bottle host; `hc` arrives over ssh.
 
-### Options
+## Order of execution
 
-| | What you get | Speaker changes | Cost | Weakness |
-| --- | --- | --- | --- | --- |
-| **A0. Notify, decide in browser** | A toast (and sound) in Herdr when a card arrives; click opens `/admin` in the browser. A tiny mod subscribes to the ntfy topic speaker already posts to. | none | an evening | Not "inside Herdr"; needs ntfy configured. |
-| **A1. Native panel (mod)** | Inbox and Active as a Herdr dialog, a pending badge, toasts that open the card, and a card pane beside the agent that is asking. | owner JSON API | the main work | Native UI must be rebuilt per page; Setup is a lot of forms. |
-| **A2. Terminal UI** | `speaker tui` in any pane: Herdr app, Herdr TUI (as a plugin pane), plain ssh, a phone ssh client. It can report `blocked` over OSC 7501 while cards wait, so Herdr's own attention sound and toast fire with no mod at all. | owner JSON API | medium; one TUI library to choose (Ink fits the TypeScript repo; ask first) | Any agent with `hc send`/`hc keys` on that machine can type into a terminal, so a local agent could press Approve. Fine on a box with only sandboxed agents, poor on a Mac full of direct agents. |
-| **A3. Setup in Herdr** | Services, secrets, targets, shares and groups edited from the panel. | owner API grows setup routes | large | Mostly forms; low daily value compared to Inbox. |
+Not started; this is the drafted sequence. Work happens on `main`, in one working tree, with cheap subagents doing the mechanical edits and the main session reviewing each diff before it is committed.
 
-**Recommendation:** build the **owner JSON API once**, since A1, A2 and A3 all stand on it. Then A1 as the main UI. Keep A0's toast as the notification layer of A1 (fed by the API instead of ntfy once signed in). Treat A2 as optional, worth it mainly if you want the TUI Herdr or ssh-only access. Do Setup last and partially: lists you edit often (groups, services, shares) natively; a "Open Setup in browser" button for the rest.
-
-### The owner JSON API (speaker)
-
-A sibling of the form handlers in `admin.ts`, calling the same core functions, so behaviour cannot drift:
-
-- `POST /admin/api/signin {password}` → a bearer session token. Same rate limit and same in-memory `sessions` map as the cookie; it also unlocks speaker after a restart, exactly as signing in to `/admin` does. Bearer only, never the cookie, so no CSRF surface is added.
-- `GET /admin/api/view?h=<hash>` → the same data `view()` gives the Inbox and Active panels (requests with per-item rows, pending hosts, agents, grants, sessions, locked state). Held until it changes, like `Speaker-Wait`, so the mod needs no fast polling.
-- `POST /admin/api/requests/<id>/decide {approve: [items], duration}`; `POST …/grants/<id>/extend|revoke`; `POST …/agents/<id>/revoke`; `POST …/hosts/<id>/approve|remove`; `POST …/sessions/<id>/end`.
-- Errors in the existing `errorBody` shape. Everything audited as today.
-
-This changes one sentence in `DESIGN.md` ("Approval happens only in `/admin`… HTML forms only"): approval stays behind the owner's password, but a second client exists.
-
-### The mod (`speaker`)
-
-One mod folder, kept in this repo (for example `herdr/mods/speaker/` with a `RECIPE.md`), copied into `~/.config/herdr-app/mods/` by a mise task. Roles picked from its props, as Redline does:
-
-- **Panel** (a key, say `cmd-shift-a`): Inbox and Active tabs. Cards match `/admin`: label, agent claim, source address, reason, duration picker, a checkbox per group and item, write-tinted rows for `.full`, `:rw`, `ssh:` and secrets, **Approve** grants what is ticked. Active: grants with time left, Extend, Revoke, End session, Revoke agent. A **Go to agent** button focuses the agent's terminal when it is a bottle task Herdr can see.
-- **Badge**: a small docked or floating block with the pending count; click opens the panel. Renders nothing at zero.
-- **Agent card pane**: `pane.split {mod: "speaker", props: {task}}` beside a sandboxed agent shows only that agent's pending cards and grants, so you approve next to the conversation.
-- **Toasts**: a new card posts `notify` with an action that opens the panel on that card.
-- **Session states**, as one explicit table in the mod: `unreachable`, `unset`, `locked`, `signed-out`, `signed-in`. The password field shows in `locked` and `signed-out`; the token lives in a variable, never in `shared`, `localStorage` or a file. Over plain HTTP from another machine the mod repeats `/admin`'s warning that the password crosses the network in clear.
-- Speaker's URL is typed once and kept in `shared` (not a secret). UI follows `~/code/workshop/mostly-impeccable/design-craft-lite.md` and Herdr's theme colours.
-
-### Security notes
-
-- Sandboxed agents cannot touch any of this: they have no route to the Mac, the mod or the owner API's token.
-- **Direct agents running as you on the same Mac can.** They can edit the mod's files (hot reload), and could read anything stored on disk. `DESIGN.md` already says a single machine "protects against accidents… not against a hostile agent running as the owner"; the mod keeps that level and does not lower it, provided the token stays in memory and Approve is never exposed as a mod key-command (`herdr-app do speaker.approve` must not exist).
-- Next steps for stronger sign-in, in rising effort:
-  1. An **approvals-only device token** (cannot open Setup or read keys), bound to the source address, with idle expiry.
-  2. That token in the **OS keystore**. Caveat: stored through the `security` CLI, any process running as you can read it back without a prompt; it only helps if a small signed helper owns the item with a user-presence rule (Touch ID per unlock).
-  3. **Risk tiers**: read-only items approvable in Herdr; write-tinted items (`ssh:`, `.full`, `:rw`, secrets) need the phone or browser.
-  4. Passkey (WebAuthn) sign-in for `/admin` itself, which removes the password from the network.
-
-## Part B: sandboxed agents in Herdr
-
-Chosen path: **the attach terminal runs on the bottle host under herdr-core.** The VM stays network-less with the same doors.
-
-1. **A terminal per task.** When a task launches, bottle (the service, if `herdr` is enabled in `config.json` and `hc` is on `PATH`) runs
-   `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> --label bottle.task=<id> -- bottle attach <id>`.
-   The labels make Herdr show a **bottle** space on that machine with one tab per task, however the task was started (CLI, cron, later the mod). When the task archives, `attach` exits and the pane closes.
-   Alternative: the mod creates the tab (`tab.new {argv}`) when it sees a new task in `bottle ls --json`. That needs no bottle change but only works while the app is open; I prefer bottle doing it.
-2. **Status over OSC 7501.** A small always-on guest extension (next to `reply.ts`) writes the report to Pi's terminal; it passes through dtach and `msb exec -t` to the hc terminal:
-   - `working` / `idle` from Pi's own events, `done` when `/output/DONE` exists;
-   - `blocked`, kind `permission`, while `/work/.speaker/pending.json` holds a request, with the items in `msg`. Herdr then plays its sound, marks the space, and its toast jumps to the agent, where the card pane is one click away.
-   Alternative: `bottle attach` emits the reports on the host from the task state it already polls. That is agent-agnostic, but it must write into a raw terminal stream it does not own (today the child has `stdio: inherit`), so it needs a pty proxy and a new dependency.
-3. **Talking to it.** Type in the pane; `hc send pi-<id> "…"` works for scripts and other agents. Unattended tasks are attachable the same way.
-4. **Starting one from Herdr.** Add `bottle run --attach` (launch, then attach in the foreground). A `programs.json` entry `{"pi-sandbox": {"name": "Pi (sandbox)", "run": ["bottle", "run", "--attach"]}}` then puts it in Herdr's + menu on any machine that has bottle, with the first message as `--prompt`. Later the mod can offer a template picker.
-5. **Linking speaker and Herdr.** Speaker's view already carries sandbox host and task id per agent; the terminal carries `bottle.task=<id>`. That is the join for "Go to agent" and for the agent card pane. Direct agents (Claude Code in a Herdr pane) could optionally send `$HC_TERMINAL_ID` at enrollment, shown as a claim; not needed for v1.
-6. **bottle additions:** `bottle ls --json`, `bottle run --attach`, the hc launch hook, the guest status extension. The TUI-Herdr code in `cli.ts` stays as it is.
-
-**Parked alternative: herdr-core inside each VM** (`hc machine add --via 'msb exec … sh -c' --temp`). It would give Herdr file and exec access inside the sandbox and sub-agents there, but the app hides temporary machines' spaces today, and it adds a binary plus a control channel into an otherwise sealed guest. Revisit only if you want to browse `/work` from Herdr's Files panel.
-
-**Other agents in the sandbox** (Claude Code, Codex): this path only needs "runs under dtach and reports 7501", so Herdr is not the obstacle; bottle's Pi-specific launch and restart logic (`pi.ts`) is. Out of scope here.
-
-**Herdr TUI:** keeps today's integration. If you want approvals there too, A2 is the answer (a plugin pane running `speaker tui`). I have not read the TUI plugin manifest format yet.
-
-## Order of work
-
-| Step | What | Size | Proves |
+| Step | What | Who | Check |
 | --- | --- | --- | --- |
-| 0 | **Spikes**: (a) the exact OSC 7501 text, and whether Pi already emits it through dtach and `msb exec -t`; (b) a labelled `hc run` on a remote machine appears as a tab in the app and closes cleanly; (c) a mod's `fetch` can POST JSON with an `Authorization` header and hold a long poll; (d) terminal resize through dtach | half a day | every assumption marked below |
-| 1 | **Agents visible**: `bottle run --attach`, `bottle ls --json`, hc launch hook, guest status extension, `programs.json` entry | small | Part B end to end |
-| 2 | **Owner JSON API** in speaker, with tests beside `proxy.test.ts` | medium | A1, A2, A3 unblocked |
-| 3 | **Mod v1**: sign-in, Inbox, toasts, badge | medium | approve without the browser |
-| 4 | **Mod v2**: Active tab, agent card pane, Go to agent | medium | the two halves joined |
-| 5 | Pick from: Setup in the mod (A3), `speaker tui` (A2), approvals-only token and keystore, template picker | each separate | |
+| 0 | Commit, tag `pre-cuts-2026-11-14` | main session | |
+| 1a | **Speaker low-risk cuts**: the `core` unpacking blocks in `api.ts` and `admin.ts`, old-host defaults, unused `version` field | cheap subagent A (speaker files only) | `tsc`, lint, speaker tests |
+| 1b | **Bottle low-risk cuts**: Herdr TUI integration in `cli.ts`, dead trace branches, `shareRoots`, the reload route, the duplicate check in `start.sh`, the CLI error prettifier; matching README lines | cheap subagent B (bottle files only), in parallel with A | `tsc`, lint, bottle tests |
+| 1c | **One copy of the init helpers** | cheap subagent C, after A and B (it touches both packages and their init tests) | both test suites |
+| 2 | **Reformat speaker at width 160**, as its own commit so the diff stays readable | main session, one command | `mise run check` |
+| 3 | **Feature cuts you approve** (table below), one commit per feature, docs updated in the same commit | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
+| 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
+| 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
-Step 1 is independent of 2 to 4, and A0 can ship any time as a stopgap.
+Rules for the subagents: each gets an exact file list and the audit's line ranges, removes only what is listed, never edits a test to make it pass (a failing test is reported back), and does not commit. A and B run together because their files do not overlap; nothing else runs in parallel in the one tree.
 
-## Not yet verified
+Agreed so far: all low-risk cuts (steps 1a to 1c), including the Herdr TUI integration. Steps 2 and 3 wait on the open decisions.
 
-- The OSC 7501 wire format. The core binary shows a capability query (`ESC ] 7501 ; ? : states=… : kinds=…`) and the fields `state`, `kind`, `msg`, `title`, `app`, `progress`; I have not seen a full example. Herdr lists `pi` as an agent that reports, but not whether that is Pi itself or an extension.
-- A mod's `fetch`: methods, headers and how long a request may hang. If it is limited, `exec("curl", …)` with the 30 s cap is the fallback (short polls instead of a held call).
-- How a labelled terminal behaves when its program exits on a remote machine, and whether "adoption enables keep" leaves a shell behind on the bottle host.
-- bottle on macOS (model 1) and nested reach from the Mac to WSL.
+## Open
 
-## Questions for you
+1. **Reformat speaker at 160?** 363 fewer lines, no code removed.
+2. **Which feature cuts to take** (table below). The trace export has a slim alternative, described there.
 
-1. **Blocked or not?** A pending speaker request does not actually stop Pi (`request_capability` returns at once). Should it still show as `blocked` in Herdr (loud: sound, toast, top of the list), or as `working` with only the speaker badge counting it?
-2. **Who makes the tab**: bottle at launch (always there, needs `hc` on the bottle host) or the mod (no bottle change, only while the app is open)?
-3. **One "bottle" space per machine with a tab per task**, or a space per task?
-4. Do you want **A0 first** as a stopgap, or go straight to the API and mod?
-5. Is **Herdr TUI** worth real effort, or is keeping today's integration enough? That decides whether A2 is built.
-6. Where should the mod live: in this repo (`herdr/mods/speaker/`), or its own repo so it can be listed at herdr.dev/mods?
-7. `bottle` vs `bottle-school`: the folder `bottle-school/` exists but holds only `node_modules`. Is a rename under way that this plan should follow?
+## Line-reduction audit of the existing code
+
+A read-only audit by a subagent, which read every non-test source file (8,752 lines) and did not run the tests. Only the reformat and Herdr counts are measured; the rest are estimates of about ±25%. Nothing is cut yet.
+
+### Low risk, no feature lost (about 230 lines of code, plus 363 from formatting)
+
+| Cut | Lines |
+| --- | --- |
+| Format speaker at width 160 like bottle (cosmetic: same code, fewer lines, one big diff) | -363, measured |
+| Drop the blocks in `speaker/api.ts` and `admin.ts` that only unpack `core` into locals | ~-60 |
+| One copy of the prompt helpers duplicated between `speaker/init.ts` and `bottle/init.ts` | ~-50 |
+| Herdr TUI integration in `bottle/src/cli.ts` (open question 1) | -42, exact |
+| Small items: old-host defaults, an unused `version` field, a duplicate storage check in `start.sh`, a CLI error prettifier | ~-35 |
+| Dead branches in `bottle/src/trace.ts` left from when all egress was recorded | ~-20 |
+| `shareRoots`, which no longer does anything (old configs containing it stop loading) | ~-10, plus ~15 in tests |
+| `POST /api/catalog/reload`, which duplicates the SIGHUP reload | -9 |
+
+One medium-risk extra: replace speaker's hand-written upstream forwarding with Hono's proxy helper (~-15 to -20). The header strip list must survive, and the helper's behaviour is unchecked.
+
+### Changes a feature: your decision (about 1,270 lines in total)
+
+| Cut | Lines | What you lose |
+| --- | --- | --- |
+| `trace.jsonl` and model body capture | ~-380 | Raw model requests and replies in the archive. The Pi session, transcript, policy events and grants stay. Nothing in the repo reads the trace. |
+| Narrow `init` (update-in-place, owner-password auto-approve, smoke test, reverse-proxy questions) | ~-185 | Setup conveniences. Flags-only init would be ~-400. |
+| Read/write classification of remote MCP tools | ~-120 | `.read` grants for MCP services; every tool call would need `.full`. Coarser grants. |
+| `/admin` extras: filter bar, custom confirm dialog, per-agent counts, countdown meters | ~-125 | Polish on the owner pages. |
+| Hosted model providers in bottle | ~-110 | Hosted models through a speaker secret; local models only. Removes the `awaiting-key` task state. |
+| Simpler speaker link in bottle (keep the 30-second grant drop) | ~-60 | The specific "token rejected" message and auto-shutdown after 5 minutes without speaker. |
+| In-VM MCP servers (`mcp:` items) | ~-60 | Grantable stdio MCP servers in the VM. The shipped catalog has none. |
+| `bottle doctor` | ~-59 | The preflight command; `init` and `start.sh` check most of the same things. |
+| Docker path for speaker | -47 | The hardened container. This is the planned NAS deployment, so probably keep. |
+| VM-mount folder delivery in speaker | ~-45, plus ~60 in tests | A delivery mode no sandbox host here implements. |
+| Require `PROXY_PORT` and `SSH_PORT` | ~-40 | Running speaker without the secrets proxy or jump server. |
+| Extension-bundled sites | ~-30 | Site grants ending automatically with their extension. |
+| Three-denials lock | ~-25 | Auto-deny for 15 minutes after three denials. |
+| Built-in demo service | ~-20 | The no-key demo on a fresh install. |
+
+### The trace export: why it is large, and a slim version
+
+`bottle/src/trace.ts` is 437 lines. About 90 of them write the archive manifest and stay either way. The rest goes to:
+
+- saving each model request and reply as size-capped blobs, with truncation bookkeeping and an allowlist of 23 headers (~105 lines);
+- rebuilding tool calls from Pi's session file and pairing each call with its result (~90);
+- reassembling streamed replies into finished messages (~25);
+- shaping all of it into a linked run tree in the format LangSmith and Phoenix import (~55). That import is unverified.
+
+**Slim version, about 25 lines:** the model door appends one JSON line per model call to `model-calls.jsonl`: time, status, duration, the request body and the raw reply, each cut off at a size cap. It keeps the one thing nothing else records, which is exactly what the model was sent and what it answered. It drops the header capture, the reassembled messages (the raw stream is kept instead), the tool-call records (Pi's session file already has them) and the importable run tree. Net saving about 320 lines instead of 380.
+
+### Two of the smaller cuts, in plain words
+
+- **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. A task asks for `mcp:<id>`; when you approve, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
+- **VM-mount folder delivery.** Speaker can deliver a `folder:` grant two ways. Over SSH, the sandbox mounts the share with `sshfs` through speaker's jump server, which is what happens today. As a VM mount, a sandbox host that has the folder on its own disk would map it straight into the VM, which is much faster for `grep -r`, `find` and `git status`. bottle always tells speaker it cannot mount, so speaker's VM-mount branch never runs. Cutting it removes the unused branch and closes the door on the fast path until it is rebuilt.
+
+### Not recommended (weakens a security boundary)
+
+- Replacing the filtering SFTP relay with a plain `sftp-server` (~-300): loses share containment, read-only enforcement and per-file logging.
+- Dropping the custom Origin check in `admin.ts` (~-14): Hono's CSRF helper only checks form posts.
