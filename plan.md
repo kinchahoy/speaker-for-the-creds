@@ -79,7 +79,7 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
 | 2e | **MCP tool listing through the official SDK**, classification unchanged; skipped if the SDK check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
 | 2f | **Require the proxy and SSH ports** in speaker and bottle | cheap subagent, after 2e | both test suites |
-| 3 | **Library pass** (below): report first, then adopt what you confirm, one commit each | one subagent with web access to report; cheap subagents to apply | tests pass unchanged |
+| 3 | **Library changes you confirm** (findings below), one commit each | cheap subagents; the MCP one on a mid-tier model | tests pass unchanged |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
@@ -91,7 +91,7 @@ Not doing: reformatting speaker to width 160. It removes 363 lines without remov
 
 ## Open
 
-1. **Which libraries to adopt**, after the library pass reports.
+1. **Yes or no on each library change**: `commander`, the v2 MCP client, Hono's proxy helper, Node's key handling; and whether to move to one pnpm workspace.
 
 ## Line-reduction audit of the existing code
 
@@ -132,18 +132,32 @@ Decided:
 
 Kept, by your decision: hosted model providers (a key feature), the speaker link as it is, all of `init`, the `/admin` extras, the three-denials lock, extension-bundled sites, the Docker path and the demo service.
 
-### Library pass
+### Library pass: findings
 
-A standing rule for this project: prefer a well-kept library over custom code wherever it makes the total smaller. One report-only subagent with web access checks these candidates, and anything else it finds, before any is adopted:
+A standing rule for this project: prefer a well-kept library over custom code wherever it makes the total smaller. A subagent read the source and checked npm on 2026-11-14; it ran nothing except the Node key round trip. Line counts are estimates of about ±25%. About 90 lines beyond what was already agreed.
 
-| Custom code | Candidate | Note |
-| --- | --- | --- |
-| MCP tool listing in `speaker/core.ts` (~50 lines) | `@modelcontextprotocol/sdk` | The reference client. The Vercel AI SDK also has an MCP client, but it turns tools into its own tool objects, and speaker needs the raw read-only and destructive hints; pydantic-ai is Python. |
-| Upstream forwarding in `speaker/api.ts` (~60 lines) | Hono's proxy helper, already installed | The header strip list must survive. |
-| Reconnect and backoff in `bottle/src/speaker.ts` | a reconnecting WebSocket wrapper | Only the reconnect part; the token check, limits and grant drop stay. |
-| Prompt helpers in the three `init.ts` files | `@clack/prompts`, already installed | Check whether its built-ins cover what the helpers add. |
+Worth doing, waiting for your yes on each:
 
-For each: current release activity, lines saved net of glue, and whether any behaviour changes. Adopt only when the total goes down and the library is actively maintained; each new dependency is confirmed with you first.
+| Change | Lines | Dependencies | Changes in behaviour | Risk |
+| --- | --- | --- | --- | --- |
+| **bottle CLI on `commander`** (15.1.0, MIT, released 2026-11-07) in place of the hand-written help tables, option parsing and dispatch in `bottle/src/cli.ts` | ~-35 | +1 | Help wording; keeping exit code 2 for usage errors needs one setting. | Low to medium. `cli.ts` has no tests. |
+| **MCP tool listing on the official client** (step 2e). Checked in the installed SDK: it takes the credential header, refuses redirects and returns the raw read-only and destructive hints. | ~-30 | Use `@modelcontextprotocol/client` 2.4.0 (7 direct dependencies) rather than the v1 SDK, which would pull about 60 packages into the container. The v1 SDK is already a dev dependency that nothing imports; it goes. | Tool schemas are validated, so an odd server could fail to list where it lists today. Not yet checked for v2: its class names and that the hints pass through. | Medium. Covered by `proxy.test.ts`. |
+| **Upstream forwarding on Hono's proxy helper**, already installed | ~-12 | 0 | Compression is negotiated instead of forced off; a malformed `Connection` header is answered 400. The header strip list, redirect refusal and audit stay. | Low to medium. Covered by `proxy.test.ts`. |
+| **Secrets-proxy key handling on Node's built-in key export and import** | ~-11 | 0 | None; stored keys stay readable. Verified by running it. | Low. |
+
+Housekeeping it noticed, not line savings: `undici` in bottle is two major versions behind (6.29.1, latest 8.12.4), and the guest image pins Pi as `latest`, which the project rules forbid.
+
+Optional, larger: **one pnpm workspace** instead of two separate installs. Eight dependencies are declared twice, there are two lockfiles, and the mise tasks are written twice. About zero net lines of code, and it would let the root `init.ts` use `commander` too (~-23 more). The cost is reworking `speaker/Dockerfile`, which copies only speaker's own files today.
+
+Checked and rejected, so they are not looked at again:
+
+- **A reconnecting WebSocket wrapper** for bottle's speaker link: it could replace only the backoff timer (about 6 lines), and would need a workaround to send the auth header. Net zero or worse.
+- **Hono's typed client**: both servers register routes as separate statements, so no route type exists to infer; it would need a restructure for about three calls.
+- **`@clack/prompts` built-ins** for the init helpers: they do not cover the flag-or-default-or-prompt pattern. The helpers are shared instead (step 1c, ~-42).
+- **`age-encryption`** for the key store: changes the on-disk format, is pre-1.0, and touches secret handling.
+- **A MITM proxy library** for the secrets proxy, **`ssh2`** for the SFTP relay, **Hono's bearer-auth** for agent tokens: each would lose a security check or need the same code written around it.
+- **Merging speaker's secrets proxy with bottle's `proxy-chain`**: they do different jobs.
+- Removing `hono-rate-limiter` or `write-file-atomic`, and about ten small utilities: each under 5 net lines.
 
 **Hosted model providers, in plain words.** By default the Pi inside a VM talks to your own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once you approve, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
 
