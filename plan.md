@@ -78,19 +78,20 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 2c | **In-VM MCP servers stay**: add a test that an approved `mcp:<id>` puts the server into Pi's MCP config and a revoke removes it (no VM needed), and a short README example of a catalog entry | cheap subagent, after 2a | the new test passes |
 | 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
 | 2e | **MCP tool listing through the official SDK**, classification unchanged; skipped if the SDK check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
-| 3 | **Proposed cuts you confirm** (table below), one commit per feature with docs | one cheap subagent per feature; those sharing files run in sequence | tests; `DESIGN.md` and READMEs match |
+| 2f | **Require the proxy and SSH ports** in speaker and bottle | cheap subagent, after 2e | both test suites |
+| 3 | **Library pass** (below): report first, then adopt what you confirm, one commit each | one subagent with web access to report; cheap subagents to apply | tests pass unchanged |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
 Rules for the subagents: each gets an exact file list and the audit's line ranges, removes only what is listed, never edits a test to make it pass (a failing test is reported back), and does not commit. A and B run together because their files do not overlap; nothing else runs in parallel in the one tree.
 
-Agreed: all low-risk cuts (1a to 1c) including the Herdr TUI integration, the slim trace (2a), cutting VM-mount delivery (2b), keeping in-VM MCP servers with a test (2c), cutting `bottle doctor` (2d), and simplifying the MCP tool listing without losing the feature (2e). Step 3 waits on your yes or no per row.
+Agreed: all low-risk cuts (1a to 1c) including the Herdr TUI integration, the slim trace (2a), cutting VM-mount delivery (2b), keeping in-VM MCP servers with a test (2c), cutting `bottle doctor` (2d), and simplifying the MCP tool listing without losing the feature (2e). Also agreed: requiring the proxy and SSH ports (2f). Every other feature stays.
 
 Not doing: reformatting speaker to width 160. It removes 363 lines without removing any code, and 160 is not a common width (formatter defaults are 80 to 100, and 120 is a common wider choice), so speaker's 120 is the more standard of the two. The packages keep their current widths.
 
 ## Open
 
-1. **Yes or no on each proposed cut** (table under Further feature cuts).
+1. **Which libraries to adopt**, after the library pass reports.
 
 ## Line-reduction audit of the existing code
 
@@ -127,21 +128,22 @@ Decided:
 | `bottle doctor` | ~-59 | cut. `init` and `start.sh` keep their own host checks. |
 | Read/write classification of remote MCP tools | ~-35 | **simplify, do not remove.** About 50 of its lines are a hand-written MCP client that lists a server's tools (handshake, paging, event-stream parsing, session close). The official `@modelcontextprotocol/sdk` client does that in about 10. The classification itself stays as it is. Check first: the SDK's release activity, and that its HTTP transport lets speaker add the credential header and refuse redirects. If it cannot, leave the code alone. |
 
-Proposed, waiting for your yes or no:
+| Require `PROXY_PORT` and `SSH_PORT` (and bottle's matching settings) | ~-40 | cut. Speaker no longer runs without the secrets proxy or jump server; `init` already sets both. |
 
-| Cut | Lines | What you lose | My view |
-| --- | --- | --- | --- |
-| Require `PROXY_PORT` and `SSH_PORT` | ~-40 | Running speaker without the secrets proxy or jump server. `init` already sets both. | cut |
-| `init`: the smoke-test task and the reverse-proxy questions | ~-75 | You run a first task yourself; you set `TRUSTED_PROXY` in the env file. | cut |
-| `/admin`: the filter bar and the custom confirm dialog | ~-72 | Filtering the Inbox by kind or text; a styled confirm instead of the browser's. | cut |
-| Three-denials lock | ~-25 | Auto-deny for 15 minutes after an agent is denied three times; it would reach you again instead. | cut |
-| `init`: update in place, and unlocking speaker and approving the host with the owner password | ~-110 | Re-running `init` with old answers as defaults; one-step setup. Both matter for easy deployment by others. | keep |
-| Hosted model providers in bottle | ~-110 | Running the sandboxed Pi on a cloud model (see below). Anyone without a local model server needs it. | keep |
-| Speaker link in bottle | ~-60 | Fast failure on a rejected token and on a long outage (see below). | keep |
-| Docker path for speaker | -47 | The hardened container, which is the planned NAS deployment. | keep |
-| `/admin`: per-agent counts, "same agent enrolled earlier" warning, countdown meters | ~-54 | Signals that an agent is misbehaving. | keep |
-| Extension-bundled sites | ~-30 | Site grants ending with their extension's grant; they would run to their own end time. | keep |
-| Built-in demo service | ~-20 | The no-key demo the README tells new users to start with. | keep |
+Kept, by your decision: hosted model providers (a key feature), the speaker link as it is, all of `init`, the `/admin` extras, the three-denials lock, extension-bundled sites, the Docker path and the demo service.
+
+### Library pass
+
+A standing rule for this project: prefer a well-kept library over custom code wherever it makes the total smaller. One report-only subagent with web access checks these candidates, and anything else it finds, before any is adopted:
+
+| Custom code | Candidate | Note |
+| --- | --- | --- |
+| MCP tool listing in `speaker/core.ts` (~50 lines) | `@modelcontextprotocol/sdk` | The reference client. The Vercel AI SDK also has an MCP client, but it turns tools into its own tool objects, and speaker needs the raw read-only and destructive hints; pydantic-ai is Python. |
+| Upstream forwarding in `speaker/api.ts` (~60 lines) | Hono's proxy helper, already installed | The header strip list must survive. |
+| Reconnect and backoff in `bottle/src/speaker.ts` | a reconnecting WebSocket wrapper | Only the reconnect part; the token check, limits and grant drop stay. |
+| Prompt helpers in the three `init.ts` files | `@clack/prompts`, already installed | Check whether its built-ins cover what the helpers add. |
+
+For each: current release activity, lines saved net of glue, and whether any behaviour changes. Adopt only when the total goes down and the library is actively maintained; each new dependency is confirmed with you first.
 
 **Hosted model providers, in plain words.** By default the Pi inside a VM talks to your own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once you approve, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
 
