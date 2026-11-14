@@ -81,7 +81,7 @@ Each service has a rule for read and one for write:
 
 **Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once. The agent stays as a revoked tombstone (with the time) until speaker restarts, so its token keeps answering `denied` instead of `enroll`; an idle agent that is not revoked is removed as above.
 
-**Sandbox host:** registers once, the owner approves it, and it stays until removed.
+**Sandbox host:** registers, the owner approves it, and it stays until removed. Registering is unauthenticated and only adds a pending entry (name, kinds, source address, time). Approving it removes any other host with the same name and the same source address (audited `host_replaced`): that is the same machine registering again, its old tokens are unusable, and its agents end with it. A different name or address is kept. The pending card says what approval will replace, and host cards show address, registration time and status.
 
 **Restart:** speaker starts locked (see Keys). Agents, grants and requests are gone; agents enroll and ask again, and open sessions and mounts end.
 
@@ -317,6 +317,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - The sandbox host sends speaker its catalog of `mcp:` and `ext:` entries over its WebSocket. Speaker lists them, with every secret and group, in `/catalog`, and the `request_capability` tool shows that text to the task.
 - A grant for a sandbox-only item counts as decided for the agent once the sandbox host reports it in force.
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
+- An extension's sites live and end with it. A site that came only because a request named `ext:<id>` (not asked for in that request) records the ext grant it belongs to; revoking, expiring or ending the agent of that ext grant ends the site grant too, through the same path (audit and push to the sandbox host). A site asked for explicitly, or already held on its own, stays. A site shared by two extensions ends with the last of them. Extending the ext grant extends its bundled sites. Cards and the Active list show the relationship.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/catalog` gives the path.
 - A share the sandbox host reported with `mount: false` (or did not report) is delivered to its agents over SSH, and the host mounts it itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.

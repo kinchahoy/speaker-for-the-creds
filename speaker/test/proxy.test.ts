@@ -1019,3 +1019,95 @@ test('a sandbox host reports its catalog: unknown ext and mcp ids are refused, a
   for (let i = 0; i < 100 && Object.keys((await catalog()).extensions).length; i++) await sleep(20)
   assert.deepEqual((await catalog()).extensions, {})
 })
+
+// A host reporting one extension (`web`) that needs two sites, and an agent on it.
+async function hostWithExtension(f: Fixture, t: TestContext) {
+  const { agent } = await approvedHost(f, ['site', 'ext'])
+  const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
+    headers: { authorization: 'Bearer host-token' },
+  })
+  t.after(() => ws.terminate())
+  await once(ws, 'open')
+  const extension = { id: 'web', label: 'Web', description: 'Search', tools: ['s'], sites: ['a.example', 'b.example'] }
+  ws.send(JSON.stringify({ type: 'catalog', mcps: [], extensions: [extension] }))
+  const listed = async () =>
+    Object.keys(
+      (
+        (await (await f.call('/_speaker/catalog', { headers: bearer(agent.token) })).json()) as {
+          extensions: Record<string, object>
+        }
+      ).extensions,
+    )
+  for (let i = 0; i < 100 && !(await listed()).length; i++) await sleep(20)
+  const approve = async (want: string[]) => {
+    const made = (await (await askFor(f, agent.token, { want, reason: 'r', duration: '30m' })).json()) as Outcome
+    assert.equal((await f.decide(made.id, 'approve', { duration: '30m' })).status, 303)
+  }
+  const held = async () => (await f.grants()).map((g) => g.item).sort()
+  return { agent, approve, held }
+}
+
+test('an extension’s sites end with it: revoking ext ends the sites it brought, never one asked for itself', async (t) => {
+  const f = await setup(t)
+  const h = await hostWithExtension(f, t)
+  await h.approve(['ext:web', 'site:b.example'])
+  assert.deepEqual(await h.held(), ['ext:web', 'site:a.example', 'site:b.example'])
+  assert.match((await f.live()).grants, /comes with ext:web/)
+  const ext = (await f.grants()).find((g) => g.item === 'ext:web')
+  assert.ok(ext)
+  assert.equal((await f.ownerForm('/grants/revoke', { id: ext.id })).status, 303)
+  // b.example was asked for explicitly, so it stays; a.example was only the extension's.
+  assert.deepEqual(await h.held(), ['site:b.example'])
+})
+
+test('a site the agent already holds on its own stays when the extension ends, and revoking the agent ends everything', async (t) => {
+  const f = await setup(t)
+  const h = await hostWithExtension(f, t)
+  await h.approve(['site:a.example'])
+  await h.approve(['ext:web'])
+  assert.deepEqual(await h.held(), ['ext:web', 'site:a.example', 'site:b.example'])
+  const ext = (await f.grants()).find((g) => g.item === 'ext:web')
+  assert.ok(ext)
+  await f.ownerForm('/grants/revoke', { id: ext.id })
+  assert.deepEqual(await h.held(), ['site:a.example'])
+  await h.approve(['ext:web'])
+  assert.equal((await f.ownerForm(`/agents/${h.agent.id}/revoke`, {})).status, 303)
+  assert.deepEqual(await h.held(), [])
+})
+
+test('an extension’s sites expire with it', async (t) => {
+  const f = await setup(t)
+  const h = await hostWithExtension(f, t)
+  await h.approve(['ext:web'])
+  assert.equal((await h.held()).length, 3)
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 31 * 60_000 })
+  assert.deepEqual(await h.held(), [])
+})
+
+test('approving a host that registers again from the same address and name replaces the old one and its agents', async (t) => {
+  const f = await setup(t)
+  const first = await approvedHost(f)
+  const register = async (name: string, token: string) =>
+    (
+      (await (
+        await f.call('/_speaker/hosts', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, kinds: ['site'], tokenHash: sha(token) }),
+        })
+      ).json()) as { id: string }
+    ).id
+  const other = await register('elsewhere', 'other-token')
+  assert.equal((await f.ownerForm(`/hosts/${other}/approve`, {})).status, 303)
+  const again = await register('test', 'host-token-2')
+  // Registration alone changes nothing; the card says what approval will do.
+  assert.match((await f.live()).approvals, /Approving replaces the approved host test registered/)
+  assert.match((await f.live()).grants, /Sandbox host test/)
+  assert.equal((await f.ownerForm(`/hosts/${again}/approve`, {})).status, 303)
+  const active = (await f.live()).grants
+  assert.equal(active.match(/Sandbox host test/g)?.length, 1)
+  assert.match(active, /Sandbox host elsewhere/)
+  assert.match(active, /registered <time/)
+  assert.equal((await f.call('/_speaker/catalog', { headers: bearer(first.agent.token) })).status, 403)
+  assert.equal((await f.ownerForm(`/hosts/${first.id}/remove`, {})).status, 404)
+})

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs, promisify } from "node:util";
 import { attach } from "./sandbox.ts";
@@ -231,7 +232,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
   };
 
   if (command === "register") {
-    const name = values.name ?? "bottle";
+    const name = values.name ?? hostname();
     const id = await registerHost(config, configPath, name);
     console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle.`);
   } else if (command === "run") {

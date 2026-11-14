@@ -302,6 +302,9 @@ const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(
 const local = (ms: number, countdown = false) =>
   html`<time datetime="${new Date(ms).toISOString()}" data-local ${raw(countdown ? 'data-left' : '')}>${time(ms)} UTC</time>`
 const kindOf = (item: string) => (item.includes(':') ? item.split(':')[0] : 'service')
+// Where and when a sandbox host registered: told apart in the lists by address and time.
+const registered = (h: { source: string; registeredAt: number }) =>
+  html`from ${h.source || 'unknown address'} · registered ${h.registeredAt ? local(h.registeredAt) : 'at an unknown time'}`
 // Items that can change things (or reach out with a credential) are highlighted and explicitly badged on the card.
 const risky = (item: string) => /^(ssh|secret):|\.full$|^folder:.+:rw$/.test(item)
 const riskTag = (item: string) =>
@@ -347,7 +350,7 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
       ? ` · sent to ${owned[name].hosts.join(', ')}`
       : ' · not set up: it will do nothing'
   }
-  const pick = (agentId: string, item: string) => {
+  const pick = (agentId: string, item: string, bundled: Record<string, string> = {}) => {
     const detail = details[`${agentId} ${item}`]
     const tag = riskTag(item)
     const hosts = item.startsWith('site:')
@@ -356,13 +359,21 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
         ? (owned[item.slice('secret:'.length)]?.hosts ?? [])
         : []
     const wide = hosts.filter(broad)
-    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code>${tag ? html` <span class="badge badge-warn">${tag}</span>` : ''} <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}${wide.length ? html` <mark>very broad: ${wide.join(', ')} matches every host under it</mark>` : ''}</span></label>`
+    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code>${bundled[item] ? html` <small>(needed by ${bundled[item]}; ends with it)</small>` : ''}${tag ? html` <span class="badge badge-warn">${tag}</span>` : ''} <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}${wide.length ? html` <mark>very broad: ${wide.join(', ')} matches every host under it</mark>` : ''}</span></label>`
   }
+  // Approving a host removes the approved ones with the same name and address: say so on its card.
+  const replaced = (h: View['hosts'][number]) =>
+    hosts
+      .filter((o) => o.id !== h.id && o.name === h.name && o.source === h.source)
+      .map(
+        (o) =>
+          html`<p><mark>Approving replaces the ${o.status} host ${o.name} registered ${o.registeredAt ? local(o.registeredAt) : 'at an unknown time'}: it and its agents are removed.</mark></p>`,
+      )
   const hostCards = hosts
     .filter((h) => h.status === 'pending')
     .map(
       (h) =>
-        html`<article id="host-${h.id}"><header><div class="card-head"><strong>Sandbox host ${h.name}</strong><small>wants to register</small></div></header><p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions stub"><button class="approve">Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
+        html`<article id="host-${h.id}"><header><div class="card-head"><strong>Sandbox host ${h.name}</strong><small>wants to register</small></div><small class="card-meta">${registered(h)}</small></header>${replaced(h)}<p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions stub"><button class="approve">Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
     )
   const requestCards = requests
     .filter((r) => r.status === 'pending')
@@ -388,8 +399,8 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
       }[r.notification]
       return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map(kindOf))].join(' ')}"><header><div class="card-head"><strong>${label}</strong><small>${local(r.createdAt)}</small></div>${agent ? html`<small class="card-meta">says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''} · from ${agent.source} · key <code>${agent.tokenHash.slice(0, 8)}</code>${twin(agent)}</small>` : ''}</header><p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
         (g) =>
-          html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item))}</fieldset>`,
-      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
+          html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>`,
+      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
     })
   const cards = [...hostCards, ...requestCards]
   return String(
@@ -417,7 +428,7 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
   const soonest = (id: string) => Math.min(Number.POSITIVE_INFINITY, ...grants.filter((g) => g.agentId === id).map(end))
   const grantRow = (g: View['grants'][number]) => {
     const detail = details[`${g.agentId} ${g.item}`]
-    return html`<li id="grant-${g.id}" class="grant-row" data-kind="${kindOf(g.item)}">${mark(kindOf(g.item))}<div class="grant-info"><code>${g.item}</code> ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`${g.grantedMs ? html`<span class="meter" data-total="${g.grantedMs}"><i></i></span>` : ''}${local(Date.parse(g.expiresAt), true)}`}${chips[g.enforcement] ? html` · <mark data-state="${g.enforcement}">${chips[g.enforcement]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small></div><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
+    return html`<li id="grant-${g.id}" class="grant-row" data-kind="${kindOf(g.item)}">${mark(kindOf(g.item))}<div class="grant-info"><code>${g.item}</code>${g.bundledWith.length ? html` <small>(comes with ${g.bundledWith.join(', ')} and ends with it)</small>` : ''} ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`${g.grantedMs ? html`<span class="meter" data-total="${g.grantedMs}"><i></i></span>` : ''}${local(Date.parse(g.expiresAt), true)}`}${chips[g.enforcement] ? html` · <mark data-state="${g.enforcement}">${chips[g.enforcement]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small></div><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
   }
   const agentCard = (a: View['agents'][number], mine: View['grants'], open: View['sessions']) =>
     html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header>${mark('agent')}<span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header>${mine.length || open.length ? html`<ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li class="grant-row" data-kind="ssh">${mark('ssh')}<div class="grant-info"><code>${s.what}</code><br><small>SSH session open since ${local(s.started)}</small></div><div class="actions">${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</div></li>`)}</ul>` : ''}</article>`
@@ -434,7 +445,7 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
     .filter((h) => h.status === 'approved')
     .map(
       (h) =>
-        html`<article><header>${mark('host')}<span><strong>Sandbox host ${h.name}</strong> <small>${h.kinds.join(', ') || 'no item kinds'}${h.shares.length ? ` · shares: ${h.shares.map((s) => `${s.name} (${s.mount ? 'VM mount' : 'no VM mount'})`).join(', ')}` : ''}</small></span>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</header></article>`,
+        html`<article><header>${mark('host')}<span><strong>Sandbox host ${h.name}</strong> <small>${h.kinds.join(', ') || 'no item kinds'} · approved · ${registered(h)}${h.shares.length ? ` · shares: ${h.shares.map((s) => `${s.name} (${s.mount ? 'VM mount' : 'no VM mount'})`).join(', ')}` : ''}</small></span>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</header></article>`,
     )
   return String(
     html`<h2>Active ${grants.length ? html`<small class="count">${plural(grants.length, 'grant', 'grants')}</small>` : ''}</h2>${withAccess.length ? html`<div class="cards">${withAccess}</div>` : empty('No live grants or open SSH sessions right now.')}${idle.length ? html`<h3 class="subhead">Enrolled without active grants <small class="count">${idle.length}</small></h3><div class="cards idle-cards">${idle}</div>` : ''}${hostBlocks.length ? html`<h3 class="subhead">Sandbox hosts <small class="count">${hostBlocks.length}</small></h3><div class="cards">${hostBlocks}</div>` : ''}${!withAccess.length && !idle.length && !hostBlocks.length ? empty('Agents and the access you granted appear here until they expire or you revoke them.') : ''}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p>`,

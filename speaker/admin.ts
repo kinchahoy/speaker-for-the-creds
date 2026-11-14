@@ -8,6 +8,7 @@ import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
   type Core,
+  type Host,
   decisionSchema,
   groupDescriptionSchema,
   groupItemsSchema,
@@ -382,19 +383,29 @@ export function adminApp(core: Core) {
     if (!host) throw new HTTPException(404, { message: 'Unknown sandbox host' })
     return host
   }
+  const removeHost = (host: Host) => {
+    for (const agent of enrolled()) if (agent.host === host.id) endAgent(agent.id)
+    connections.get(host.id)?.ws.close(1008, 'removed')
+    hosts.delete(host.id)
+  }
   admin.post('/hosts/:id/approve', async (c) => {
     const host = hostById(c.req.param('id'))
     host.status = transition('host', hostTable, host.status, 'approve')
     audit('host_approved', { host: host.id })
+    // A host registering again from the same address under the same name is the same machine: its older entries
+    // (their tokens are bound to that address and are unusable now) go, with their agents.
+    for (const old of hosts.values())
+      if (old.id !== host.id && old.name === host.name && old.source === host.source) {
+        removeHost(old)
+        audit('host_replaced', { host: old.id, by: host.id, name: old.name })
+      }
     await saveHosts()
     return redirect(c)
   })
   // Removing a host (pending or approved) also ends its agents; its tokens stop working.
   admin.post('/hosts/:id/remove', async (c) => {
     const host = hostById(c.req.param('id'))
-    for (const agent of enrolled()) if (agent.host === host.id) endAgent(agent.id)
-    connections.get(host.id)?.ws.close(1008, 'removed')
-    hosts.delete(host.id)
+    removeHost(host)
     audit('host_removed', { host: host.id })
     await saveHosts()
     return redirect(c)
@@ -412,6 +423,7 @@ export function adminApp(core: Core) {
       throw new HTTPException(409, { message: 'Nothing to extend' })
     const end = Math.max(Date.parse(grant.expiresAt), Date.now()) + grant.grantedMs
     grant.expiresAt = new Date(end).toISOString()
+    for (const site of grants.values()) if (site.with?.includes(id)) site.expiresAt = grant.expiresAt
     for (const request of requests.values())
       if (request.grantIds.includes(id) && (request.expiresAt ?? 0) < end) request.expiresAt = end
     push()

@@ -160,7 +160,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     )
   const catalogHint = 'GET /_speaker/catalog'
   const list = (names: string[], none: string) => (names.length ? names.join(', ') : none)
-  // Expands groups, adds the sites of each extension, and refuses any name this agent may not ask for: the whole call
+  // Expands groups, adds the sites of each extension (and which extension brought them), and refuses any name this agent may not ask for: the whole call
   // fails with the names it may use (never shares or targets), before anything reaches the owner.
   function resolveItems(want: string[], agent: Agent) {
     const catalog = connections.get(agent.host ?? '')?.catalog
@@ -227,13 +227,14 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           'Use the exact name your task or the owner gave you; read "Folders and SSH" in GET /_speaker/help',
         )
     }
-    // An extension brings the sites it needs, so one approval covers both.
-    const sites = items.flatMap((item) =>
-      kindOf(item) === 'ext'
-        ? (catalog?.extensions.find(({ id }) => `ext:${id}` === item)?.sites ?? []).map((host) => `site:${host}`)
-        : [],
-    )
-    return union(items, sites)
+    // An extension brings the sites it needs, so one approval covers both. A site brought only by an extension (not
+    // asked for itself) is recorded against it: it ends with that extension's grant.
+    const bundled: Record<string, string> = {}
+    for (const item of items)
+      if (kindOf(item) === 'ext')
+        for (const host of catalog?.extensions.find(({ id }) => `ext:${id}` === item)?.sites ?? [])
+          if (!items.includes(`site:${host}`)) bundled[`site:${host}`] ??= item
+    return { items: union(items, Object.keys(bundled)), bundled }
   }
   // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
   const applying = (request: Request) =>
@@ -272,9 +273,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   }
   // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
-    let items: string[]
+    let items: string[], bundled: Record<string, string>
     try {
-      items = resolveItems(input.want, agent)
+      ;({ items, bundled } = resolveItems(input.want, agent))
       // A newer key replaces the older one.
       if (input.sshKey) {
         agent.sshKey = input.sshKey
@@ -296,7 +297,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       if (error instanceof HTTPException) tally(agent, 'refused', error.message)
       throw error
     }
-    const request = createRequest(agent, items, input.want, input.reason, input.duration)
+    const request = createRequest(agent, items, input.want, input.reason, input.duration, undefined, bundled)
     // `mcp:` and `ext:` take effect when Pi is idle, which this held call prevents, so only the others are waited for.
     await hold(
       c,
@@ -375,7 +376,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   })
   app.post('/_speaker/hosts', locked, enrollmentLimit, async (c) => {
     const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
-    const host: Host = { id: rid(), ...input, status: 'pending', source: sourceOf(c) }
+    const host: Host = { id: rid(), ...input, status: 'pending', source: sourceOf(c), registeredAt: Date.now() }
     hosts.set(host.id, host)
     await saveHosts()
     audit('host_registered', { host: host.id, name: host.name })

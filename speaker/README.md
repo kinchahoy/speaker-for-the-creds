@@ -203,6 +203,8 @@ Give agents the setup guide at `https://your-speaker-host/skill.md`. Speaker ser
 {.ai}
 
 - Every agent error is JSON with `error` and a `message`, and carries a `next` step where one exists. Where an approval is needed, it also carries a `tell_user` line with the approval link.
+- Registering a sandbox host again (same name, same address) leaves the old entry until you approve the new one; approving removes the old entry and its agents. Host cards show address and registration time, so stale entries are easy to spot.
+- An extension's sites end with it: revoking or expiring `ext:<id>` ends the sites it brought, unless the agent asked for them itself.
 - An agent works only from the address it enrolled from, and a sandbox host only from the address it registered from: the socket address. Behind a reverse proxy, set `TRUSTED_PROXY` to the proxy's IP. Speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from every other sender.
 - Only you extend access. Extend on a grant adds the span you originally granted.
 - If you deny the same item to the same agent three times within 15 minutes, speaker answers further requests as denied without asking you, until 15 minutes after the third denial.

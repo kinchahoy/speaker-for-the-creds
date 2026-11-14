@@ -114,6 +114,8 @@ export const hostSchema = z.object({
   // The address it registered from: like an agent token, a host token only works from there. A host saved before
   // this field matches no address and is told to register again.
   source: z.string().default(''),
+  // When it registered (ms); 0 for a host saved before this field, shown as "unknown".
+  registeredAt: z.number().default(0),
 })
 const reasonSchema = z.string().trim().min(1).max(500)
 export const identitySchema = z.object({
@@ -210,6 +212,8 @@ export type Grant = Usage & {
   // The span the owner approved; Extend adds it again.
   grantedMs?: number
   requestId: string
+  // A site grant brought only by an extension: the ext grant(s) it ends with. It ends when the last of them does.
+  with?: string[]
 }
 export type Outcome = 'pending' | 'granted' | 'denied'
 export type Request = {
@@ -227,6 +231,8 @@ export type Request = {
   // When the granted items end (null: until revoked).
   expiresAt?: number | null
   grantIds: string[]
+  // Sites brought only by an extension in this request (site item -> ext item): their grants end with the extension's.
+  bundled?: Record<string, string>
   notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
   decidedAt?: number
@@ -240,7 +246,7 @@ export const statusOf = (request: Request): RequestState =>
 // sandbox host reported it applied). `sent`: sent to a connected sandbox host, not yet reported applied.
 // `host-offline`: its sandbox host is not connected.
 type Enforcement = 'enforced' | 'sent' | 'host-offline'
-type GrantView = Grant & { label: string; agent: string; enforcement: Enforcement }
+type GrantView = Grant & { label: string; agent: string; enforcement: Enforcement; bundledWith: string[] }
 type RequestView = Request & { status: RequestState; items: string[] }
 // One connected sandbox host: its socket, the grants it reported applied, the shares it holds (and whether it can
 // mount them), and what it can start inside its VMs (MCP servers and Pi extensions, with the sites they need).
@@ -478,6 +484,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const endGrant = (grant: Grant, event: 'expired' | 'revoked') => {
     grants.delete(grant.id)
     audit(`grant_${event}`, { grant: grant.id, agent: grant.agentId, item: grant.item })
+    // Sites that came with an extension end with it, unless another extension grant still holds them.
+    for (const site of [...grants.values()])
+      if (site.with?.includes(grant.id)) {
+        site.with = site.with.filter((id) => id !== grant.id && grants.has(id))
+        if (!site.with.length) endGrant(site, event)
+      }
   }
   // Applies clock-driven transitions before every HTTP request: expired grants and requests, idle agents.
   function sweep() {
@@ -708,9 +720,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     target.uses++
     target.lastUsedAt = Date.now()
   }
-  function addGrant(request: Request, item: string, expiresAt: string | null, duration: Duration) {
-    for (const old of [...grants.values()])
-      if (old.agentId === request.agentId && old.item === item) grants.delete(old.id)
+  function addGrant(request: Request, item: string, expiresAt: string | null, duration: Duration, bundle?: string[]) {
+    const replaced = [...grants.values()].filter((old) => old.agentId === request.agentId && old.item === item)
+    for (const old of replaced) grants.delete(old.id)
     const grant: Grant = {
       id: rid(),
       agentId: request.agentId,
@@ -721,6 +733,11 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       lastUsedAt: null,
     }
     if (duration !== 'permanent') grant.grantedMs = durations[duration]
+    if (bundle?.length) grant.with = bundle
+    // Sites bundled with a grant this one replaces now follow the new grant.
+    for (const site of grants.values())
+      if (site.with?.some((id) => replaced.some((old) => old.id === id)))
+        site.with = union(site.with.map((id) => (replaced.some((old) => old.id === id) ? grant.id : id)))
     grants.set(grant.id, grant)
     request.grantIds.push(grant.id)
     audit('grant_created', { grant: grant.id, agent: grant.agentId, item, expiresAt })
@@ -757,7 +774,21 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       const no = pending.filter((item) => seen.has(item) && !take.has(item))
       if (!yes.length && !no.length) throw new HTTPException(409, { message: 'None of the shown items are pending' })
       const expiresAt = expiry(duration)
-      for (const item of yes) addGrant(request, item, expiresAt, duration)
+      // Extensions first: a bundled site binds to the ext grant just made. A site the agent already holds on its own
+      // stays as it is; one bundled with another extension gains this one.
+      const bundledOf = (item: string) => {
+        const ext = request.bundled?.[item]
+        return ext && yes.includes(ext) ? ext : undefined
+      }
+      for (const item of yes.filter((item) => !bundledOf(item))) addGrant(request, item, expiresAt, duration)
+      for (const item of yes.filter(bundledOf)) {
+        const ext = bundledOf(item) as string
+        const extGrant = [...grants.values()].find((g) => g.agentId === request.agentId && g.item === ext)
+        const held = [...grants.values()].find((g) => g.agentId === request.agentId && g.item === item && live(g))
+        if (held && !held.with) continue
+        if (extGrant) addGrant(request, item, expiresAt, duration, union(held?.with ?? [], [extGrant.id]))
+        else addGrant(request, item, expiresAt, duration)
+      }
       // The agent is told "granted" only once the jump server is listening for its new grants.
       if (yes.length) await jump.sync()
       for (const item of no)
@@ -813,6 +844,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     reason: string,
     duration: Request['duration'],
     trigger?: string,
+    bundled: Record<string, string> = {},
   ) {
     const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item))
     const existing = [...requests.values()].find(
@@ -843,6 +875,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       reason,
       duration,
       trigger,
+      ...(Object.keys(bundled).length ? { bundled } : {}),
       grantIds: [],
       notification: config.NTFY_URL ? 'sending' : 'disabled',
       createdAt: Date.now(),
@@ -914,7 +947,13 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       requests: asViews,
       grants: [...grants.values()].filter(live).map((grant) => {
         const agent = agentById(grant.agentId)
-        return { ...grant, label: agent?.label ?? '', agent: agent?.agent ?? '', enforcement: enforcementOf(grant) }
+        return {
+          ...grant,
+          label: agent?.label ?? '',
+          agent: agent?.agent ?? '',
+          enforcement: enforcementOf(grant),
+          bundledWith: (grant.with ?? []).flatMap((id) => grants.get(id)?.item ?? []),
+        }
       }),
       sessions: jump.sessions(),
       details: Object.fromEntries(
