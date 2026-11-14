@@ -71,15 +71,16 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | --- | --- | --- | --- |
 | 0 | Commit, tag `pre-cuts-2026-11-14` | main session | |
 | 1a | **Speaker low-risk cuts**: the `core` unpacking blocks in `api.ts` and `admin.ts`, old-host defaults, unused `version` field | cheap subagent A (speaker files only) | `tsc`, lint, speaker tests |
-| 1b | **Bottle low-risk cuts**: Herdr TUI integration in `cli.ts`, dead trace branches, `shareRoots`, the reload route, the duplicate check in `start.sh`, the CLI error prettifier; matching README lines | cheap subagent B (bottle files only), in parallel with A | `tsc`, lint, bottle tests |
+| 1b | **Bottle low-risk cuts**: Herdr TUI integration in `cli.ts`, `shareRoots`, the reload route, the duplicate check in `start.sh`, the CLI error prettifier; matching README lines | cheap subagent B (bottle files only), in parallel with A | `tsc`, lint, bottle tests |
 | 1c | **One copy of the init helpers** | cheap subagent C, after A and B (it touches both packages and their init tests) | both test suites |
 | 2a | **Slim trace**: replace the trace export with one JSON line per model call (see below) | cheap subagent, bottle files | bottle tests; a task archive holds `model-calls.jsonl` |
 | 2b | **Cut VM-mount folder delivery** from speaker; `DESIGN.md` updated in the same commit | cheap subagent, speaker files, in parallel with 2a | speaker tests |
 | 2c | **In-VM MCP servers stay**: add a test that an approved `mcp:<id>` puts the server into Pi's MCP config and a revoke removes it (no VM needed), and a short README example of a catalog entry | cheap subagent, after 2a | the new test passes |
 | 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
-| 2e | **MCP tool listing through the official SDK**, classification unchanged; skipped if the SDK check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
+| 2e | **MCP tool listing through `@modelcontextprotocol/client` v2**, classification unchanged; the unused v1 SDK is removed; skipped if the v2 check fails | subagent on a mid-tier model, after 2b (same files) | `speaker/test/proxy.test.ts` and the MCP tests pass unchanged |
 | 2f | **Require the proxy and SSH ports** in speaker and bottle | cheap subagent, after 2e | both test suites |
-| 3 | **Library changes you confirm** (findings below), one commit each | cheap subagents; the MCP one on a mid-tier model | tests pass unchanged |
+| 3 | **Library changes** (findings below): `commander` for bottle's CLI, Hono's proxy helper, Node's key handling, one commit each. The MCP client is step 2e. | cheap subagents | tests pass unchanged; the CLI checked by hand |
+| 3b | **Latest by default**: floating specs, `install` and `install:locked` tasks | main session | `mise run install`, then check and tests |
 | 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
@@ -91,11 +92,11 @@ Not doing: reformatting speaker to width 160. It removes 363 lines without remov
 
 ## Open
 
-1. **Yes or no on each library change**: `commander`, the v2 MCP client, Hono's proxy helper, Node's key handling; and whether to move to one pnpm workspace.
+Nothing is waiting on a decision. Work starts when you say go.
 
 ## Line-reduction audit of the existing code
 
-A read-only audit by a subagent, which read every non-test source file (8,752 lines) and did not run the tests. Only the reformat and Herdr counts are measured; the rest are estimates of about ±25%. Nothing is cut yet.
+A read-only audit by a subagent, which read every non-test source file (8,752 lines) and did not run the tests. Only the Herdr count is measured; the rest are estimates of about ±25%. Nothing is cut yet.
 
 ### Low risk, no feature lost (about 230 lines) — agreed
 
@@ -105,11 +106,9 @@ A read-only audit by a subagent, which read every non-test source file (8,752 li
 | One copy of the prompt helpers duplicated between `speaker/init.ts` and `bottle/init.ts` | ~-50 |
 | Herdr TUI integration in `bottle/src/cli.ts` | -42, exact |
 | Small items: old-host defaults, an unused `version` field, a duplicate storage check in `start.sh`, a CLI error prettifier | ~-35 |
-| Dead branches in `bottle/src/trace.ts` left from when all egress was recorded | ~-20 |
+| Dead branches in `bottle/src/trace.ts` left from when all egress was recorded (absorbed by the slim trace, step 2a) | ~-20 |
 | `shareRoots`, which no longer does anything (old configs containing it stop loading) | ~-10, plus ~15 in tests |
 | `POST /api/catalog/reload`, which duplicates the SIGHUP reload | -9 |
-
-One medium-risk extra: replace speaker's hand-written upstream forwarding with Hono's proxy helper (~-15 to -20). The header strip list must survive, and the helper's behaviour is unchecked.
 
 ### Feature cuts already decided
 
@@ -126,8 +125,7 @@ Decided:
 | Cut | Lines | Decision |
 | --- | --- | --- |
 | `bottle doctor` | ~-59 | cut. `init` and `start.sh` keep their own host checks. |
-| Read/write classification of remote MCP tools | ~-35 | **simplify, do not remove.** About 50 of its lines are a hand-written MCP client that lists a server's tools (handshake, paging, event-stream parsing, session close). The official `@modelcontextprotocol/sdk` client does that in about 10. The classification itself stays as it is. Check first: the SDK's release activity, and that its HTTP transport lets speaker add the credential header and refuse redirects. If it cannot, leave the code alone. |
-
+| Read/write classification of remote MCP tools | ~-35 | **simplify, do not remove.** About 50 of its lines are a hand-written MCP client that lists a server's tools (handshake, paging, event-stream parsing, session close). The official MCP client does that in about 20 (details under Library pass). The classification itself stays as it is. |
 | Require `PROXY_PORT` and `SSH_PORT` (and bottle's matching settings) | ~-40 | cut. Speaker no longer runs without the secrets proxy or jump server; `init` already sets both. |
 
 Kept, by your decision: hosted model providers (a key feature), the speaker link as it is, all of `init`, the `/admin` extras, the three-denials lock, extension-bundled sites, the Docker path and the demo service.
@@ -136,7 +134,7 @@ Kept, by your decision: hosted model providers (a key feature), the speaker link
 
 A standing rule for this project: prefer a well-kept library over custom code wherever it makes the total smaller. A subagent read the source and checked npm on 2026-11-14; it ran nothing except the Node key round trip. Line counts are estimates of about ±25%. About 90 lines beyond what was already agreed.
 
-Worth doing, waiting for your yes on each:
+Agreed, all four:
 
 | Change | Lines | Dependencies | Changes in behaviour | Risk |
 | --- | --- | --- | --- | --- |
@@ -145,14 +143,19 @@ Worth doing, waiting for your yes on each:
 | **Upstream forwarding on Hono's proxy helper**, already installed | ~-12 | 0 | Compression is negotiated instead of forced off; a malformed `Connection` header is answered 400. The header strip list, redirect refusal and audit stay. | Low to medium. Covered by `proxy.test.ts`. |
 | **Secrets-proxy key handling on Node's built-in key export and import** | ~-11 | 0 | None; stored keys stay readable. Verified by running it. | Low. |
 
-Housekeeping it noticed, not line savings: `undici` in bottle is two major versions behind (6.29.1, latest 8.12.4), and the guest image pins Pi as `latest`, which the project rules forbid.
+**Latest by default, locked on request** (your rule, now in `~/AGENTS.md`). In this repo:
 
-Optional, larger: **one pnpm workspace** instead of two separate installs. Eight dependencies are declared twice, there are two lockfiles, and the mise tasks are written twice. About zero net lines of code, and it would let the root `init.ts` use `commander` too (~-23 more). The cost is reworking `speaker/Dockerfile`, which copies only speaker's own files today.
+- `package.json` specs float (`latest` or a plain range). `mise run install` takes the newest versions and leaves the committed lockfiles alone (`pnpm install --no-lockfile`).
+- A new `mise run install:locked` installs exactly the committed `pnpm-lock.yaml` files, the tested set. `speaker/Dockerfile` already installs that way and stays so.
+- The lockfiles are refreshed only when you say so, after a test run.
+- This settles the two things the scan flagged: `undici` in bottle (two major versions behind) moves up with the first latest install, and Pi as `latest` in the guest image is now within the rules.
+
+Not doing: one pnpm workspace instead of two installs. It saves no code and means reworking `speaker/Dockerfile`. `@clack/prompts` is already the prompt library in both `init` files; nothing to adopt there.
 
 Checked and rejected, so they are not looked at again:
 
 - **A reconnecting WebSocket wrapper** for bottle's speaker link: it could replace only the backoff timer (about 6 lines), and would need a workaround to send the auth header. Net zero or worse.
-- **Hono's typed client**: both servers register routes as separate statements, so no route type exists to infer; it would need a restructure for about three calls.
+- **Hono's typed client**: good practice where a client makes many calls, but here both servers register routes as separate statements, so they would need restructuring into one chained definition to serve about three calls, a net gain in lines. Revisit if a TypeScript client with many calls appears.
 - **`@clack/prompts` built-ins** for the init helpers: they do not cover the flag-or-default-or-prompt pattern. The helpers are shared instead (step 1c, ~-42).
 - **`age-encryption`** for the key store: changes the on-disk format, is pre-1.0, and touches secret handling.
 - **A MITM proxy library** for the secrets proxy, **`ssh2`** for the SFTP relay, **Hono's bearer-auth** for agent tokens: each would lose a security check or need the same code written around it.
