@@ -114,7 +114,7 @@ Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USE
 | `awaiting-key` | A `--prompt` task on a hosted model: Pi has not started and waits for you to approve the model key |
 | `idle`, `busy` | Pi is waiting or working, as the guest reports |
 | `reconfiguring` | Pi is restarting with new MCP servers or extensions |
-| `pi-down` | A restart failed after Pi had run; the task keeps its transcript and `stop` still exports it |
+| `pi-down` | A restart failed, or Pi exited within 3 seconds of one; the task keeps its transcript and `stop` still exports it |
 | `start-failed` | Pi never started; `stop` archives without a transcript |
 | `closing` | The task is being archived |
 | `done` (shown for any live task) | Pi wrote `/output/DONE` |
@@ -219,6 +219,8 @@ A template is the runtime profile bottle owns (VM size, deadline, model-request 
 A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
+- Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the task." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model key arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
+- Pi-alive check: after every Pi start or restart, bottle waits 3 seconds and checks that Pi is still running. If it exited (a bad extension path or a crashing extension), the task goes to `pi-down` with the tail of Pi's stderr (`/run/pi.err` in the guest) in its events, and the `mcp:` and `ext:` grants are not reported to speaker as in force. A failed first start is `start-failed`. This needs the guest image rebuilt for the stderr capture; without it the note says no stderr was captured.
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline. The optional `maxModelRequests` caps the model request count.
 - `workGiB` is a launch-time free-space check. Enforce work and output quotas through the host filesystem before unattended tasks share a disk with other services.
 - `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message next to `shares`; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.

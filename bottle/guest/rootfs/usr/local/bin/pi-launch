@@ -8,4 +8,4 @@ set --
 while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/bottle/args
 # Always-on extensions baked into the image (pinned in guest/pi-package.json); opt-in ones arrive as -e args
 for extension in /opt/pi-extensions/*; do set -- "$@" -e "$extension"; done
-exec pi "$@"
+exec pi "$@" 2>/run/pi.err

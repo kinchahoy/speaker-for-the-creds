@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
-import { Catalog, systemNote, writeGuestConfig } from "../src/pi.ts";
+import { Catalog, grantChange, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
 import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce } from "../src/tasks.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
-import { grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
+import { changeMessage, grantedLine, piToolNames, reply, type CatalogView } from "../guest/extensions/reply.ts";
 import { assembleStream, createModelRuns, createToolRuns } from "../src/trace.ts";
 
 const roots: string[] = [];
@@ -452,4 +452,30 @@ test("a hosted model's key in models.json is the placeholder speaker issued, nev
   };
   assert.equal(apiKey(new Map([["OPENROUTER", "speaker-placeholder-abc"]]), "granted"), "speaker-placeholder-abc");
   assert.match(apiKey(new Map(), "waiting"), /not-granted-yet/);
+});
+
+test("the change message lists what loaded, what did not and what was removed", () => {
+  const change = { id: 2, added: ["ext:notes", "mcp:db"], removed: ["ext:old"], tools: { added: ["note", "mcp__db__q"], removed: ["old_tool"] } };
+  assert.equal(
+    changeMessage(change, ["read", "note"]),
+    "Pi restarted because your grants changed. Now available: note (from ext:notes, mcp:db). These did not load: mcp__db__q. " +
+      "Removed, do not use: ext:old, old_tool. Continue the task.",
+  );
+  assert.equal(
+    changeMessage({ id: 3, added: [], removed: ["ext:notes"], tools: { added: [], removed: ["note"] } }, ["read"]),
+    "Pi restarted because your grants changed. Removed, do not use: ext:notes, note. Continue the task.",
+  );
+});
+
+test("grantChange diffs the loadout and names tools as Pi registers them", () => {
+  const catalog = Catalog.parse({
+    mcps: { "my-db": { label: "DB", transport: "stdio", command: "/bin/db", args: [], tools: ["run-query"], write: false } },
+    extensions: { notes: { label: "N", guestPath: "/opt/n", description: "d", tools: ["note"], sites: [] } },
+  });
+  assert.deepEqual(grantChange(catalog, 5, ["ext:notes"], ["mcp:my-db"]), {
+    id: 5,
+    added: ["mcp:my-db"],
+    removed: ["ext:notes"],
+    tools: { added: ["mcp__my_db__run_query"], removed: ["note"] },
+  });
 });

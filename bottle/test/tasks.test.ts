@@ -15,7 +15,7 @@ import { createApp, readConfig } from "../../speaker/server.ts";
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
-import { Catalog } from "../src/pi.ts";
+import { Catalog, pi } from "../src/pi.ts";
 import type { Boot, Guest } from "../src/sandbox.ts";
 import { Tasks } from "../src/tasks.ts";
 
@@ -81,6 +81,9 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   const commands: string[] = [];
   let closed = 0;
   let restartFails = false;
+  let piDies = false;
+  let piUp = false;
+  pi.settleMs = 50;
   const boot: Boot = async (_config, _live, _limits, paths) => {
     // Pi's session as the guest would have written it, for the archive.
     await mkdir(`${paths.work}/.pi-session`, { recursive: true });
@@ -89,8 +92,12 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
       sessionId: "bottle-test",
       exec: async (command) => {
         commands.push(command);
-        // Pi reports "not running", and a restart (which starts with pkill) fails when the test says so.
-        return { exitCode: command.startsWith("ps -C pi") || (restartFails && command.startsWith("pkill -x pi;")) ? 1 : 0, stdout: "", stderr: "" };
+        // Pi is up from a dtach launch until a quit or kill (or, when the test says so, it dies at once); a restart fails when the test says so.
+        if (command.includes("dtach -n")) piUp = !piDies;
+        else if (command.includes("/quit") || command.startsWith("pkill -x pi || true")) piUp = false;
+        if (command.startsWith("ps -C pi")) return { exitCode: piUp ? 0 : 1, stdout: "", stderr: "" };
+        if (command.startsWith("tail ")) return { exitCode: 0, stdout: "Error: cannot load /opt/notes", stderr: "" };
+        return { exitCode: restartFails && command.startsWith("pkill -x pi;") ? 1 : 0, stdout: "", stderr: "" };
       },
       close: async () => void closed++,
     } satisfies Guest;
@@ -104,7 +111,17 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     server.close();
     await rm(root, { recursive: true, force: true });
   });
-  return { url, tasks, commands, closed: () => closed, failRestarts: () => (restartFails = true), ownerPost, panel, config };
+  return {
+    url,
+    tasks,
+    commands,
+    closed: () => closed,
+    failRestarts: () => (restartFails = true),
+    killPiOnLaunch: () => (piDies = true),
+    ownerPost,
+    panel,
+    config,
+  };
 }
 
 test("a launch boots the VM, starts Pi, writes its configuration and files the template's first request", async (t) => {
@@ -208,4 +225,40 @@ test("a task whose Pi restart failed is pi-down, and closing it still exports th
     "transcript exported",
   );
   assert.ok(existsSync(`${task.outputDir}/_control/pi-session.jsonl`));
+});
+
+const notes = {
+  mcps: {},
+  extensions: { notes: { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] } },
+};
+const grantNotes = async (f: Awaited<ReturnType<typeof fixture>>, task: { agentId: string }) => {
+  await f.tasks.speaker.request({ agentId: task.agentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
+  await until(() => f.tasks.pendingRequests(task as never).length === 1);
+  const body = new URLSearchParams({ duration: "1h", items: "ext:notes", shown: "ext:notes" });
+  assert.equal((await f.ownerPost(`/requests/${f.tasks.pendingRequests(task as never)[0]!.id}/approve`, body)).status, 303);
+};
+
+test("a grant that restarts Pi writes the change for the guest, and the grant is reported in force", async (t) => {
+  const f = await fixture(t, notes);
+  const task = await f.tasks.create({ template: "offline" });
+  await grantNotes(f, task);
+  await until(() => task.extRunning.includes("notes") && task.state === "idle");
+  assert.deepEqual(JSON.parse(readFileSync(`${task.guestConfigDir}/change.json`, "utf8")), {
+    id: 1,
+    added: ["ext:notes"],
+    removed: [],
+    tools: { added: ["note"], removed: [] },
+  });
+});
+
+test("a task whose Pi dies right after a restart is pi-down with Pi's stderr, and the grant is not in force", async (t) => {
+  const f = await fixture(t, notes);
+  const task = await f.tasks.create({ template: "offline" });
+  f.killPiOnLaunch();
+  await grantNotes(f, task);
+  await until(() => task.state === "pi-down");
+  assert.deepEqual(task.extRunning, []);
+  assert.ok(
+    task.live.events.some((event) => event.text.includes("Pi restart failed: Pi restart: Pi exited right after launch: Error: cannot load /opt/notes")),
+  );
 });

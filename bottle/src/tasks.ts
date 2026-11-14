@@ -8,7 +8,7 @@ import { type Table, transition } from "../../speaker/lifecycle.ts";
 import type { Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
 import { attendedFor, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
-import { availableModels, pi, writeGuestConfig, type Catalog } from "./pi.ts";
+import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 import { writeArchive } from "./trace.ts";
 
@@ -78,6 +78,8 @@ export type Task = {
   mcpRunning: string[];
   /** The catalog extensions Pi started with. */
   extRunning: string[];
+  /** The id of the latest grant change written for the guest (see grantChange). */
+  changeId: number;
   /** Placeholders speaker issued for this task's hosted-model key (provider secret name to placeholder). */
   keys: Map<string, string>;
   live: Live;
@@ -249,6 +251,7 @@ export class Tasks {
       grants: [],
       mcpRunning: [],
       extRunning: [],
+      changeId: 0,
       live,
       guest,
       keys,
@@ -407,6 +410,12 @@ export class Tasks {
         const extIds = this.#wanted(task, "ext");
         try {
           writeGuestConfig(task.guestConfigDir, this.config, this.catalog, task, task.keys, task.grants, mcpIds, extIds);
+          const items = (mcp: string[], ext: string[]) => [...mcp.map((id) => `mcp:${id}`), ...ext.map((id) => `ext:${id}`)];
+          const change = grantChange(this.catalog, task.changeId + 1, items(task.mcpRunning, task.extRunning), items(mcpIds, extIds));
+          if (change.added.length || change.removed.length) {
+            writeGrantChange(task.guestConfigDir, change);
+            task.changeId = change.id;
+          }
           await (first ? pi.start(task.guest) : pi.restart(task.guest));
         } catch (error) {
           note(task.live, `Pi ${first ? "start" : "restart"} failed: ${(error as Error).message}`);

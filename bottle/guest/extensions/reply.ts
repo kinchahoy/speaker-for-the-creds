@@ -43,6 +43,24 @@ export const piToolNames = (item: string, catalog: CatalogView) => {
   return [];
 };
 
+/** What changed in Pi's ext:/mcp: loadout at a restart, written by bottle to /etc/bottle/change.json. `id` rises with each change. */
+export type GrantChange = { id: number; added: string[]; removed: string[]; tools: { added: string[]; removed: string[] } };
+
+/** The one message the agent gets after a restart: what loaded, what did not (`active` is Pi's active tool list), and what is gone. */
+export const changeMessage = (change: GrantChange, active: string[]) => {
+  const present = new Set(active);
+  const loaded = change.tools.added.filter((name) => present.has(name));
+  const missing = change.tools.added.filter((name) => !present.has(name));
+  const gone = [...change.removed, ...change.tools.removed];
+  return [
+    "Pi restarted because your grants changed.",
+    ...(change.added.length ? [`Now available: ${loaded.join(", ") || "no new tools"} (from ${change.added.join(", ")}).`] : []),
+    ...(missing.length ? [`These did not load: ${missing.join(", ")}.`] : []),
+    ...(gone.length ? [`Removed, do not use: ${gone.join(", ")}.`] : []),
+    "Continue the task.",
+  ].join(" ");
+};
+
 /** One line for a granted item. `help` is the service notes from GET /_speaker/help/<service>, if any. */
 export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: string, help = "") => {
   const head = `Granted: ${item}${until(expiresAt)}`;

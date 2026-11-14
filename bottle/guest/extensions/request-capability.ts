@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { needsRestart, piToolNames, reply, toolDescription, UNDECIDED, type CatalogView, type Decision } from "./reply.ts";
+import { changeMessage, needsRestart, reply, toolDescription, UNDECIDED, type CatalogView, type Decision, type GrantChange } from "./reply.ts";
 
 const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TOKEN! };
 // SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token (and the task's SSH public key,
@@ -9,8 +9,9 @@ const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TO
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
 const PROMPT = "/etc/bottle/prompt.md";
 const WAIT_MS = 30 * 60_000;
-/** Tools the agent was told to wait for; the next session_start wakes it once they are loaded. */
-const PENDING_TOOLS = "/work/.speaker/pending-tools.json";
+/** Bottle's note of what the last restart changed, and the last change this guest told the agent about (/etc/bottle is read-only). */
+const CHANGE = "/etc/bottle/change.json";
+const REPORTED = "/work/.speaker/last-change-id";
 const APPLY_POLL_MS = 2_000;
 const APPLY_MAX_MS = 120_000;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -69,17 +70,14 @@ export default async function (pi: ExtensionAPI) {
     report(false);
     // The owner's one-shot prompt starts a fresh session once; a restart resumes without replaying it.
     if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) pi.sendUserMessage(readFileSync(PROMPT, "utf8"));
-    // After the restart the agent was told to wait for, say which of those tools are now loaded.
-    else if (existsSync(PENDING_TOOLS)) {
-      const wanted = JSON.parse(readFileSync(PENDING_TOOLS, "utf8")) as string[];
-      rmSync(PENDING_TOOLS);
-      const active = new Set(pi.getActiveTools());
-      const missing = wanted.filter((name) => !active.has(name));
-      pi.sendUserMessage(
-        `Pi restarted. These tools are now available: ${wanted.filter((name) => active.has(name)).join(", ") || "none"}.` +
-          (missing.length ? ` These did not load: ${missing.join(", ")}.` : "") +
-          " Continue the task.",
-      );
+    // After a restart that changed ext:/mcp: grants, tell the agent once what loaded, what did not and what is gone.
+    else if (existsSync(CHANGE)) {
+      const change = JSON.parse(readFileSync(CHANGE, "utf8")) as GrantChange;
+      if (change.id > (existsSync(REPORTED) ? Number(readFileSync(REPORTED, "utf8")) : 0)) {
+        mkdirSync("/work/.speaker", { recursive: true });
+        writeFileSync(REPORTED, String(change.id));
+        pi.sendUserMessage(changeMessage(change, pi.getActiveTools()));
+      }
     }
   });
 
@@ -142,12 +140,6 @@ export default async function (pi: ExtensionAPI) {
         let text = reply(decision, catalog, help);
         const late = applying(catalog);
         if (late.length) text += `\nNot in force yet after 2 minutes: ${late.join(", ")}. Retry in a minute; if it still fails, say so in /output/NOTES.md.`;
-        const tools = granted.flatMap((item) => piToolNames(item, catalog));
-        if (tools.length) {
-          mkdirSync("/work/.speaker", { recursive: true });
-          const earlier = existsSync(PENDING_TOOLS) ? (JSON.parse(readFileSync(PENDING_TOOLS, "utf8")) as string[]) : [];
-          writeFileSync(PENDING_TOOLS, JSON.stringify([...new Set([...earlier, ...tools])]));
-        }
         return done(text, decision);
       },
     }),

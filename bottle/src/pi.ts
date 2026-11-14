@@ -1,5 +1,7 @@
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
 import type { Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./grants.ts";
@@ -231,9 +233,7 @@ export const writeGuestConfig = (
 
   const [provider, ...model] = task.model.split("/");
   // `--tools` filters MCP tools only when it names them, so each granted tool is listed by its Pi name.
-  // Pi replaces every character other than letters, digits, and `_` with `_` in that name.
-  const piName = (text: string) => text.replace(/[^A-Za-z0-9_]/g, "_");
-  const mcpTools = mcpIds.flatMap((id) => catalog.mcps[id]!.tools.map((tool) => `mcp__${piName(id)}__${piName(tool)}`));
+  const mcpTools = mcpIds.flatMap((id) => piToolNames(`mcp:${id}`, { mcp: catalog.mcps }));
   const extensions = [
     ...(task.attended ? [ASK_USER_EXTENSION] : []),
     ...extIds.map((id) => {
@@ -268,6 +268,16 @@ export const writeGuestConfig = (
   writeFileSync(`${directory}/args`, `${args.join("\n")}\n`);
 };
 
+/** The ext:/mcp: loadout change a Pi restart brings, for the guest to tell the agent. Tool names are the ones Pi registers. */
+export const grantChange = (catalog: Catalog, id: number, before: string[], after: string[]): GrantChange => {
+  const tools = (items: string[]) => items.flatMap((item) => piToolNames(item, { mcp: catalog.mcps, extensions: catalog.extensions }));
+  const added = after.filter((item) => !before.includes(item));
+  const removed = before.filter((item) => !after.includes(item));
+  return { id, added, removed, tools: { added: tools(added), removed: tools(removed) } };
+};
+
+export const writeGrantChange = (directory: string, change: GrantChange) => writeFileSync(`${directory}/change.json`, JSON.stringify(change, null, 2));
+
 type CommandResult = Awaited<ReturnType<Guest["exec"]>>;
 const checked = async (operation: string, promise: Promise<CommandResult>) => {
   const result = await promise;
@@ -279,13 +289,33 @@ const checked = async (operation: string, promise: Promise<CommandResult>) => {
 const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
 /** True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone would wait forever. */
 const alive = "ps -C pi -o stat= | grep -qv '^Z'";
+/** pi-launch sends Pi's stderr here, since dtach's terminal is gone once Pi exits. */
+const stderrLog = "/run/pi.err";
+const running = async (guest: Guest) => (await guest.exec(alive)).exitCode === 0;
+/** A Pi that dies right after launch (a bad extension path, a crashing extension) still leaves dtach's exit code 0, so watch it for a moment. */
+const settled = async (operation: string, guest: Guest) => {
+  for (let waited = 0; waited < pi.settleMs; waited += 250) {
+    await delay(Math.min(250, pi.settleMs - waited));
+    if (!(await running(guest))) {
+      const log = (await guest.exec(`tail -c 1500 ${stderrLog} 2>/dev/null`)).stdout.trim();
+      throw new Error(`${operation}: Pi exited right after launch${log ? `: ${log}` : " (no stderr was captured)"}`);
+    }
+  }
+};
 export const pi = {
-  start: (guest: Guest) => checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch")),
+  /** How long a new Pi must stay up before a start or restart counts. */
+  settleMs: 3_000,
+  start: async (guest: Guest) => {
+    await checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch"));
+    await settled("Pi start", guest);
+  },
   /** Restarting re-reads the regenerated args, and Pi resumes the same task-local session file. */
-  restart: (guest: Guest) =>
-    checked("Pi restart", guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`)),
+  restart: async (guest: Guest) => {
+    await checked("Pi restart", guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`));
+    await settled("Pi restart", guest);
+  },
   quit: (guest: Guest) => guest.exec(keys("/quit\\r")),
-  running: async (guest: Guest) => (await guest.exec(alive)).exitCode === 0,
+  running,
   kill: (guest: Guest) => guest.exec("pkill -x pi || true"),
   /** The transcript improves archive browsing, but an exporter failure never discards the session or artifacts. */
   export: (guest: Guest) => guest.exec(`pi --export ${SESSION} /work/transcript.html || true`),
