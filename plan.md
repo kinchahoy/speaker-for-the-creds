@@ -146,7 +146,7 @@ Agreed, all four:
 | **Upstream forwarding on Hono's proxy helper**, already installed | ~-12 | 0 | Compression is negotiated instead of forced off; a malformed `Connection` header is answered 400. The header strip list, redirect refusal and audit stay. | Low to medium. Covered by `proxy.test.ts`. |
 | **Secrets-proxy key handling on Node's built-in key export and import** | ~-11 | 0 | None; stored keys stay readable. Verified by running it. | Low. |
 
-**Latest by default; a lockfile is available** (the owner's rule, now in `~/AGENTS.md`). In this repo, as step 3a:
+**Latest by default; a lockfile is available** (the owner's rule for this project, in the repo's `AGENTS.md`). In this repo, as step 3a:
 
 - **One pnpm workspace.** Eight dependencies are declared in both packages today, with two lockfiles and every mise task written twice. A root `pnpm-workspace.yaml` declares each once, leaves one lockfile, and halves the mise tasks. It also gives the root `init.ts` somewhere to get `commander` from (~-23 lines more).
 - **Specs float.** `mise run install` takes the newest versions and leaves the lockfile alone (`pnpm install --no-lockfile`).
