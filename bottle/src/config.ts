@@ -38,7 +38,6 @@ const ConfigFile = z
   })
   .strict();
 
-export type HostedProvider = z.infer<typeof HostedProviderSchema>;
 export type Config = z.infer<typeof ConfigFile>;
 
 const lan = new BlockList();

@@ -7,7 +7,7 @@ import dns from "node:dns";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
-import { BlockList, connect, createServer as createNetServer, isIP, type Socket } from "node:net";
+import { BlockList, connect, createServer as createNetServer, isIP, isIPv4, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -19,7 +19,7 @@ import { request, type Dispatcher } from "undici";
 import { z } from "zod";
 import { microsandboxHome, type Config } from "./config.ts";
 import { coversAny, errorBody } from "../../speaker/items.ts";
-import { codes, ipv4Destination, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
+import { codes, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
 import { recordHttp, type HttpResponseRecord } from "./trace.ts";
 
 /** The live grant view the doors read. Each speaker snapshot replaces these entries; every use checks expiry. */
@@ -65,35 +65,30 @@ export const countModelRequest = (live: Live) => {
 };
 
 /**
- * Where requests to a granted secret's hosts go: through speaker's proxy, which holds the value and swaps the agent's
- * placeholder in. `allow` answers for those hosts (undefined for every other host, which the rest of the policy decides);
- * `dispatcher` is the upstream route for them. The proxy connection is made at first use.
+ * Where requests to a granted secret's hosts go: through speaker's proxy (`proxy`, undefined when speaker has no proxy
+ * port), which holds the value and swaps the agent's placeholder in. `allow` answers for those hosts (undefined for every
+ * other host, which the rest of the policy decides); `dispatcher` is the upstream route for them.
  */
-export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: () => Promise<Dispatcher>) => {
-  let viaSpeaker: Dispatcher | undefined;
+export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: Dispatcher | undefined) => {
   const covered = (host: string) =>
     coversAny(
       unexpired(live.secretHosts).flatMap((entry) => entry.hosts),
       host,
     );
   return {
-    allow: async (host: string) => {
+    allow: (host: string) => {
       if (!covered(host)) return undefined;
-      try {
-        viaSpeaker ??= await proxy();
-        return true;
-      } catch (error) {
-        // Never fall back to a direct request: the placeholder would reach the real host instead of the secret.
-        note(live, `blocked a request to ${host}: ${(error as Error).message}`);
-        return false;
-      }
+      if (proxy) return true;
+      // Never fall back to a direct request: the placeholder would reach the real host instead of the secret.
+      note(live, `blocked a request to ${host}: speaker's proxy is not configured (speaker.proxyPort)`);
+      return false;
     },
     dispatcher: (host: string) => {
       if (!covered(host)) return undefined;
-      if (!viaSpeaker) throw new Error(`speaker's proxy is not connected; refusing a direct request to ${host}`);
-      return viaSpeaker;
+      if (!proxy) throw new Error(`speaker's proxy is not configured; refusing a direct request to ${host}`);
+      return proxy;
     },
-    close: async () => void (await viaSpeaker?.close()),
+    close: async () => void (await proxy?.close()),
   };
 };
 
@@ -135,7 +130,7 @@ const socketFolder = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdi
 
 /** What the guest's HTTP proxy does with a host: refuse it, route it through speaker's proxy (a secret host), or go direct. */
 export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof secretRoute>, "allow">, host: string) => {
-  if (isIP(host) && (!ipv4Destination(host) || isInternalIp(host))) {
+  if (isIP(host) && (!isIPv4(host) || isInternalIp(host))) {
     note(live, `blocked a request to ${host}`);
     return "refuse" as const;
   }
@@ -363,6 +358,48 @@ const Catalog = z.object({
   ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()), knownHosts: z.object({ line: z.string() }) })),
 });
 
+/** The guest side of `folderSync`: mounts, unmounts and lists `/input/<share>` with `sshfs` over the SSH door. */
+const guestFolders = (vm: MicroVm, config: Config, agentToken: string) => {
+  const run = async (command: string) => {
+    const result = await vm.shell(command);
+    if (result.code !== 0) throw new Error(result.stderr().trim() || `exit ${result.code}`);
+  };
+  return {
+    // speaker's /catalog gives the complete sshfs command line for the grant, with the jump server's pinned host key.
+    mount: async (share: string, writable: boolean) => {
+      const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
+        headers: { authorization: `Bearer ${agentToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}`);
+      const item = `folder:${share}${writable ? ":rw" : ""}`;
+      const grant = Catalog.parse(await response.json()).ssh.find((entry) => entry.item === item);
+      const command = grant?.commands[0];
+      if (!grant || !command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
+      const sshfs = command
+        .replace("<known_hosts>", () => GUEST_SSH.knownHosts)
+        .replace("<key>", () => GUEST_SSH.key)
+        .replace("<mountpoint>", () => `/input/${share}`)
+        .replace("sshfs ", `sshfs -F ${GUEST_SSH.config}${writable ? "" : " -o ro"} `);
+      await run(`mkdir -p /input/${share} && echo '${grant.knownHosts.line}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
+    },
+    // speaker ending a session takes its mount with it, so there may be nothing left to unmount.
+    unmount: (share: string) => run(`if grep -q ' /input/${share} ' /proc/mounts; then fusermount3 -uz /input/${share}; fi`),
+    mounted: async () => {
+      const table = await vm.shell("grep ' fuse.sshfs ' /proc/mounts || true");
+      return new Map(
+        table
+          .stdout()
+          .split("\n")
+          .flatMap((line) => {
+            const [, path, , options] = line.split(" ");
+            return path?.startsWith("/input/") ? [[path.slice("/input/".length), options!.split(",").includes("rw")] as const] : [];
+          }),
+      );
+    },
+  };
+};
+
 /** Starts a server on a unix socket that a vsock route reaches; a failed request ends as a 502, never an unhandled error. */
 export const listen = async (path: string, handler: RequestListener, fail: Reply = reply) => {
   const server = createServer((req, res) => {
@@ -385,7 +422,7 @@ export async function boot(
   paths: { work: string; artifacts: string; guestConfig: string; capture: string },
   env: Record<string, string>,
   speaker: { url: string; agentToken: string; ca?: string },
-  proxy: () => Promise<Dispatcher>,
+  proxy: Dispatcher | undefined,
 ): Promise<Guest> {
   msbHome();
   const { MiB, Sandbox } = await import("microsandbox");
@@ -478,45 +515,7 @@ export async function boot(
     );
     if (started.code !== 0) throw new Error(`guest setup failed: ${started.stderr()}`);
     if (key) {
-      const vm = sandbox;
-      const run = async (command: string) => {
-        const result = await vm.shell(command);
-        if (result.code !== 0) throw new Error(result.stderr().trim() || `exit ${result.code}`);
-      };
-      const sync = folderSync(live, {
-        // speaker's /catalog gives the complete sshfs command line for the grant, with the jump server's pinned host key.
-        mount: async (share, writable) => {
-          const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
-            headers: { authorization: `Bearer ${speaker.agentToken}` },
-            signal: AbortSignal.timeout(10_000),
-          });
-          if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}`);
-          const item = `folder:${share}${writable ? ":rw" : ""}`;
-          const grant = Catalog.parse(await response.json()).ssh.find((entry) => entry.item === item);
-          const command = grant?.commands[0];
-          if (!grant || !command?.startsWith("sshfs ")) throw new Error(`speaker has no sshfs command for ${item} yet`);
-          const sshfs = command
-            .replace("<known_hosts>", () => GUEST_SSH.knownHosts)
-            .replace("<key>", () => GUEST_SSH.key)
-            .replace("<mountpoint>", () => `/input/${share}`)
-            .replace("sshfs ", `sshfs -F ${GUEST_SSH.config}${writable ? "" : " -o ro"} `);
-          await run(`mkdir -p /input/${share} && echo '${grant.knownHosts.line}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
-        },
-        // speaker ending a session takes its mount with it, so there may be nothing left to unmount.
-        unmount: (share) => run(`if grep -q ' /input/${share} ' /proc/mounts; then fusermount3 -uz /input/${share}; fi`),
-        mounted: async () => {
-          const table = await vm.shell("grep ' fuse.sshfs ' /proc/mounts || true");
-          return new Map(
-            table
-              .stdout()
-              .split("\n")
-              .flatMap((line) => {
-                const [, path, , options] = line.split(" ");
-                return path?.startsWith("/input/") ? [[path.slice("/input/".length), options!.split(",").includes("rw")] as const] : [];
-              }),
-          );
-        },
-      });
+      const sync = folderSync(live, guestFolders(sandbox, config, speaker.agentToken));
       let busy = false;
       folders = setInterval(() => {
         if (busy) return;

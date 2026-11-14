@@ -421,7 +421,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   // The sandbox's route for the secret's hosts: speaker's proxy.
   const live = { secretHosts: [{ name: "GITHUB_TOKEN", hosts: grants[0].hosts!, expiresAt: grants[0].expiresAt }], events: [] };
   const ca = await speakerCa(f.config);
-  const route = secretRoute(live, () => speakerProxy(f.config, agent.agentToken, ca));
+  const route = secretRoute(live, speakerProxy(f.config, agent.agentToken, ca));
   t.after(() => route.close());
   assert.equal(await route.allow("localhost"), true);
   assert.equal(await route.allow("example.org"), undefined);
@@ -476,9 +476,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   // A route that cannot be set up fails closed: no direct request, and the event says why.
   const broken = secretRoute(
     { secretHosts: live.secretHosts.concat([{ name: "X", hosts: ["localhost"], expiresAt: null }]), events: [] as { at: string; text: string }[] },
-    async () => {
-      throw new Error("speaker.proxyPort is not set");
-    },
+    undefined,
   );
   assert.equal(await broken.allow("localhost"), false);
   assert.throws(() => broken.dispatcher("localhost"), /refusing a direct request/);

@@ -205,7 +205,7 @@ export const createToolRuns = (records: NativeRecord[], context: { sessionId?: s
       extra: {
         metadata: {
           thread_id: context.taskId,
-          broker: {
+          bottle: {
             schema_version: 1,
             source: "harness",
             harness: "pi",
@@ -294,7 +294,7 @@ export const createModelRuns = (responses: NativeRecord[], context: { modelOrigi
       extra: {
         metadata: {
           thread_id: context.taskId,
-          broker: {
+          bottle: {
             schema_version: 1,
             source: "bottle-http",
             capture_status: captureStatus,
@@ -398,7 +398,7 @@ export function writeArchive(task: Archived, modelOrigins: Set<string>, status: 
     end_time: closedAt,
     inputs: {},
     outputs,
-    extra: { metadata: { thread_id: task.id, broker: { schema_version: 1, ...metadata } } },
+    extra: { metadata: { thread_id: task.id, bottle: { schema_version: 1, ...metadata } } },
   });
   const projectRun = run(
     traceId,
@@ -406,7 +406,7 @@ export function writeArchive(task: Archived, modelOrigins: Set<string>, status: 
     {},
     { close_status: status },
     {
-      source: "broker",
+      source: "bottle",
       capture_status: "native_and_http_runs",
       http_body_bytes: task.live.httpBodyBytes,
       http_responses: httpRecords((destination) => !modelOrigins.has(destination)),
