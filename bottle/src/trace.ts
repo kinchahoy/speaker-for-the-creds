@@ -296,7 +296,7 @@ export const createModelRuns = (responses: NativeRecord[], context: { modelOrigi
           thread_id: context.taskId,
           broker: {
             schema_version: 1,
-            source: "bottle-school-http",
+            source: "bottle-http",
             capture_status: captureStatus,
             http_response_index: index,
             request_capture: response.requestCapture,

@@ -1,5 +1,5 @@
-// `mise run init bottle-school`: checks the host, asks how bottle-school reaches speaker and the model, writes
-// ~/.bottle-school/config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
+// `mise run init bottle`: checks the host, asks how bottle reaches speaker and the model, writes
+// ~/.bottle/config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -197,7 +197,7 @@ async function waitFor(message: string, done: string, timeout: string, check: ()
   for (const deadline = Date.now() + WAIT_MS; !(await check()); await sleep(2_000))
     if (Date.now() > deadline) {
       spin.stop(timeout);
-      fail(timeout, "fix that, then run `mise run init bottle-school --force` again");
+      fail(timeout, "fix that, then run `mise run init bottle --force` again");
     }
   spin.stop(done);
 }
@@ -265,23 +265,23 @@ async function unlockSpeaker(speakerUrl: string, given: string | undefined, yes:
   return password;
 }
 
-export async function initBottleSchool(flags: BottleFlags, ownerPassword?: string) {
+export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   const yes = flags.yes ?? false;
-  p.intro("bottle-school setup");
+  p.intro("bottle setup");
   const home = bottleHome();
   p.log.message(
     [
-      "bottle-school runs coding agents in disposable VMs. Agents never hold a secret or reach the network on their own:",
+      "bottle runs coding agents in disposable VMs. Agents never hold a secret or reach the network on their own:",
       "each access (a secret, a website, a folder) is granted per task by speaker-for-the-creds, which you approve.",
       `This setup checks this machine, connects to speaker and your model server, and builds the VM image. Everything goes in ${home}.`,
     ].join("\n"),
   );
   // microsandbox keeps unix sockets under the home, and socket paths are capped near 104 bytes.
-  if (home.length > 60) fail(`${home} is too long a path for bottle-school's unix sockets`, "set BOTTLE_SCHOOL_HOME to a shorter folder");
+  if (home.length > 60) fail(`${home} is too long a path for bottle's unix sockets`, "set BOTTLE_HOME to a shorter folder");
   const configPath = configPathFromEnv();
   const previous = readPrevious(configPath);
   if (previous !== undefined)
-    await confirmUpdate(`bottle-school is already set up (${configPath})`, "keep using it, or pass --force to replace its config", flags.force ?? false, yes);
+    await confirmUpdate(`bottle is already set up (${configPath})`, "keep using it, or pass --force to replace its config", flags.force ?? false, yes);
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
@@ -307,21 +307,21 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     await untilFixed(
       () =>
         fetch(`http://127.0.0.1:${running}/api/state`, { signal: AbortSignal.timeout(2_000) }).then(
-          (r) => (r.ok ? `bottle-school is running on port ${running}` : undefined),
+          (r) => (r.ok ? `bottle is running on port ${running}` : undefined),
           () => undefined,
         ),
-      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle-school)",
+      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle serve)",
       yes,
     );
-  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle-school's own API", "control-port", previous?.controlPort ?? 7001, []);
-  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle-school here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
+  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle's own API", "control-port", previous?.controlPort ?? 7001, []);
+  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
 
   const oldUrl = previous?.speaker?.url;
   const speakerUrl =
     (
       await ask(flags["speaker-url"], yes, oldUrl, () =>
         p.text({
-          message: `Speaker's URL as the VMs see it; bottle-school asks speaker before granting any access${oldUrl ? ` (Enter keeps ${oldUrl})` : ""}`,
+          message: `Speaker's URL as the VMs see it; bottle asks speaker before granting any access${oldUrl ? ` (Enter keeps ${oldUrl})` : ""}`,
           placeholder: oldUrl ?? "http://192.168.1.10:3000",
           defaultValue: oldUrl,
           validate: (v) => (v || !oldUrl ? speakerUrlProblem(v ?? "") : undefined),
@@ -349,7 +349,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     )) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
   const model = await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
 
-  const oldImage = previous?.guestImage ?? "bottle-school-guest";
+  const oldImage = previous?.guestImage ?? "bottle-guest";
   const image = await ask(flags.image, yes, oldImage, () =>
     p.text({ message: `Guest image: the Linux system each agent's VM boots (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }),
   );
@@ -376,7 +376,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
   for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
   ok(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
 
-  const env = { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath };
+  const env = { ...process.env, BOTTLE_CONFIG: configPath };
   if (!flags["skip-build"]) {
     const build =
       yes ||
@@ -390,10 +390,9 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
       const status = await new Promise<number | null>((done) =>
         spawn("sh", ["guest/build.sh", image], { cwd: here, env, stdio: "inherit" }).once("exit", done),
       );
-      if (status !== 0)
-        fail("the guest image build failed", `read the output above, then run: BOTTLE_SCHOOL_CONFIG=${configPath} mise run bottle-school:guest-build ${image}`);
+      if (status !== 0) fail("the guest image build failed", `read the output above, then run: BOTTLE_CONFIG=${configPath} mise run bottle build ${image}`);
       ok(`Guest image ${image} is built and loaded.`);
-    } else p.log.info(`Build it later with: mise run bottle-school:guest-build ${image}`);
+    } else p.log.info(`Build it later with: mise run bottle build ${image}`);
   }
 
   const loaded = loadConfig(configPath);
@@ -416,32 +415,32 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
         hostApproved(loaded),
       );
     }
-  } else p.log.info("Register later with: mise run bottle-school:cli register");
+  } else p.log.info("Register later with: mise run bottle register");
 
   const imageLoaded =
     spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
   if (!flags["skip-smoke"] && !imageLoaded)
-    p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run bottle-school:guest-build ${image}`);
+    p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run bottle build ${image}`);
   const smoke =
     !flags["skip-smoke"] &&
     !flags["skip-register"] &&
     imageLoaded &&
-    (yes || answered(await p.confirm({ message: "Start bottle-school and run one small test task to check it all works?", initialValue: true })));
+    (yes || answered(await p.confirm({ message: "Start bottle and run one small test task to check it all works?", initialValue: true })));
   if (smoke) {
-    const logFile = join(home, "bottle-school.log");
+    const logFile = join(home, "bottle.log");
     const server = startDetached(logFile, env);
     let exited: number | null | undefined;
     server.once("exit", (code) => (exited = code));
     const control = `http://127.0.0.1:${controlPort}`;
-    await waitFor("Starting bottle-school", "bottle-school is running.", `bottle-school did not start; read ${logFile}`, () =>
+    await waitFor("Starting bottle", "bottle is running.", `bottle did not start; read ${logFile}`, () =>
       exited !== undefined
-        ? fail(`bottle-school exited (code ${exited}) before it answered`, `read ${logFile}`)
+        ? fail(`bottle exited (code ${exited}) before it answered`, `read ${logFile}`)
         : fetch(`${control}/api/state`).then(
             (r) => r.ok,
             () => false,
           ),
     );
-    p.log.info(`bottle-school runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
+    p.log.info(`bottle runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
     const created = await fetch(`${control}/api/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -452,7 +451,7 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     await waitFor(
       `Smoke-test task ${id} is running ("${SMOKE_PROMPT}")`,
       `Task ${id} archived.`,
-      `task ${id} did not finish. See: mise run bottle-school:cli ls`,
+      `task ${id} did not finish. See: mise run bottle ls`,
       async () => {
         const { tasks } = (await (await fetch(`${control}/api/state`)).json()) as { tasks: { id: string; state: string }[] };
         const task = tasks.find((entry) => entry.id === id);
@@ -465,6 +464,6 @@ export async function initBottleSchool(flags: BottleFlags, ownerPassword?: strin
     const result = join(outputRoot, archive, "artifacts", "hello.txt");
     if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
-  } else p.log.info("Start it with: mise run bottle-school");
-  p.outro('bottle-school is set up. Launch work with: mise run bottle-school:cli run --template offline --prompt "..."');
+  } else p.log.info("Start it with: mise run bottle serve");
+  p.outro('bottle is set up. Launch work with: mise run bottle run --template offline --prompt "..."');
 }

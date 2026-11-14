@@ -10,10 +10,10 @@ for dir in /opt/homebrew/opt/util-linux/bin /usr/local/opt/util-linux/bin; do
 	command -v setsid >/dev/null 2>&1 || [ ! -x "$dir/setsid" ] || PATH="$dir:$PATH"
 done
 command -v setsid >/dev/null || { echo "setsid is missing. Fix: sudo apt install util-linux (macOS: brew install util-linux)" >&2; exit 1; }
-home=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
-config="${BOTTLE_SCHOOL_CONFIG:-$home/config.json}"
+home=${BOTTLE_HOME:-"$HOME/.bottle"}
+config="${BOTTLE_CONFIG:-$home/config.json}"
 export MSB_HOME="${MSB_HOME:-$home/microsandbox}"
-[ -f "$config" ] || { echo "$config is missing. Fix: run mise run init bottle-school" >&2; exit 1; }
+[ -f "$config" ] || { echo "$config is missing. Fix: run mise run init bottle" >&2; exit 1; }
 # microsandbox refuses a storage root (MSB_HOME) that is, or sits under, a group- or world-writable
 # directory (sticky ones such as /tmp are fine).
 node -e '

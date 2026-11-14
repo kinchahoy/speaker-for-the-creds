@@ -1,12 +1,12 @@
 #!/bin/sh
-# Preflight for the bottle-school host (Linux or macOS). Prints one line per check and the fix for anything missing.
+# Preflight for the bottle host (Linux or macOS). Prints one line per check and the fix for anything missing.
 set -u
 # microsandbox refuses storage another account could write to; keep everything it and we create private.
 umask 077
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 failed=0
-home=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
-config=${BOTTLE_SCHOOL_CONFIG:-$home/config.json}
+home=${BOTTLE_HOME:-"$HOME/.bottle"}
+config=${BOTTLE_CONFIG:-$home/config.json}
 cfg() { node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))[process.argv[2]] ?? ''" "$config" "$1" 2>/dev/null; }
 check() { # check <label> <fix> <command...>
 	label=$1 fix=$2
@@ -28,13 +28,13 @@ if [ "$(uname -s)" = Darwin ]; then
 else
 	check "/dev/kvm readable and writable" "sudo usermod -aG kvm \$USER, then log in again (WSL: wsl --shutdown)" sh -c 'test -r /dev/kvm && test -w /dev/kvm'
 fi
-check "config.json (mise run init bottle-school)" "mise run init bottle-school" test -f "$config"
+check "config.json (mise run init bottle)" "mise run init bottle" test -f "$config"
 # Boot the configured guest image once (~5s): host checks can all pass while the guest kernel hangs at boot.
 if [ "$failed" = 0 ]; then
 	image=$(cfg guestImage)
 	export MSB_HOME="${MSB_HOME:-$home/microsandbox}"
-	check "guest image $image loaded into microsandbox" "mise run bottle-school:guest-build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
-	check "guest image $image boots and runs a command" "mise run bottle-school:guest-build $image" \
+	check "guest image $image loaded into microsandbox" "mise run bottle build $image" sh -c '"$1" image ls | grep -q "$2"' sh "$root/node_modules/.bin/msb" "$image"
+	check "guest image $image boots and runs a command" "mise run bottle build $image" \
 		sh -c '"$1" run -q --no-net --replace --name pi-doctor "$2" -- true; rc=$?; "$1" rm pi-doctor; exit $rc' sh "$root/node_modules/.bin/msb" "$image"
 fi
 [ "$failed" = 0 ] && echo "all checks passed" || { echo "some checks failed" >&2; exit 1; }

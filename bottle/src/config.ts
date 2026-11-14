@@ -90,11 +90,11 @@ export const validateConfig = (data: unknown): Config => {
 /** Parse the owner-owned file before the service ever opens a network listener. */
 export const loadConfig = (path: string): Config => validateConfig(JSON.parse(readFileSync(path, "utf8")));
 
-/** Everything bottle-school keeps lives in one folder: BOTTLE_SCHOOL_HOME, else ~/.bottle-school. */
-export const bottleHome = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_SCHOOL_HOME || join(homedir(), ".bottle-school");
+/** Everything bottle keeps lives in one folder: BOTTLE_HOME, else ~/.bottle. */
+export const bottleHome = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_HOME || join(homedir(), ".bottle");
 
-/** The config file path: BOTTLE_SCHOOL_CONFIG, else <home>/config.json. */
-export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_SCHOOL_CONFIG || join(bottleHome(env), "config.json");
+/** The config file path: BOTTLE_CONFIG, else <home>/config.json. */
+export const configPathFromEnv = (env: NodeJS.ProcessEnv = process.env) => env.BOTTLE_CONFIG || join(bottleHome(env), "config.json");
 
 /** microsandbox's own folder (images, VM disks, its unix sockets): MSB_HOME, else <home>/microsandbox. */
 export const microsandboxHome = (env: NodeJS.ProcessEnv = process.env) => env.MSB_HOME || join(bottleHome(env), "microsandbox");

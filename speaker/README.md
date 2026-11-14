@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-Speaker holds your keys. Agents enroll and ask for items, and you approve each request from a phone page. Sandbox hosts such as bottle-school apply the sandbox grants.
+Speaker holds your keys. Agents enroll and ask for items, and you approve each request from a phone page. Sandbox hosts such as bottle apply the sandbox grants.
 {.ai}
 
 [DESIGN.md](DESIGN.md) has the details; [USECASES.md](USECASES.md) walks through the flows.
@@ -28,7 +28,7 @@ Run this on the machine that hosts speaker. It asks its questions, creates the e
 printf '%s\n' "$PASSWORD" | mise run init speaker --yes --password-stdin --data-dir DIR --address IP
 ```
 
-The other flags are `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, and `--force`. On a separate sandbox machine, run `mise run init bottle-school` afterward.
+The other flags are `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, and `--force`. On a separate sandbox machine, run `mise run init bottle` afterward.
 {.ai}
 
 Open `PUBLIC_URL/admin` and sign in with the password you chose. You sign in again after every restart, which unlocks the stored keys (see Keys and sign-in). Start speaker later with `mise run speaker`.

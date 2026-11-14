@@ -3,11 +3,11 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { needsRestart, piToolNames, reply, toolDescription, UNDECIDED, type CatalogView, type Decision } from "./reply.ts";
 
-const control = { url: process.env.BOTTLE_SCHOOL_CONTROL!, token: process.env.BOTTLE_SCHOOL_TOKEN! };
+const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TOKEN! };
 // SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token (and the task's SSH public key,
 // which the host provisions, to every request body).
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
-const PROMPT = "/etc/bottle-school/prompt.md";
+const PROMPT = "/etc/bottle/prompt.md";
 const WAIT_MS = 30 * 60_000;
 /** Tools the agent was told to wait for; the next session_start wakes it once they are loaded. */
 const PENDING_TOOLS = "/work/.speaker/pending-tools.json";
@@ -57,7 +57,7 @@ const lastMessage = (entries: { type: string; message?: { role?: string; content
 };
 
 /**
- * Reports progress to bottle-school and asks speaker for items on the task's behalf. The owner
+ * Reports progress to bottle and asks speaker for items on the task's behalf. The owner
  * approves each request in speaker; nothing here grants access.
  */
 export default async function (pi: ExtensionAPI) {

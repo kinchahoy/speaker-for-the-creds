@@ -1,0 +1,11 @@
+#!/bin/sh
+# Starts Pi from the trusted configuration the host mounted read-only at /etc/bottle.
+set -eu
+mkdir -p "$HOME/.pi/agent" /work/.pi-session
+cp /etc/bottle/models.json /etc/bottle/settings.json /etc/bottle/APPEND_SYSTEM.md /etc/bottle/mcp.json /etc/bottle/web-search.json "$HOME/.pi/agent/"
+cd /work
+set --
+while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/bottle/args
+# Always-on extensions baked into the image (pinned in guest/pi-package.json); opt-in ones arrive as -e args
+for extension in /opt/pi-extensions/*; do set -- "$@" -e "$extension"; done
+exec pi "$@"

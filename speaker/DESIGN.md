@@ -38,7 +38,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | **Agent** | Anything holding a speaker token that asks for access: Claude Code on a workstation, or Pi inside one sandbox task. |
 | **Direct agent** | An agent that enrolled itself. |
 | **Sandboxed agent** | An agent created by a sandbox host for one task. It may also ask for items only a sandbox host can enforce. |
-| **Sandbox host** | A trusted service (bottle-school) the owner registers once. It starts sandboxes, creates one agent per task, and enforces that task's sandbox grants inside the VM. |
+| **Sandbox host** | A trusted service (bottle) the owner registers once. It starts sandboxes, creates one agent per task, and enforces that task's sandbox grants inside the VM. |
 | **Service** | An HTTP API or remote MCP server that agents reach through speaker, usually with a key speaker holds (Obsidian, Karakeep, Home Assistant). |
 | **Target** | A host speaker can open SSH sessions to, as one limited account on that host. |
 | **Share** | A named folder on a target (or on a sandbox host) that agents can be given, read-only or read-write. |

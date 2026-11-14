@@ -174,7 +174,7 @@ test("watchLeases receives granted items as leases and reports applied ids to sp
     (message) => fatal.push(message),
   );
   await until(() => fatal.length === 1);
-  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle-school:cli register/);
+  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle register/);
 
   const snapshots: Snapshot[] = [];
   const reportApplied = watchLeases(
@@ -252,7 +252,7 @@ test("registering learns speaker's proxy and SSH ports into config.json, and the
   assert.equal(await hostApproved(config), true);
 });
 
-test("bottle-school reports its shares to speaker as not mountable, since its folders arrive over SSH", async (t) => {
+test("bottle reports its shares to speaker as not mountable, since its folders arrive over SSH", async (t) => {
   const f = await fixture(t);
   const { token } = await f.host([]);
   const documents = await mkdtemp(join(tmpdir(), "bottle-share-"));
@@ -436,7 +436,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.deepEqual([reply.status, await reply.text()], [200, '{"upstream":true}']);
   assert.deepEqual(seen, [{ url: "/repos/o/r/pulls", authorization: `token ${realToken}` }]);
 
-  // The real value is nowhere in bottle-school: not in its config, its process environment, what speaker sent it, the
+  // The real value is nowhere in bottle: not in its config, its process environment, what speaker sent it, the
   // task's live view, or the guest configuration it wrote.
   const guest = await mkdtemp(join(tmpdir(), "bottle-guest-"));
   t.after(() => rm(guest, { recursive: true, force: true }));

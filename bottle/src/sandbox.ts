@@ -125,7 +125,7 @@ const msbHome = () => {
 };
 
 /** A private folder for one VM's door sockets, in the short per-user runtime dir so the socket paths fit any stateRoot. */
-const socketFolder = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "bottle-school-"));
+const socketFolder = () => mkdtempSync(join(process.env.XDG_RUNTIME_DIR || tmpdir(), "bottle-"));
 
 /** What the guest's HTTP proxy does with a host: refuse it, route it through speaker's proxy (a secret host), or go direct. */
 export const egressDecision = async (live: Live, route: Pick<ReturnType<typeof secretRoute>, "allow">, host: string) => {
@@ -347,7 +347,7 @@ export const listen = async (path: string, handler: RequestListener) => {
 /**
  * Starts one VM for a task: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
  * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
- * /work, /output and /etc/bottle-school, and model request bodies recorded into `live.httpResponses` with their blobs under
+ * /work, /output and /etc/bottle, and model request bodies recorded into `live.httpResponses` with their blobs under
  * `paths.capture`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
 export async function boot(
@@ -397,7 +397,7 @@ export async function boot(
     const localProxy = `http://127.0.0.1:${DOORS.egress[1]}`;
     const noProxy = `127.0.0.1,localhost,${config.localModel.guestHost}`;
     const guestEnv: Record<string, string> = {
-      BOTTLE_SCHOOL: "1",
+      BOTTLE: "1",
       SPEAKER_URL: `http://127.0.0.1:${DOORS.speaker[1]}`,
       SPEAKER_TOKEN: "placeholder: the host adds the task's token",
       HTTP_PROXY: localProxy,
@@ -409,7 +409,7 @@ export async function boot(
       NODE_USE_ENV_PROXY: "1",
       ...(ca ? { NODE_EXTRA_CA_CERTS: caPath } : {}),
       ...env,
-      BOTTLE_SCHOOL_CONTROL: `http://127.0.0.1:${DOORS.control[1]}`,
+      BOTTLE_CONTROL: `http://127.0.0.1:${DOORS.control[1]}`,
     };
     let builder = Sandbox.builder(name)
       .imageWith((image) => image.oci(config.guestImage).rootDisk(limits.rootfsGiB * 1024))
@@ -419,7 +419,7 @@ export async function boot(
       .disableNetwork()
       .volume("/work", (mount) => mount.bind(paths.work))
       .volume("/output", (mount) => mount.bind(paths.artifacts))
-      .volume("/etc/bottle-school", (mount) => mount.bind(paths.guestConfig).readonly());
+      .volume("/etc/bottle", (mount) => mount.bind(paths.guestConfig).readonly());
     for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${socketDir}/${door}.sock`, port);
     if (key) builder = builder.vsock(`${socketDir}/ssh.sock`, SSH_VSOCK);
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);

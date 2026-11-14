@@ -7,7 +7,7 @@ import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
-/** The owner's terminal client: `mise run bottle-school:cli register | run | ls | attach | stop`. */
+/** The owner's terminal client: `bottle serve | doctor | build | register | run | ls | attach | stop`. */
 type Task = {
   id: string;
   name: string;
@@ -21,11 +21,47 @@ type Task = {
   summary: string;
 };
 
-const SELF = "mise run bottle-school:cli";
+// mise names the task it runs; installed on PATH, the command is plain `bottle`.
+const SELF = process.env.MISE_TASK_NAME === undefined ? "bottle" : "mise run bottle";
 const FINISHED_SHOWN = 5;
 const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
 const run = promisify(execFile);
+
+/** Host commands backed by the package's shell scripts; their arguments pass through unchanged. */
+const SCRIPTS = {
+  serve: {
+    script: "start.sh",
+    help: `usage: ${SELF} serve
+
+Runs the bottle service in the foreground. Ctrl-C stops it.`,
+  },
+  doctor: {
+    script: "doctor.sh",
+    help: `usage: ${SELF} doctor
+
+Checks this host for bottle's prerequisites (Linux or macOS) and prints the fix for anything missing.`,
+  },
+  build: {
+    script: "guest/build.sh",
+    help: `usage: ${SELF} build [image-tag]
+
+Builds the guest image (default tag bottle-guest) and loads it into microsandbox. Needs config.json from init.`,
+  },
+} as const;
+type Script = keyof typeof SCRIPTS;
+
+const runScript = (name: Script, args: string[]) => {
+  const child = spawn(join(import.meta.dirname, "..", SCRIPTS[name].script), args, { stdio: "inherit" });
+  // The terminal's Ctrl-C reaches the script too; stay alive until it has cleaned up, and pass on a TERM.
+  process.on("SIGINT", () => {});
+  process.on("SIGTERM", () => child.kill("SIGTERM"));
+  child.on("error", (error) => {
+    console.error(`error: could not run ${SCRIPTS[name].script}: ${error.message}`);
+    process.exit(1);
+  });
+  child.on("exit", (code) => process.exit(code ?? 1));
+};
 
 const COMMANDS = {
   register: {
@@ -77,6 +113,10 @@ const usage = `usage: ${SELF} <command> [options]
   attach     Open a task's Pi terminal
   stop       Close a task and archive it
   register   Register this host as a speaker sandbox host
+
+  serve      Run the bottle service
+  doctor     Check this host's prerequisites
+  build      Build the guest image
 
 Run \`${SELF} help <command>\` or \`${SELF} <command> --help\` for options.`;
 
@@ -132,7 +172,7 @@ const truncate = (text: string, width: number) => {
 const report = async (pane: string, task: Task) => {
   const state = task.pendingRequests.length > 0 ? "blocked" : task.state === "busy" ? "working" : "idle";
   const message = task.done ? "done" : task.summary;
-  const source = "custom:bottle-school";
+  const source = "custom:bottle";
   await run("herdr", ["pane", "report-agent", pane, "--source", source, "--agent", "pi", "--state", state, "--message", message]);
   await run("herdr", [
     "pane",
@@ -169,7 +209,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
       });
     } catch (error) {
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
-      throw new Error(`cannot reach ${url} (${cause}). Is bottle-school running? Config: ${configPath}`);
+      throw new Error(`cannot reach ${url} (${cause}). Is bottle running? Config: ${configPath}`);
     }
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
     if (!response.ok) throw new Error(plain(payload.error ?? `HTTP ${response.status} from ${url}`));
@@ -190,9 +230,9 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
   };
 
   if (command === "register") {
-    const name = values.name ?? "bottle-school";
+    const name = values.name ?? "bottle";
     const id = await registerHost(config, configPath, name);
-    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle-school.`);
+    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     if (values.attended && values.unattended) throw new UsageError("pass at most one of --attended and --unattended");
@@ -302,6 +342,7 @@ const [first = "", ...rest] = process.argv.slice(2);
 if (first === "" || first === "help" || first === "--help" || first === "-h") {
   const topic = first === "help" ? rest[0] : undefined;
   if (topic !== undefined && Object.hasOwn(COMMANDS, topic)) console.log(COMMANDS[topic as Command].help);
+  else if (topic !== undefined && Object.hasOwn(SCRIPTS, topic)) console.log(SCRIPTS[topic as Script].help);
   else if (topic !== undefined) {
     console.error(`error: unknown command "${topic}"\n\n${usage}`);
     process.exitCode = 2;
@@ -309,6 +350,9 @@ if (first === "" || first === "help" || first === "--help" || first === "-h") {
     console.error(usage);
     process.exitCode = 2;
   } else console.log(usage);
+} else if (Object.hasOwn(SCRIPTS, first)) {
+  if (rest.includes("--help")) console.log(SCRIPTS[first as Script].help);
+  else runScript(first as Script, rest);
 } else {
   try {
     if (!Object.hasOwn(COMMANDS, first)) throw new UsageError(`unknown command "${first}"\n\n${usage}`);

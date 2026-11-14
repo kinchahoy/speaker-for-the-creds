@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Config } from "./config.ts";
 import type { Catalog } from "./pi.ts";
 
-/** Speaker's items are strings (`site:x`, `folder:s:rw`, `ext:id`, `obsidian.read`); the rest of bottle-school speaks kind and ref. */
+/** Speaker's items are strings (`site:x`, `folder:s:rw`, `ext:id`, `obsidian.read`); the rest of bottle speaks kind and ref. */
 const itemKinds: Record<string, string> = { site: "site", secret: "secret", folder: "folder", mcp: "mcp", ext: "extension" };
 const Grant = z
   .object({
@@ -132,13 +132,13 @@ export type Speaker = ReturnType<typeof speakerClient>;
 
 /**
  * The route for requests to a secret's hosts: speaker's HTTPS proxy, which swaps the agent's placeholder for the real
- * value. bottle-school authenticates as the task's agent (its token is bound to this host's address) and trusts speaker's
- * proxy certificate authority for the tunnel only; the secret itself never reaches bottle-school.
+ * value. bottle authenticates as the task's agent (its token is bound to this host's address) and trusts speaker's
+ * proxy certificate authority for the tunnel only; the secret itself never reaches bottle.
  */
 export const speakerProxy = async (config: Config, agentToken: string) => {
   const { proxyPort } = config.speaker;
   if (!proxyPort)
-    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle-school:cli register` again to learn it");
+    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle register` again to learn it");
   const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
   return new ProxyAgent({
@@ -181,7 +181,7 @@ const probeSpeaker = async (config: Config, token: string) => {
         message:
           `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it is not ` +
           `approved yet, was removed, or speaker's data was reset. Approve the sandbox host in speaker /admin, or run ` +
-          `"mise run bottle-school:cli register" again.`,
+          `"mise run bottle register" again.`,
       };
     return { fatal: false, message: `speaker answered HTTP ${response.status}` };
   } catch (error) {
@@ -231,7 +231,7 @@ export const watchLeases = (
     if (down >= (state === "down" ? limits.outageMs : limits.firstConnectMs))
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
-          `Check that speaker is running and that speaker.url is right in the bottle-school config.json.`,
+          `Check that speaker is running and that speaker.url is right in the bottle config.json.`,
       );
     console.error(`${probe.message}; grants are dropped after ${limits.dropMs / 1000} s without speaker; retrying in ${backoff / 1000} s`);
     retryTimer = setTimeout(open, backoff);

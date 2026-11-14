@@ -1,7 +1,7 @@
-// `mise run init [speaker | bottle-school] [flags]`: guided setup. Without a name it sets up both for one machine and
-// gives bottle-school the URL speaker was set up with. Each package owns its flags (see speakerFlags and bottleFlags).
+// `mise run init [speaker | bottle] [flags]`: guided setup. Without a name it sets up both for one machine and
+// gives bottle the URL speaker was set up with. Each package owns its flags (see speakerFlags and bottleFlags).
 import { parseArgs } from "node:util";
-import { bottleFlags, initBottleSchool } from "./bottle-school/init.ts";
+import { bottleFlags, initBottle } from "./bottle/init.ts";
 import { initSpeaker, speakerFlags } from "./speaker/init.ts";
 
 const HELP = {
@@ -16,43 +16,43 @@ const HELP = {
   --password-stdin      read the owner password from standard input
   --start | --no-start  start speaker in the background, or not
   --env-path FILE       where to write the settings (default: speaker/.env)`,
-  "bottle-school": `bottle-school keeps everything in ~/.bottle-school (set BOTTLE_SCHOOL_HOME to change it). Flags:
-  --control-port N      control port: bottle-school's own API (7001)
-  --guest-port N        guest port: VMs reach bottle-school here (7002)
+  "bottle": `bottle keeps everything in ~/.bottle (set BOTTLE_HOME to change it). Flags:
+  --control-port N      control port: bottle's own API (7001)
+  --guest-port N        guest port: VMs reach bottle here (7002)
   --speaker-url URL     speaker's URL as the VMs see it, for example http://192.168.1.10:3000
   --model-endpoint H:P  the model server, an OpenAI-compatible host:port
   --model ID            the model to use (needed when the server lists several)
-  --image TAG           guest image tag (bottle-school-guest)
+  --image TAG           guest image tag (bottle-guest)
   --password-stdin      read speaker's owner password from standard input
   --skip-build | --skip-register | --skip-smoke   leave out that step`,
 };
-const USAGE = `usage: mise run init [speaker | bottle-school] [flags]
+const USAGE = `usage: mise run init [speaker | bottle] [flags]
 
 Guided setup; it needs a real terminal. For scripts pass --yes (take every default) and the flags below.
 Both flags: --yes, --force (replace existing settings), --help.
 
 ${HELP.speaker}
 
-${HELP["bottle-school"]}`;
+${HELP["bottle"]}`;
 
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { ...speakerFlags, ...bottleFlags, help: { type: "boolean", short: "h" } } });
   if (values.help) {
     const [named] = positionals;
-    console.log(named === "speaker" || named === "bottle-school" ? `usage: mise run init ${named} [flags]\n\n${HELP[named]}` : USAGE);
+    console.log(named === "speaker" || named === "bottle" ? `usage: mise run init ${named} [flags]\n\n${HELP[named]}` : USAGE);
     process.exit(0);
   }
   const [which, ...extra] = positionals;
-  if (extra.length || (which !== undefined && which !== "speaker" && which !== "bottle-school"))
-    throw new Error("usage: mise run init [speaker | bottle-school] [flags]");
+  if (extra.length || (which !== undefined && which !== "speaker" && which !== "bottle"))
+    throw new Error("usage: mise run init [speaker | bottle] [flags]");
   let speakerUrl = values["speaker-url"];
   let password: string | undefined;
-  if (which !== "bottle-school") {
+  if (which !== "bottle") {
     const speaker = await initSpeaker(values);
     speakerUrl ??= speaker.url;
     password = speaker.password; // so the owner is not asked again to unlock speaker
   }
-  if (which !== "speaker") await initBottleSchool({ ...values, "speaker-url": speakerUrl }, password);
+  if (which !== "speaker") await initBottle({ ...values, "speaker-url": speakerUrl }, password);
 } catch (error) {
   console.error(`error: ${(error as Error).message}`);
   process.exitCode = 1;

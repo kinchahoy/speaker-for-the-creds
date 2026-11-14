@@ -68,7 +68,7 @@ export const startControl = (config: Config, tasks: Tasks) => {
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
             <meta http-equiv="refresh" content="10" />
-            <title>bottle-school</title>
+            <title>bottle</title>
             <style>
               body {
                 font-family: system-ui, sans-serif;
@@ -92,10 +92,10 @@ export const startControl = (config: Config, tasks: Tasks) => {
             </style>
           </head>
           <body>
-            <h1>bottle-school</h1>
+            <h1>bottle</h1>
             <p>
               Read-only status page. Launch a task with
-              <code>mise run bottle-school:cli run --template &lt;id&gt; --prompt "..."</code>. Raw state: <a href="/api/state">/api/state</a>
+              <code>mise run bottle run --template &lt;id&gt; --prompt "..."</code>. Raw state: <a href="/api/state">/api/state</a>
             </p>
             <table>
               <thead>

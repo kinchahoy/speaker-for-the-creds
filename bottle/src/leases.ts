@@ -70,7 +70,7 @@ export const hostMatches = (patterns: readonly string[], host: string) => {
 /** Guest egress currently supports IPv4 destinations only. */
 export const ipv4Destination = (ip: string) => isIPv4(ip);
 
-/** Speaker owns approvals; bottle-school owns the syntax and local meaning of refs. */
+/** Speaker owns approvals; bottle owns the syntax and local meaning of refs. */
 const host = z.hostname().refine((value) => value === value.toLowerCase());
 export const siteRef = z.union([
   host,

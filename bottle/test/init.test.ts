@@ -39,14 +39,14 @@ const scratch = (t: TestContext) => {
 
 // Asynchronous: the fake speaker and model servers live in this process and must keep answering.
 const run = async (args: string[], home: string) => {
-  const flags = [init, "bottle-school", "--yes", "--skip-build", "--skip-register", "--skip-smoke", ...args];
-  return promisify(execFile)(process.execPath, flags, { env: { ...process.env, BOTTLE_SCHOOL_HOME: home, BOTTLE_SCHOOL_CONFIG: "", MSB_HOME: "" } }).then(
+  const flags = [init, "bottle", "--yes", "--skip-build", "--skip-register", "--skip-smoke", ...args];
+  return promisify(execFile)(process.execPath, flags, { env: { ...process.env, BOTTLE_HOME: home, BOTTLE_CONFIG: "", MSB_HOME: "" } }).then(
     (done) => ({ status: 0, ...done }),
     (failed: { code: number; stdout: string; stderr: string }) => ({ status: failed.code, stdout: failed.stdout, stderr: failed.stderr }),
   );
 };
 
-test("init bottle-school writes a config.json that loads, with private directories and the chosen model", { skip: !kvm || !lan }, async (t) => {
+test("init bottle writes a config.json that loads, with private directories and the chosen model", { skip: !kvm || !lan }, async (t) => {
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }, { id: "big" }] })));
@@ -74,7 +74,7 @@ test("init bottle-school writes a config.json that loads, with private directori
   assert.match(readFileSync(configPath, "utf8"), /\n$/);
 });
 
-test("init bottle-school refuses a loopback speaker URL, which a VM cannot reach, and writes no config", { skip: !kvm }, async (t) => {
+test("init bottle refuses a loopback speaker URL, which a VM cannot reach, and writes no config", { skip: !kvm }, async (t) => {
   const dir = scratch(t);
   const result = await run(["--speaker-url", "http://127.0.0.1:3000", "--model-endpoint", "127.0.0.1:1"], join(dir, "h"));
   assert.equal(result.status, 1);
@@ -82,7 +82,7 @@ test("init bottle-school refuses a loopback speaker URL, which a VM cannot reach
   assert.equal(existsSync(join(dir, "h", "config.json")), false);
 });
 
-test("init bottle-school --yes refuses to replace an existing setup unless --force", { skip: !kvm }, async (t) => {
+test("init bottle --yes refuses to replace an existing setup unless --force", { skip: !kvm }, async (t) => {
   const home = join(scratch(t), "h");
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, "config.json"), "{}");
@@ -91,11 +91,11 @@ test("init bottle-school --yes refuses to replace an existing setup unless --for
   assert.match(result.stderr, /already set up .*config\.json.*pass --force/);
 });
 
-test("init bottle-school refuses a home too long for microsandbox's unix sockets", async (t) => {
+test("init bottle refuses a home too long for microsandbox's unix sockets", async (t) => {
   const home = join(scratch(t), "x".repeat(60));
   const result = await run([], home);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /too long a path .*BOTTLE_SCHOOL_HOME/);
+  assert.match(result.stderr, /too long a path .*BOTTLE_HOME/);
   assert.equal(existsSync(home), false);
 });
 
@@ -129,29 +129,29 @@ const registering = async (t: TestContext, owner: string, typed: string) => {
   const dir = scratch(t);
   const speaker = await lockedSpeaker(t, owner);
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
-  const args = [init, "bottle-school", "--yes", "--skip-build", "--skip-smoke", "--password-stdin"];
+  const args = [init, "bottle", "--yes", "--skip-build", "--skip-smoke", "--password-stdin"];
   args.push("--control-port", "7401", "--guest-port", "7402", "--speaker-url", `http://${lan}:${speaker.port}`, "--model-endpoint", `127.0.0.1:${model}`);
-  const child = execFile(process.execPath, args, { env: { ...process.env, BOTTLE_SCHOOL_HOME: join(dir, "h"), BOTTLE_SCHOOL_CONFIG: "", MSB_HOME: "" } });
+  const child = execFile(process.execPath, args, { env: { ...process.env, BOTTLE_HOME: join(dir, "h"), BOTTLE_CONFIG: "", MSB_HOME: "" } });
   child.stdin?.end(`${typed}\n`);
   const status = await new Promise<number | null>((done) => child.once("exit", done));
   return { status, speaker };
 };
 
-test("init bottle-school unlocks a locked speaker with the password from --password-stdin", { skip: !kvm || !lan }, async (t) => {
+test("init bottle unlocks a locked speaker with the password from --password-stdin", { skip: !kvm || !lan }, async (t) => {
   const { status, speaker } = await registering(t, "the owner password", "the owner password");
   assert.equal(status, 0);
   assert.equal(speaker.unlocked(), true);
   assert.equal(speaker.approved(), true, "init approved its own sandbox host without waiting");
 });
 
-test("init bottle-school stops when --password-stdin carries the wrong password", { skip: !kvm || !lan }, async (t) => {
+test("init bottle stops when --password-stdin carries the wrong password", { skip: !kvm || !lan }, async (t) => {
   const { status, speaker } = await registering(t, "the owner password", "not it");
   assert.equal(status, 1);
   assert.equal(speaker.unlocked(), false);
 });
 
-// The CLI reads the control API of a bottle-school that is not running: a fake that serves no live tasks.
-test("bottle-school:cli run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
+// The CLI reads the control API of a bottle that is not running: a fake that serves no live tasks.
+test("bottle run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
@@ -175,7 +175,7 @@ test("bottle-school:cli run names the archive folder, and ls lists finished task
   const cli = async (...args: string[]) =>
     (
       await promisify(execFile)(process.execPath, [join(import.meta.dirname, "..", "src", "cli.ts"), ...args], {
-        env: { ...process.env, BOTTLE_SCHOOL_CONFIG: configPath },
+        env: { ...process.env, BOTTLE_CONFIG: configPath },
       })
     ).stdout;
 

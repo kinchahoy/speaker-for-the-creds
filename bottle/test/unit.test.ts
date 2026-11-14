@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
-  const root = mkdtempSync(join(tmpdir(), "bottle-school-config-"));
+  const root = mkdtempSync(join(tmpdir(), "bottle-config-"));
   roots.push(root);
   for (const name of ["config", "state", "output", "documents"]) mkdirSync(join(root, name));
   const path = join(root, "config.json");
@@ -40,7 +40,7 @@ const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
         guestPort: 7002,
         speaker: { url: "http://127.0.0.1:7000" },
         maxTasks: 1,
-        guestImage: "bottle-school-guest",
+        guestImage: "bottle-guest",
         configRoot: join(root, "config"),
         stateRoot: join(root, "state"),
         outputRoot: join(root, "output"),
@@ -339,12 +339,12 @@ test("attended mode loads ask-user-question; extension leases load catalog exten
   };
 
   const attended = write(true, []);
-  assert.deepEqual(attended.loaded, ["/etc/bottle-school/extensions/request-capability.ts", "/opt/pi-plugins/rpiv-ask-user-question"]);
+  assert.deepEqual(attended.loaded, ["/etc/bottle/extensions/request-capability.ts", "/opt/pi-plugins/rpiv-ask-user-question"]);
   assert.ok(attended.tools.includes("ask_user_question"));
   assert.match(attended.system, /## Attended task/);
 
   const research = write(false, ["pi-web-access"], "Find three sources");
-  assert.deepEqual(research.loaded, ["/etc/bottle-school/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
+  assert.deepEqual(research.loaded, ["/etc/bottle/extensions/request-capability.ts", "/opt/pi-plugins/pi-web-access"]);
   assert.ok(research.tools.includes("web_search") && !research.tools.includes("ask_user_question"));
   assert.match(research.system, /## Unattended task[\s\S]*Nobody is watching[\s\S]*## Owner prompt\n\nFind three sources$/);
   const webSearch = JSON.parse(readFileSync(join(research.directory, "web-search.json"), "utf8"));

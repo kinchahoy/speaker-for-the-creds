@@ -1,23 +1,23 @@
 #!/bin/sh
 # Builds the guest image and loads it into microsandbox.
-# Usage: guest/build.sh [image-tag]   (default: bottle-school-guest; set it as "guestImage" in config.json)
+# Usage: guest/build.sh [image-tag]   (default: bottle-guest; set it as "guestImage" in config.json)
 # Docker (buildx) builds guest/Dockerfile for the host architecture under the tag, then microsandbox loads it into its
-# folder (MSB_HOME, else ~/.bottle-school/microsandbox).
+# folder (MSB_HOME, else ~/.bottle/microsandbox).
 # microsandbox refuses storage another account could write to; keep everything it and we create private.
 umask 077
 set -eu
-IMAGE=${1:-bottle-school-guest}
+IMAGE=${1:-bottle-guest}
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 MSB=${MSB:-"$ROOT/node_modules/.bin/msb"}
-HOME_DIR=${BOTTLE_SCHOOL_HOME:-"$HOME/.bottle-school"}
-CONFIG=${BOTTLE_SCHOOL_CONFIG:-"$HOME_DIR/config.json"}
+HOME_DIR=${BOTTLE_HOME:-"$HOME/.bottle"}
+CONFIG=${BOTTLE_CONFIG:-"$HOME_DIR/config.json"}
 
 case "$(uname -m)" in
   arm64|aarch64) PLATFORM=linux/arm64 ;;
   x86_64) PLATFORM=linux/amd64 ;;
   *) echo "unsupported architecture $(uname -m)" >&2; exit 1 ;;
 esac
-[ -f "$CONFIG" ] || { echo "$CONFIG not found. Fix: run mise run init bottle-school first" >&2; exit 1; }
+[ -f "$CONFIG" ] || { echo "$CONFIG not found. Fix: run mise run init bottle first" >&2; exit 1; }
 MSB_HOME=${MSB_HOME:-"$HOME_DIR/microsandbox"}
 
 # PI_GUEST_PLATFORMS=linux/amd64,linux/arm64 builds both (needs binfmt/QEMU emulation and Docker's containerd image store).

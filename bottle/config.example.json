@@ -3,14 +3,14 @@
   "controlPort": 7001,
   "guestPort": 7002,
   "maxTasks": 3,
-  "guestImage": "bottle-school-guest",
+  "guestImage": "bottle-guest",
   "speaker": {
     "url": "http://100.64.0.10:7000",
     "proxyPort": 7003
   },
-  "configRoot": "/srv/bottle-school/config",
-  "stateRoot": "/srv/bottle-school/state",
-  "outputRoot": "/srv/bottle-school/output",
+  "configRoot": "/srv/bottle/config",
+  "stateRoot": "/srv/bottle/state",
+  "outputRoot": "/srv/bottle/output",
   "shareRoots": {
     "documents": "/home/me/Documents",
     "projects": "/home/me/projects"

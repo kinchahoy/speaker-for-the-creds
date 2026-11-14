@@ -111,7 +111,7 @@ export class Tasks {
       (snapshot) => this.#onSnapshot(snapshot),
       // Without speaker no lease can apply: stop through the normal shutdown (archives tasks) and exit nonzero.
       (message) => {
-        console.error(`stopping bottle-school: ${message}`);
+        console.error(`stopping bottle: ${message}`);
         process.exitCode = 1;
         process.kill(process.pid, "SIGTERM");
       },
@@ -187,7 +187,7 @@ export class Tasks {
         live,
         template.limits,
         { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, capture: `${outputDir}/_control/blobs` },
-        { BOTTLE_SCHOOL_TOKEN: token, BOTTLE_SCHOOL_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
+        { BOTTLE_TOKEN: token, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
         { url: this.config.speaker.url, token: subject.token },
         () => speakerProxy(this.config, subject.token),
       );

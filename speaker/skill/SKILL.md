@@ -8,7 +8,7 @@ description: "Get owner-approved access through speaker: homelab APIs (Obsidian,
 
 Speaker holds the owner's keys and makes calls for you. The owner approves each use from a phone, so you never need an upstream key. Never ask for one, and never print your speaker token.
 
-In a bottle-school sandbox, use the `request_capability` tool instead of this page.
+In a bottle sandbox, use the `request_capability` tool instead of this page.
 
 - Call a service: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" $SPEAKER_URL/<service>/<path>`
 - No header file, or error `enroll`: read "Set up" below. It takes four commands, once.

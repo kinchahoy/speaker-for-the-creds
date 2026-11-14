@@ -10,7 +10,7 @@ There are two kinds of agent, and they need different things.
 
 - **Direct agents** (Claude Code on a workstation or laptop) already have their own internet, files and tools. They come to speaker only for what needs the owner's credentials or hosts: homelab services, SSH to homelab hosts, and folders on other machines. They likely never need `site:` or `ext:`.  `secret:`, `mcp:` may be used, but less often.
 
-- **Sandboxed agents** (Pi inside a bottle-school VM) start with nothing. Besides the three things above, they need websites, injected secrets, MCP servers, extensions and folder mounts.
+- **Sandboxed agents** (Pi inside a bottle VM) start with nothing. Besides the three things above, they need websites, injected secrets, MCP servers, extensions and folder mounts.
 
 Eight scenarios cover real use: four for direct agents, four for sandboxed agents. A ninth, about where speaker runs, matters to the owner only. Several things were left out on purpose: a direct agent asking for websites (never needed), a sandboxed agent using a homelab service or SSH (the same as scenarios 1 to 3, with the differences noted under "Sandboxed agents"), and unattended or scheduled tasks (every task starts with an owner tap, by design).
 
@@ -22,7 +22,7 @@ Eight scenarios cover real use: four for direct agents, four for sandboxed agent
 
 ### 1. Use a homelab service (read, then full)
 
-**Who and where.** Claude Code on the owner's laptop, or Qwen inside bottle-school container is asked to "update the PrimeX homelab notes in Obsidian". The speaker-for-the-creds service runs on a different server on the network.
+**Who and where.** Claude Code on the owner's laptop, or Qwen inside bottle container is asked to "update the PrimeX homelab notes in Obsidian". The speaker-for-the-creds service runs on a different server on the network.
 
 **What the owner wants.** To see one card on the phone saying what the agent wants and why, tap once, and have the agent finish.
 
@@ -43,7 +43,7 @@ Variation: if the owner marked a service's reads open (for example "are the ligh
 
 ### 3. Fetch or deliver files on another machine
 
-**Who and where.** Claude Code on a MacBook or workstation or Qwen in bottle-school, told to "copy the latest scan from the `scans` share" or "put the report in `reports`".
+**Who and where.** Claude Code on a MacBook or workstation or Qwen in bottle, told to "copy the latest scan from the `scans` share" or "put the report in `reports`".
 
 **What the owner wants.** The agent touches one folder only, read-only unless a write was approved. The owner never has to think about where the share lives.
 
@@ -58,12 +58,12 @@ A sandboxed agent that needs a homelab service, SSH or a folder uses the same fl
 
 ### 5. Start a task from a template
 
-**Who and where.** The owner starts "Research and summarise X" from a bottle-school template. Pi runs in a new micro-VM on the sandbox host.
+**Who and where.** The owner starts "Research and summarise X" from a bottle template. Pi runs in a new micro-VM on the sandbox host.
 
 **What the owner wants.** One card that shows the task, its label and what it starts with, one tap, and a VM that is ready.
 
 **Flow.**
-1. The owner starts the task. The sandbox host creates a sandboxed agent for it with the template's label, the agent string `Opus 5.5 · Pi on bottle-school`, and the template's `want` list (for example `group:research`, `mcp:search`, `folder:notes`), and receives the agent's token.
+1. The owner starts the task. The sandbox host creates a sandboxed agent for it with the template's label, the agent string `Opus 5.5 · Pi on bottle`, and the template's `want` list (for example `group:research`, `mcp:search`, `folder:notes`), and receives the agent's token.
 2. Speaker files the first request. The card shows the label, the agent string, the source address (the sandbox host's), the sandbox host and task id (speaker's own knowledge), and the items.
 3. The owner approves on the phone. Speaker sends each grant over the sandbox host's WebSocket; the host applies them inside the VM and reports which grants are in force.
 4. Pi works with what was granted. If the owner is slow, Pi's calls wait as `Speaker-Wait` allows, then answer with what to do next.
@@ -108,7 +108,7 @@ A sandboxed agent that needs a homelab service, SSH or a folder uses the same fl
 
 **Who and where.** The owner, deciding where the single speaker container lives.
 
-**What the owner wants.** Either a home server behind a reverse proxy (agents and phone reach it by one HTTPS address), or everything on a single MacBook: speaker, Claude Code, bottle-school, and the owner's own browser.
+**What the owner wants.** Either a home server behind a reverse proxy (agents and phone reach it by one HTTPS address), or everything on a single MacBook: speaker, Claude Code, bottle, and the owner's own browser.
 
 **Flow, home server.**
 1. The proxy forwards HTTP to speaker with `TRUSTED_PROXY` set, and allows holds of 120 seconds. Speaker reads the agent's address from the last `X-Forwarded-For` entry.

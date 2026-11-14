@@ -1,8 +1,11 @@
 {
-  "name": "bottle-school",
+  "name": "bottle",
   "version": "3.0.0",
   "private": true,
   "description": "microsandbox micro-VMs for local agents, enforcing speaker-for-the-creds leases.",
+  "bin": {
+    "bottle": "src/cli.ts"
+  },
   "type": "module",
   "dependencies": {
     "@clack/prompts": "^1.9.0",

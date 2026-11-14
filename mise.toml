@@ -4,10 +4,10 @@ pnpm = "12.16.1"
 
 [tasks.install]
 description = "Install both packages' dependencies"
-run = ["pnpm -C speaker install", "pnpm -C bottle-school install"]
+run = ["pnpm -C speaker install", "pnpm -C bottle install"]
 
 [tasks.init]
-description = "Guided setup: mise run init [speaker | bottle-school] (no name sets up both on this machine; --yes and flags skip the prompts)"
+description = "Guided setup: mise run init [speaker | bottle] (no name sets up both on this machine; --yes and flags skip the prompts)"
 depends = ["install"]
 # The prompts need the terminal itself.
 raw = true
@@ -17,7 +17,7 @@ run = "node init.ts"
 description = "Typecheck, lint (oxlint), and format-check (oxfmt) both packages"
 run = [
   "cd speaker && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
-  "cd bottle-school && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
+  "cd bottle && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
 ]
 
 [tasks.ci]
@@ -26,13 +26,13 @@ depends = ["check", "test"]
 
 [tasks.format]
 description = "Format both packages with oxfmt"
-run = ["cd speaker && pnpm exec oxfmt", "cd bottle-school && pnpm exec oxfmt"]
+run = ["cd speaker && pnpm exec oxfmt", "cd bottle && pnpm exec oxfmt"]
 
 [tasks.test]
 description = "Run both packages' tests"
 run = [
   "cd speaker && node --test --test-timeout=15000 test/*.test.ts",
-  "cd bottle-school && node --test --test-timeout=30000 test/*.test.ts",
+  "cd bottle && node --test --test-timeout=30000 test/*.test.ts",
 ]
 
 [tasks.speaker]
@@ -40,26 +40,10 @@ description = "Run speaker with live reload"
 dir = "speaker"
 run = "node --watch --env-file-if-exists=.env server.ts"
 
-[tasks.bottle-school]
-description = "Run the bottle-school service"
-dir = "bottle-school"
-run = "./start.sh"
-
-[tasks."bottle-school:guest-build"]
-description = "Build the guest image and load it into microsandbox: mise run bottle-school:guest-build bottle-school-guest"
-dir = "bottle-school"
-run = "guest/build.sh"
-
-
-[tasks."bottle-school:cli"]
-description = "Run the bottle-school CLI: mise run bottle-school:cli register|run|ls|attach|stop"
-dir = "bottle-school"
+[tasks.bottle]
+description = "Run bottle: mise run bottle serve|doctor|build|register|run|ls|attach|stop (mise run bottle help)"
+dir = "bottle"
 run = "node src/cli.ts"
-
-[tasks."bottle-school:doctor"]
-description = "Check this host for bottle-school prerequisites (Linux or macOS)"
-dir = "bottle-school"
-run = "./doctor.sh"
 
 [tasks."speaker:up"]
 description = "Build and run speaker in its hardened container (needs speaker/.env)"
