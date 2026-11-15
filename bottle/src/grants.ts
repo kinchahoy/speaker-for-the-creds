@@ -101,7 +101,8 @@ export const siteRef = z.union([
 export const secretHosts = z.array(siteRef).min(1);
 
 /** Guests may use only the agent-facing speaker API and service proxy. */
-export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) => {
+/** `modelServices`: the speaker services behind hosted models, reached only through the model door (its cap and model-calls.jsonl). */
+export const speakerRequestAllowed = (speaker: URL, url: URL, method: string, modelServices: string[]) => {
   if (url.origin !== speaker.origin) return false;
   const path = url.pathname;
   if (path.startsWith("/_speaker/"))
@@ -110,5 +111,6 @@ export const speakerRequestAllowed = (speaker: URL, url: URL, method: string) =>
       (method === "GET" && /^\/_speaker\/requests\/[a-zA-Z0-9_-]+$/.test(path)) ||
       (method === "POST" && path === "/_speaker/requests")
     );
-  return /^\/[a-zA-Z0-9_-]+(?:\/|$)/.test(path) && !/^\/admin(?:\/|$)/.test(path) && !path.startsWith("/_");
+  const service = /^\/([a-zA-Z0-9_-]+)(?:\/|$)/.exec(path)?.[1];
+  return service !== undefined && service !== "admin" && !modelServices.includes(service) && !path.startsWith("/_");
 };

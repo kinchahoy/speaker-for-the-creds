@@ -96,7 +96,7 @@ describe("configuration", () => {
 
 test("speaker exception permits agent routes only at the configured origin", () => {
   const speaker = new URL("https://speaker.example:7000");
-  const allowed = (path: string, method = "GET") => speakerRequestAllowed(speaker, new URL(path, speaker), method);
+  const allowed = (path: string, method = "GET") => speakerRequestAllowed(speaker, new URL(path, speaker), method, ["openrouter"]);
   assert.ok(allowed("/_speaker/catalog"));
   assert.ok(allowed("/_speaker/help/obsidian"));
   assert.ok(allowed("/_speaker/requests", "POST"));
@@ -106,6 +106,11 @@ test("speaker exception permits agent routes only at the configured origin", () 
   for (const path of [
     "/admin",
     "/admin/api/leases",
+    // A hosted model's service is for the model door only (its cap and model-calls.jsonl), however the path is spelled.
+    "/openrouter",
+    "/openrouter/chat/completions",
+    "/obsidian/../openrouter/chat/completions",
+    "/%6Fpenrouter/chat/completions",
     "/_speaker/hosts/agents",
     "/_speaker/agents",
     "/_speaker/providers",

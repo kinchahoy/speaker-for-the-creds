@@ -292,10 +292,10 @@ export const modelDoor =
  * its requests, so a `folder:` grant is deliverable over SSH.
  */
 export const speakerDoor =
-  (speaker: { url: string; agentToken: string }, sshKey: string): RequestListener =>
+  (speaker: { url: string; agentToken: string }, sshKey: string, modelServices: string[]): RequestListener =>
   async (req, res) => {
     const target = new URL(req.url ?? "/", speaker.url);
-    if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET"))
+    if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET", modelServices))
       return void reply(res, 403, "this speaker path is not available to a sandboxed task");
     const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
     await forward(req, res, target, {
@@ -431,7 +431,14 @@ export async function boot(
   const servers = [
     await serveEgress(egress, `${socketDir}/egress.sock`),
     await listen(`${socketDir}/model.sock`, modelDoor(config, live, speaker, paths.modelCalls), modelReply),
-    await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key.public)),
+    await listen(
+      `${socketDir}/speaker.sock`,
+      speakerDoor(
+        speaker,
+        key.public,
+        config.hostedProviders.map((provider) => provider.service),
+      ),
+    ),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
     await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, config.speaker.sshPort),
   ];

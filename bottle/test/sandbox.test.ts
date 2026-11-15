@@ -203,7 +203,7 @@ describe("folders over SSH", () => {
     await new Promise<void>((resolve) => speaker.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${(speaker.address() as { port: number }).port}`;
     const socket = join(root, "speaker.sock");
-    const door = await listen(socket, speakerDoor({ url, agentToken: "t" }, "ssh-ed25519 AAAA"));
+    const door = await listen(socket, speakerDoor({ url, agentToken: "t" }, "ssh-ed25519 AAAA", []));
     const client = new Client("http://speaker.internal", { socketPath: socket });
     await (
       await client.request({ method: "POST", path: "/_speaker/requests", body: '{"want":["folder:docs"]}', headers: { "content-type": "application/json" } })
