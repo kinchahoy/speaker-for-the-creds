@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-15T02:30
+updated: 2026-11-15T11:30
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,25 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-15 11:30 · paused
+
+**Next**
+- Owner: try `bottle run "<prompt>"` attached, Ctrl-\ to detach (tab should appear in Herdr's bottle space), and `bottle run -d`. Not exercised with a TTY yet.
+- Owner: install the Herdr mod's new Agents section (`"bottle": "http://127.0.0.1:7001"` in the mod's config.json) and click an agent; focus across spaces is untested.
+- Owner: add the OpenRouter key in speaker Setup, then run `E2E.md` (check H now uses `bottle run -d`).
+
+**Open**
+- Herdr mod waits for a new terminal with `exec("sleep")` polls (up to ~3 s); revisit if tabs appear slowly.
+- `speaker/ui.ts` host card casts `who.at as number` (a host card always has a host).
+- Validating "no skill for Pi in bottle" would need an A/B eval (see chat 2026-11-15); not started.
+
+**Settled**
+- "Agent" everywhere (code, API `/api/agents`, `maxAgents`, `_control/agent.json`); no compat code kept anywhere.
+- `bottle run` starts bottle on demand; it stops 10 min after its last agent (`idleStopMinutes`), verified live. `bottle down` is the kill switch; `bottle:up`/`bottle:down` are gone. `bottle` is linked into `~/.local/bin`.
+- run attaches by default; `-d` detaches; attended follows attach. The CLI opens Herdr tabs (detached runs only).
+- One agent help route: `/_speaker/help` (`/skill.md` removed). Granted secrets carry only `environment`.
+- UI screenshots: one dated set in `speaker/docs/ui/2026-11-15/`.
 
 ## 2026-11-15 02:30 · paused
 
