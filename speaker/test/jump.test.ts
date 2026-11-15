@@ -337,8 +337,8 @@ test('without SSH_PORT, SSH and folders are off and answered denied', async (t) 
   await app.stop()
 })
 
-// An approved sandbox host whose WebSocket has reported `shares`; collects the grants of every snapshot it hears.
-async function sandboxHost(f: Fixture, t: TestContext, shares: { name: string; mount: boolean }[]) {
+// An approved sandbox host whose WebSocket is connected; collects the grants of every snapshot it hears.
+async function sandboxHost(f: Fixture, t: TestContext) {
   const post = (path: string, token: string, body: object) =>
     f.agent(path, {
       method: 'POST',
@@ -360,10 +360,6 @@ async function sandboxHost(f: Fixture, t: TestContext, shares: { name: string; m
   const grants: { item: string }[][] = []
   ws.on('message', (data) => grants.push((JSON.parse(String(data)) as { grants: { item: string }[] }).grants))
   await once(ws, 'open')
-  ws.send(JSON.stringify({ type: 'shares', shares }))
-  // Speaker answers a share report with a new snapshot (the first came on connect).
-  for (let i = 0; i < 100 && grants.length < 2; i++) await sleep(20)
-  assert.ok(grants.length >= 2, 'speaker took the share report')
   return {
     ask: (body: object) => post('/_speaker/requests', token, { reason: 'test', duration: '1h', ...body }),
     // The items /catalog offers this agent SSH commands for: its over-SSH grants.
@@ -384,40 +380,19 @@ const saveShare = (f: Fixture, name: string, delivery: string) =>
     ['delivery', delivery],
   ])
 
-// The sandbox host reports each share it holds with `mount`; that, not its registered kinds, picks the delivery.
-test('a folder the sandbox host reported mountable needs no sshKey from the agent', async (t) => {
+test('a folder needs an sshKey, is delivered over SSH, and the sandbox host hears the grant', async (t) => {
   const f = await fixture(t)
-  await saveShare(f, 'mounted', 'both')
-  const host = await sandboxHost(f, t, [{ name: 'mounted', mount: true }])
-  assert.equal((await host.ask({ want: ['folder:mounted'] })).status, 202) // a card is waiting
-  // The same agent still needs a key for anything delivered over SSH.
-  assert.equal((await host.ask({ want: ['folder:pics'] })).status, 400)
-})
-
-test('a folder the sandbox host reported not mountable needs an sshKey', async (t) => {
-  const f = await fixture(t)
-  await saveShare(f, 'mixed', 'both')
-  const host = await sandboxHost(f, t, [{ name: 'mixed', mount: false }])
+  await saveShare(f, 'mixed', 'ssh')
+  const host = await sandboxHost(f, t)
   assert.equal((await host.ask({ want: ['folder:mixed'] })).status, 400)
+  const sshKey = (await readFile(join(f.dir, 'agent_key.pub'), 'utf8')).trim()
+  assert.equal((await host.ask({ want: ['folder:mixed'], sshKey })).status, 202)
+  await f.approve()
+  // Over SSH the host mounts it with sshfs, so it must hear the grant.
+  for (let i = 0; i < 40 && !host.grants.some((list) => list.length); i++) await sleep(50)
+  assert.ok(host.grants.some((list) => list.some((grant) => grant.item === 'folder:mixed')))
+  assert.deepEqual(await host.overSsh(), ['folder:mixed'])
 })
-
-for (const [mount, overSsh] of [
-  [false, true],
-  [true, false],
-] as const) {
-  test(`a share reported mount: ${mount} is delivered ${overSsh ? 'over SSH' : 'as a VM mount'}, and the host hears the grant either way`, async (t) => {
-    const f = await fixture(t)
-    await saveShare(f, 'mixed', 'both')
-    const host = await sandboxHost(f, t, [{ name: 'mixed', mount }])
-    const sshKey = (await readFile(join(f.dir, 'agent_key.pub'), 'utf8')).trim()
-    assert.equal((await host.ask({ want: ['folder:mixed'], sshKey })).status, 202)
-    await f.approve()
-    // Over SSH the host mounts it with sshfs, so it must hear the grant; a VM mount it hears as it always did.
-    for (let i = 0; i < 40 && !host.grants.some((list) => list.length); i++) await sleep(50)
-    assert.ok(host.grants.some((list) => list.some((grant) => grant.item === 'folder:mixed')))
-    assert.deepEqual(await host.overSsh(), overSsh ? ['folder:mixed'] : [])
-  })
-}
 
 // Stopping speaker removes its runtime directory. It used to keep speaker.pub when the ssh-agent, killed first,
 // removed its socket while the directory was being deleted, so this repeats start and stop to catch that race.
@@ -432,7 +407,6 @@ test('stop removes the temporary directory of the jump server', async (t) => {
       dataDir,
       agent: () => undefined,
       grants: () => [],
-      mountable: () => false,
       audit: () => undefined,
       expire: () => undefined,
     })

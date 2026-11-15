@@ -54,7 +54,7 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | `<service>.read` | GET, HEAD, OPTIONS to a service, plus POST to paths the owner marks as reads in Setup (such as a search endpoint); for MCP services, listing and read-only tools | any agent |
 | `<service>.full` | read plus every other method or tool call | any agent |
 | `ssh:<target>` | running commands on that target as its agent account | any agent |
-| `folder:<share>` / `folder:<share>:rw` | the share, read-only unless the agent asks for `:rw`; delivered as a VM mount or over SSH (see below) | any agent |
+| `folder:<share>` / `folder:<share>:rw` | the share, read-only unless the agent asks for `:rw`; delivered over SSH (see below) | any agent |
 | `site:<host>` or `site:*.<domain>` | network access from the sandbox | sandboxed |
 | `secret:<NAME>` | speaker inserts the secret into the agent's requests to the hosts the owner bound to it in Setup (see Secrets) | any agent |
 | `mcp:<id>` | an MCP server that runs inside the VM, from the sandbox host's catalog | sandboxed |
@@ -177,12 +177,9 @@ Limits: commands are not folder-limited (they run as the target's agent account)
 
 ### How a folder grant reaches the agent
 
-Each share lists how it may be delivered: **VM mount** (by a sandbox host that has the folder locally), **over SSH** (through speaker), or both. The agent asks only for `folder:<share>`; speaker picks the delivery:
+Folders always arrive over SSH (through speaker). The agent asks only for `folder:<share>`. A share set to deliver by VM mount only is answered like a denial, because speaker has no VM-mount delivery.
 
-- a sandboxed agent whose sandbox host has the share, where the share allows VM mounts, gets a VM mount (fast, enforced by the VM boundary); the host's share report (`mount: true`), not its registered kinds, says whether it has the share;
-- every other agent, including every direct agent, gets it over SSH, if the share allows that; otherwise the item is answered like a denial.
-
-The card, `/catalog` and the Active list label each folder grant **VM mount** or **over SSH**, so the owner always sees which one is in use. Over SSH, a sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is much slower than a VM mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
+The card, `/catalog` and the Active list label each folder grant **over SSH**. A sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is slower than a local mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
 
 ### What is logged
 
@@ -202,7 +199,7 @@ All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in
 
 The pages use Open Props tokens (`/admin/assets/open-props.css`), a small inline stylesheet (light and dark), Lucide icons (`/admin/assets/icons.svg`, cut from lucide-static to the icons in use) and htmx (`/admin/assets/htmx.js`), all served from their npm packages. Inbox and Active are live panels: they poll every 5 seconds (`/admin/panel/inbox`, `/admin/panel/active`) and are swapped only when their content changed, so ticked boxes stay put. Times are shown in UTC.
 
-- **Inbox:** pending requests as cards, and sandbox hosts waiting for approval. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and VM mount or over SSH; items that can change things (`<service>.full`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
+- **Inbox:** pending requests as cards, and sandbox hosts waiting for approval. A card shows label, agent string, source address and token fingerprint, the reason, and a duration picker. Each group is one row (name, description, item count, expandable); items outside any group are listed separately and highlighted; folder items show the share, read-only or read-write, and over SSH; items that can change things (`<service>.full`, `folder:…:rw`, `ssh:`) have a slightly different card colour. Every group, member and item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. A card warns when the same agent string enrolled shortly before.
 - **Active:** agents with their grants, each with time left, **Extend** (labelled with the amount, such as "Extend 1h": one more span of its original length) and **Revoke**; open SSH sessions with **End**; approved sandbox hosts. Under each agent is one line of counts kept on its in-memory record: requests that reached the owner as cards, items granted, items denied (including those decided without a card), **refused** (the agent's request turned away before the owner saw it: unknown or unavailable names, wrong kinds, a missing `sshKey`, a malformed body) and **blocked** (a call refused for lack of a grant: service calls, the secrets proxy, SSH and folder sessions). Refused and blocked show in the warning colour when non-zero, and the latest such message is the line's hover title. Failures before an agent exists (a bad first enrollment) and failed authentication belong to no agent and are not counted.
 - **Setup** (`/admin?section=services`): services (URL, key, read and write rules, notes for agents), secrets with their allowed hosts, groups, SSH targets and shares, and the owner password.
 - **Log:** recent forwarded calls, SSH sessions and file operations, decisions, and requests for unknown names, filterable by agent, grant, service, target or share. It is an in-memory buffer; standard output is the full record.
@@ -252,7 +249,7 @@ What the table means in practice:
 | `* /<service>/<path>` | agent | forwarded call, with optional `Speaker-Wait` |
 | SSH on one unusual port | agent with an SSH or folder grant | commands and file transfer, relayed |
 | `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |
-| `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents; the host reports its shares and catalog |
+| `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents; the host reports its catalog |
 | `GET /_speaker/hosts/self` | sandbox host | `{ id, name, status: "approved" }`; a pending or unknown host token gets the usual `401` (`approval_required`, `enroll` or `register`), an agent token `403` `denied` |
 | `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
 | `GET /_speaker/health` | anyone | liveness |
@@ -320,8 +317,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
 - An extension's sites live and end with it. A site that came only because a request named `ext:<id>` (not asked for in that request) records the ext grant it belongs to; revoking, expiring or ending the agent of that ext grant ends the site grant too, through the same path (audit and push to the sandbox host). A site asked for explicitly, or already held on its own, stays. A site shared by two extensions ends with the last of them. Extending the ext grant extends its bundled sites. Cards and the Active list show the relationship.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
-- A sandbox host reports which shares it holds; a VM mount appears at `/input/<share>`, and `/catalog` gives the path.
-- A share the sandbox host reported with `mount: false` (or did not report) is delivered to its agents over SSH, and the host mounts it itself with `sshfs` (a runtime with no shared-filesystem device): speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
+- A sandbox host mounts its agents' folders itself with `sshfs`: speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
 - After a speaker restart, the agent tokens of running tasks are unknown and their grants are gone. Those tasks lose speaker access until they are relaunched (the sandbox host does not re-create their agents).
 
 **Deployment**
@@ -332,7 +328,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 
 ## Alternative to explore: a slimmer VM if every folder goes over SSH
 
-Sandbox folders are delivered as VM mounts today because the VM runtime provides a shared-filesystem device. If every folder instead reached sandboxes over SSH (`sshfs` through speaker), the VM would need no shared-filesystem device at all, which opens up slimmer and faster runtimes:
+Every folder reaches sandboxes over SSH (`sshfs` through speaker), so the VM needs no shared-filesystem device at all, which opens up slimmer and faster runtimes:
 
 - **Firecracker:** the smallest device model of the common options (network, block, vsock; no shared-filesystem device at all, so only usable with folders over SSH), with boot to user space in about 125 ms per its documentation, and a jailer process for extra isolation. Linux with KVM only.
 - **Cloud Hypervisor:** a little larger, also KVM-only; useful if a shared-filesystem device is still wanted for some folders.

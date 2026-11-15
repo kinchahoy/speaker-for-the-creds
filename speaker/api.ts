@@ -240,11 +240,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         agent.sshKey = input.sshKey
         core.syncJump()
       }
-      // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
-      if (
-        !agent.sshKey &&
-        items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !core.jump.mounted(agent.id, item))
-      )
+      if (!agent.sshKey && items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '')))
         throw invalid(
           'ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)',
           undefined,
@@ -375,7 +371,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       return {
         onOpen: (_event, ws) => {
           core.connections.get(id)?.ws.close(1000, 'replaced')
-          core.connections.set(id, { ws, applied: new Set(), shares: [] })
+          core.connections.set(id, { ws, applied: new Set() })
           ws.send(JSON.stringify(core.snapshot(id)))
         },
         onMessage: (event, ws) => {
@@ -384,10 +380,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           const message = z
             .discriminatedUnion('type', [
               z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
-              z.object({
-                type: z.literal('shares'),
-                shares: z.array(z.object({ name: idSchema, mount: z.boolean() })),
-              }),
               z.object({
                 type: z.literal('catalog'),
                 mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
@@ -404,11 +396,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               }),
             ])
             .parse(JSON.parse(String(event.data)))
-          if (message.type === 'shares') {
-            connection.shares = message.shares
-            core.audit('host_shares', { host: id, shares: message.shares })
-            core.push() // a share's delivery (VM mount or over SSH) follows this report
-          } else if (message.type === 'catalog') {
+          if (message.type === 'catalog') {
             connection.catalog = { mcps: message.mcps, extensions: message.extensions }
             core.audit('host_catalog', { host: id, mcps: message.mcps.length, extensions: message.extensions.length })
           } else connection.applied = new Set(message.grantIds)

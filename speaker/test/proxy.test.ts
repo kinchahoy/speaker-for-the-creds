@@ -355,7 +355,7 @@ test('GET /hosts/self confirms an approved host, and refuses pending hosts and a
   assert.equal(((await denied.json()) as { error: string }).error, 'denied')
 })
 
-test('a sandbox host records the shares it reports, and a grant is applying for the agent until the host reports it', async (t) => {
+test('a grant is applying for the agent until the host reports it', async (t) => {
   const f = await setup(t)
   const { agent } = await approvedHost(f, ['site', 'folder'])
   const ws = new WebSocket(`${f.url.replace('http', 'ws')}/_speaker/hosts/ws`, {
@@ -365,18 +365,6 @@ test('a sandbox host records the shares it reports, and a grant is applying for 
   const inbox: Snapshot[] = []
   ws.on('message', (data) => inbox.push(JSON.parse(String(data))))
   await once(ws, 'open')
-
-  ws.send(
-    JSON.stringify({
-      type: 'shares',
-      shares: [
-        { name: 'documents', mount: true },
-        { name: 'ghost', mount: false },
-      ],
-    }),
-  )
-  for (let i = 0; i < 100 && !(await f.live()).grants.includes('documents (VM mount)'); i++) await sleep(20)
-  assert.match((await f.live()).grants, /shares: documents \(VM mount\), ghost \(no VM mount\)/)
 
   // Asked over the agent's own token and held until decided: the item is granted for the agent only once reported.
   const held = askFor(f, agent.token, { want: ['site:example.com'], reason: 'docs' }, { 'speaker-wait': '10' })

@@ -248,19 +248,18 @@ export const statusOf = (request: Request): RequestState =>
 type Enforcement = 'enforced' | 'sent' | 'host-offline'
 type GrantView = Grant & { label: string; agent: string; enforcement: Enforcement; bundledWith: string[] }
 type RequestView = Request & { status: RequestState; items: string[] }
-// One connected sandbox host: its socket, the grants it reported applied, the shares it holds (and whether it can
-// mount them), and what it can start inside its VMs (MCP servers and Pi extensions, with the sites they need).
+// One connected sandbox host: its socket, the grants it reported applied, and what it can start inside its VMs
+// (MCP servers and Pi extensions, with the sites they need).
 export type Connection = {
   ws: WSContext
   applied: Set<string>
-  shares: { name: string; mount: boolean }[]
   catalog?: HostCatalog
 }
 // Where the encrypted store stands: no owner password yet, set but not unlocked since the last start, or open.
 type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
 type AgentView = Agent & { sandboxHost?: string; grants: number }
 export type View = {
-  hosts: (Host & { shares: { name: string; mount: boolean }[] })[]
+  hosts: Host[]
   agents: AgentView[]
   requests: RequestView[]
   grants: GrantView[]
@@ -460,10 +459,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     dataDir,
     agent: agentById,
     grants: () => [...grants.values()].filter(live),
-    mountable: (agentId, share) => {
-      const host = agentById(agentId)?.host
-      return Boolean(host && connections.get(host)?.shares.some((held) => held.name === share && held.mount))
-    },
     audit,
     expire: () => sweep(),
   })
@@ -935,7 +930,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       items: itemsWhere(request, 'pending'),
     }))
     return {
-      hosts: [...hosts.values()].map((host) => ({ ...host, shares: connections.get(host.id)?.shares ?? [] })),
+      hosts: [...hosts.values()],
       agents: enrolled().map((agent) => ({
         ...agent,
         sandboxHost: hostOf(agent)?.name,
