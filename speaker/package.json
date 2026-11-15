@@ -3,30 +3,26 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@clack/prompts": "^1.9.0",
-    "@hono/node-server": "^2.1.5",
-    "@modelcontextprotocol/client": "^2.4.0",
-    "@peculiar/x509": "^3.1.0",
-    "hono": "^4.13.16",
-    "hono-rate-limiter": "0.5.4",
-    "htmx.org": "2.0.11",
-    "lucide-static": "^1.72.0",
-    "open-props": "^1.7.23",
-    "reflect-metadata": "^0.2.2",
-    "write-file-atomic": "^8.0.0",
-    "ws": "^8.22.1",
-    "zod": "^4.6.7"
+    "@clack/prompts": "catalog:",
+    "@hono/node-server": "catalog:",
+    "@modelcontextprotocol/client": "latest",
+    "@peculiar/x509": "latest",
+    "hono": "catalog:",
+    "hono-rate-limiter": "latest",
+    "htmx.org": "latest",
+    "lucide-static": "latest",
+    "open-props": "latest",
+    "reflect-metadata": "latest",
+    "write-file-atomic": "latest",
+    "ws": "latest",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6",
-    "@types/write-file-atomic": "^4.0.3",
-    "@types/ws": "^8.18.2",
-    "oxfmt": "^0.78.0",
-    "oxlint": "^1.93.0",
-    "typescript": "^7.0.2"
-  },
-  "packageManager": "pnpm@12.16.1",
-  "engines": {
-    "node": ">=26.13.0"
+    "@types/node": "catalog:",
+    "@types/write-file-atomic": "latest",
+    "@types/ws": "latest",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "typescript": "catalog:"
   }
 }

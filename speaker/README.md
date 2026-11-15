@@ -169,6 +169,8 @@ docker compose up --build -d
 docker compose logs --tail=100 speaker
 ```
 
+The image builds from the repository root (the pnpm workspace) and installs the newest release of each dependency. For exactly the tested set in `pnpm-lock.yaml`, build with `docker compose build --build-arg LOCKED=1`.
+
 For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localhost:3000/admin`. Behind a reverse proxy, set `PUBLIC_URL` to the exact URL you open in the browser, including `https://` and any nonstandard port, for example `https://speaker.example.com`. After you change environment settings, recreate the container with `docker compose up -d --force-recreate`. A plain restart does not reload them.
 {.ai}
 

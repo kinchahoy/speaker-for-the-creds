@@ -1,0 +1,15 @@
+packages:
+  - speaker
+  - bottle
+
+# Dependencies both packages use, declared once (each package names them as "catalog:").
+# Everything floats to the newest release; `mise run install:locked` installs the tested set in pnpm-lock.yaml.
+catalog:
+  "@clack/prompts": latest
+  "@hono/node-server": latest
+  hono: latest
+  zod: latest
+  "@types/node": latest
+  oxfmt: latest
+  oxlint: latest
+  typescript: latest

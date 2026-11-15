@@ -1,0 +1,10 @@
+# The build context is the repository root; only these files reach the builder (never data/ or .env).
+*
+!pnpm-workspace.yaml
+!package.json
+!pnpm-lock.yaml
+!bottle/package.json
+!speaker/package.json
+!speaker/*.ts
+!speaker/services.example.json
+!speaker/skill

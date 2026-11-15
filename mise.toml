@@ -3,8 +3,17 @@ node = "26.13.0"
 pnpm = "12.16.1"
 
 [tasks.install]
-description = "Install both packages' dependencies"
-run = ["pnpm -C speaker install", "pnpm -C bottle install"]
+description = "Install the newest release of every dependency; pnpm-lock.yaml is left alone"
+# `install --no-lockfile` would reuse what is installed; `update` re-resolves, and lockfile=false keeps the lockfile out of it.
+run = "pnpm update --recursive --config.lockfile=false"
+
+[tasks."install:locked"]
+description = "Install exactly the tested set in pnpm-lock.yaml"
+run = "pnpm install --frozen-lockfile"
+
+[tasks.lock]
+description = "Move pnpm-lock.yaml to the newest releases (only when the owner asks)"
+run = "pnpm update --recursive"
 
 [tasks.init]
 description = "Guided setup: mise run init [speaker | bottle] (no name sets up both on this machine; --yes and flags skip the prompts)"
@@ -15,10 +24,7 @@ run = "node init.ts"
 
 [tasks.check]
 description = "Typecheck, lint (oxlint), and format-check (oxfmt) both packages"
-run = [
-  "cd speaker && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
-  "cd bottle && pnpm exec tsc --noEmit && pnpm exec oxlint && pnpm exec oxfmt --check",
-]
+run = "pnpm --recursive exec sh -c 'tsc --noEmit && oxlint && oxfmt --check'"
 
 [tasks.ci]
 description = "Typecheck, lint, and test both packages"
@@ -26,14 +32,11 @@ depends = ["check", "test"]
 
 [tasks.format]
 description = "Format both packages with oxfmt"
-run = ["cd speaker && pnpm exec oxfmt", "cd bottle && pnpm exec oxfmt"]
+run = "pnpm --recursive exec oxfmt"
 
 [tasks.test]
 description = "Run both packages' tests"
-run = [
-  "cd speaker && node --test --test-timeout=15000 test/*.test.ts",
-  "cd bottle && node --test --test-timeout=30000 test/*.test.ts",
-]
+run = "pnpm --recursive exec sh -c 'node --test --test-timeout=30000 test/*.test.ts'"
 
 [tasks.speaker]
 description = "Run speaker with live reload"

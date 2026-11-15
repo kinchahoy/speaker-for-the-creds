@@ -1,6 +1,9 @@
 services:
   speaker:
-    build: .
+    build:
+      # The pnpm workspace root; set LOCKED: "1" under args for the tested lockfile set.
+      context: ..
+      dockerfile: speaker/Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:

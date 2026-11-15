@@ -82,7 +82,9 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | Command | Purpose |
 | --- | --- |
 | `mise run init [speaker \| bottle]` | Guided setup (both on this machine without a name) |
-| `mise run install` | Install both packages with pnpm |
+| `mise run install` | Install both packages (one pnpm workspace) at the newest releases; the lockfile is left alone |
+| `mise run install:locked` | Install exactly the tested set in `pnpm-lock.yaml` |
+| `mise run lock` | Move `pnpm-lock.yaml` to the newest releases, after they pass the tests |
 | `mise run check` | Typecheck, lint, and format-check both packages |
 | `mise run test` | Run both packages' tests |
 | `mise run format` | Format both packages |
