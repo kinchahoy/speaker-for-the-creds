@@ -102,12 +102,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
     while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
-  // Item kinds an agent may ask for: services, groups, secrets when the proxy is on, SSH and folders, plus what its
+  // Item kinds an agent may ask for: services, groups, secrets, SSH and folders, plus what its
   // sandbox host enforces.
   const allowedKinds = (agent: Agent): string[] => [
     'service',
     'group',
-    ...(core.config.PROXY_PORT ? ['secret'] : []),
+    'secret',
     'ssh',
     'folder',
     ...(core.hostOf(agent)?.kinds ?? []),
@@ -275,10 +275,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
   // The proxy's public certificate: agents trust it for the hosts of their secrets.
-  if (core.config.PROXY_PORT)
-    app.get('/_speaker/proxy/ca.pem', locked, async (c) =>
-      c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
-    )
+  app.get('/_speaker/proxy/ca.pem', locked, async (c) =>
+    c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
+  )
   // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
   app.use('/skill.md', etag())

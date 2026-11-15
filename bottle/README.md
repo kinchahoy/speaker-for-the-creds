@@ -51,7 +51,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 
 - `bindHost`: an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts any peer that can reach it, so keep this listener private.
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
-- `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
+- `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Both are required: until you register, `init bottle` writes placeholders from `config.example.json`, so set them by hand if you skip registering.
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
@@ -186,13 +186,13 @@ The guest has no network device. Its only doors are host unix sockets on guest v
 - speaker (`SPEAKER_URL`)
 - the control channel that Pi's status reports use
 
-When `speaker.sshPort` is set, a fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
+A fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
 {.ai}
 
 Code: `src/sandbox.ts` (the VM and its doors), `src/tasks.ts` (task lifecycle as a transition table, see `ls` states above; also the archive writer), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).
 {.ai}
 
-- Egress: one `proxy-chain` server per task decides every request from the live grant view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the task launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
+- Egress: one `proxy-chain` server per task decides every request from the live grant view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the task launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`.
 - Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and appends one line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
 - Speaker: the speaker door allows only speaker's agent-facing routes and adds the task's agent token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
 - Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
@@ -200,7 +200,6 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/tasks.ts` (task lifecycle as
   - Each task gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle adds it to the task's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
   - While a folder grant is active, bottle (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle unmounts the share.
   - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
-  - Set `speaker.sshPort`. Without it, the guest has no route to speaker's SSH port, and the folder grant fails to mount (the task's events note this).
   - `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
 - Storage: microsandbox keeps images, VM disks, and its sockets in `~/.bottle/microsandbox`. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder).
 
@@ -356,7 +355,7 @@ You delete archives manually. If archiving fails, bottle keeps the work tree for
 Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network and ref policy, templates and their first request, trace reconstruction, the speaker channel (grants, applied reports, the 30-second drop), and the secret route against a real speaker proxy. They do not boot a guest.
 {.ai}
 
-Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. With `PROXY_PORT` set in speaker (registration records it as `speaker.proxyPort` here), also check:
+Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. Also check (registration records speaker's `PROXY_PORT` as `speaker.proxyPort` here):
 {.ai}
 
 - `gh` and `git` with a granted secret through the egress proxy: the placeholder goes in, the real value appears only at the real host, and a `git clone` works through speaker
@@ -370,7 +369,7 @@ Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concur
 
 - A missing `setsid` stops startup with a clear error. So does a microsandbox storage folder or parent that is group- or world-writable.
 - `speaker.token is missing` means you must register the sandbox host first.
-- A blocked guest request returns 403. The agent requests the required capability. An expired or revoked grant also blocks later use. If the policy events show a secret host blocked with "speaker.proxyPort is not set" or "speaker's proxy certificate is unavailable", speaker's proxy is not configured, not enabled (`PROXY_PORT`), or locked.
+- A blocked guest request returns 403. The agent requests the required capability. An expired or revoked grant also blocks later use. If a task's launch fails with "speaker's proxy certificate is unavailable", speaker is locked.
 - The service archives open tasks on SIGINT or SIGTERM. Inspect the archive outcome before you discard recovery files.
 
 <!-- author: ai -->

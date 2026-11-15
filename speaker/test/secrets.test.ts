@@ -97,8 +97,8 @@ async function setup(t: TestContext) {
   const url = `http://127.0.0.1:${port(server)}`
   t.after(async () => {
     await app.stop()
-    app.proxy?.closeAllConnections()
-    app.proxy?.close()
+    app.proxy.closeAllConnections()
+    app.proxy.close()
     server.closeAllConnections()
     server.close()
     upstream.closeAllConnections()

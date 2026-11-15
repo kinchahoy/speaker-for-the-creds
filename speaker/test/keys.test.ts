@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { createApp, readConfig } from '../server.ts'
-import { ownerPassword, sessionCookie, setOwnerPassword } from './owner.ts'
+import { freePorts, ownerPassword, sessionCookie, quiet, setOwnerPassword } from './owner.ts'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const locked = {
@@ -26,7 +26,9 @@ async function dataDir(t: TestContext) {
 }
 // Starts speaker on a data directory; calling it again on the same directory is a restart.
 async function start(dir: string, env: Record<string, string> = {}) {
-  const app = await createApp(readConfig({ DATA_DIR: dir, PUBLIC_URL: 'http://localhost', ...env }))
+  const app = quiet(
+    await createApp(readConfig({ DATA_DIR: dir, PUBLIC_URL: 'http://localhost', ...(await freePorts()), ...env })),
+  )
   const call = (path: string, init: RequestInit = {}) =>
     app.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init }))
   const form = (path: string, body: Record<string, string>, headers: Record<string, string> = {}) =>

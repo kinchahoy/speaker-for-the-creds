@@ -54,10 +54,8 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
     await next()
   })
   agentApi(app, core, adminApp(core))
-  if (core.proxy) {
-    core.proxy.listen(config.PROXY_PORT, '0.0.0.0')
-    await once(core.proxy, 'listening')
-  }
+  core.proxy.listen(config.PROXY_PORT, '0.0.0.0')
+  await once(core.proxy, 'listening')
   return Object.assign(app, { proxy: core.proxy, stop: () => core.jump.stop() })
 }
 

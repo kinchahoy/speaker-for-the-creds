@@ -71,11 +71,12 @@ const upstreamIdentity = await (async () => {
 setDefaultCACertificates([...getCACertificates("default"), upstreamIdentity.cert]);
 
 /** A real speaker in this process, its owner session, and an approved sandbox host. */
-async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?: object; proxy?: boolean } = {}) {
+async function fixture(t: TestContext, { groups = {} }: { groups?: object } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-speaker-"));
   await writeFile(join(dataDir, "groups.json"), JSON.stringify(groups));
-  const proxyPort = proxy ? await freePort() : undefined;
-  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", ...(proxyPort ? { PROXY_PORT: String(proxyPort) } : {}) }));
+  const proxyPort = await freePort();
+  const sshPort = await freePort();
+  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", PROXY_PORT: String(proxyPort), SSH_PORT: String(sshPort) }));
   // Closing an HTTP server also closes the WebSocket server it was given, so each listener gets its own.
   const sockets: InstanceType<Ws["WebSocketServer"]>[] = [];
   const listen = (listenPort: number) => {
@@ -88,8 +89,9 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
   const speakerPort = port(servers[0]);
   t.after(async () => {
     for (const wss of sockets) for (const client of wss.clients) client.terminate();
-    app.proxy?.closeAllConnections();
-    app.proxy?.close();
+    app.proxy.closeAllConnections();
+    app.proxy.close();
+    await app.stop();
     for (const server of servers) {
       server.closeAllConnections();
       server.close();
@@ -97,7 +99,7 @@ async function fixture(t: TestContext, { groups = {}, proxy = false }: { groups?
     await rm(dataDir, { recursive: true, force: true });
   });
   const url = `http://127.0.0.1:${speakerPort}`;
-  const config = { speaker: { url, ...(proxyPort ? { proxyPort } : {}) } } as Config;
+  const config = { speaker: { url, proxyPort, sshPort } } as Config;
   const owner = {
     cookie: await setOwnerPassword((path, init) => fetch(url + path, init)),
     origin: "http://localhost",
@@ -235,7 +237,7 @@ test("a template's want becomes the task's first request, labelled and timed as 
 });
 
 test("registering learns speaker's proxy and SSH ports into config.json, and the host is approved only once the owner says so", async (t) => {
-  const f = await fixture(t, { proxy: true });
+  const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), "bottle-register-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = join(dir, "config.json");
@@ -244,7 +246,7 @@ test("registering learns speaker's proxy and SSH ports into config.json, and the
 
   const id = await registerHost(config, configPath, "bottle");
   assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-    speaker: { url: f.url, proxyPort: f.config.speaker.proxyPort },
+    speaker: { url: f.url, proxyPort: f.config.speaker.proxyPort, sshPort: f.config.speaker.sshPort },
     guestImage: "kept",
   });
   assert.equal(await hostApproved(config), false);
@@ -361,7 +363,7 @@ test("a grant counts as decided for the agent only once the sandbox host reports
 
 test("a secret grant reaches the sandbox as hosts only; its requests go through speaker's proxy, which inserts the value", async (t) => {
   const realToken = "ghp_real_token_only_the_upstream_should_see";
-  const f = await fixture(t, { proxy: true });
+  const f = await fixture(t);
   const seen: { url?: string; authorization?: string }[] = [];
   const upstream = createHttpsServer(upstreamIdentity, (req, res) => {
     seen.push({ url: req.url, authorization: req.headers.authorization });
@@ -456,12 +458,4 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.equal(await route.allow("localhost"), undefined);
   assert.equal(route.dispatcher("localhost"), undefined);
   assert.equal(seen.length, 1);
-
-  // A route that cannot be set up fails closed: no direct request, and the event says why.
-  const broken = secretRoute(
-    { secretHosts: live.secretHosts.concat([{ name: "X", hosts: ["localhost"], expiresAt: null }]), events: [] as { at: string; text: string }[] },
-    undefined,
-  );
-  assert.equal(await broken.allow("localhost"), false);
-  assert.throws(() => broken.dispatcher("localhost"), /refusing a direct request/);
 });

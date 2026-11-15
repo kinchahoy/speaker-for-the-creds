@@ -71,7 +71,12 @@ async function fixture(t: TestContext) {
   const sshPort = await freePort()
   const targetPort = await freePort()
   const app = await createApp(
-    readConfig({ DATA_DIR: join(dir, 'data'), PUBLIC_URL: 'http://localhost', SSH_PORT: String(sshPort) }),
+    readConfig({
+      DATA_DIR: join(dir, 'data'),
+      PUBLIC_URL: 'http://localhost',
+      PROXY_PORT: String(await freePort()),
+      SSH_PORT: String(sshPort),
+    }),
   )
   const server = serve({
     fetch: app.fetch,
@@ -84,6 +89,7 @@ async function fixture(t: TestContext) {
   let target: ChildProcess | undefined
   t.after(async () => {
     await app.stop()
+    app.proxy.close()
     target?.kill()
     server.closeAllConnections()
     server.close()
@@ -314,27 +320,6 @@ test('names that do not exist are refused without listing any real name, and nev
   assert.equal((await f.enroll([])).status, 201) // the refused requests above enrolled nothing
   const { groups } = (await (await f.agent('/_speaker/catalog')).json()) as { groups: object }
   assert.deepEqual(groups, { ops: { description: 'Ops', items: [], also: '1 SSH target, 2 folders' } })
-})
-
-test('without SSH_PORT, SSH and folders are off and answered denied', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'speaker-nojump-'))
-  t.after(() => rm(dir, { recursive: true, force: true }))
-  const app = await createApp(readConfig({ DATA_DIR: dir, PUBLIC_URL: 'http://localhost' }))
-  const call = (path: string, init: RequestInit = {}) => app.fetch(new Request(`http://localhost${path}`, init))
-  await setOwnerPassword(call)
-  const key = (
-    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, 'k'), '-C', 'a']).then(() =>
-      readFile(join(dir, 'k.pub'), 'utf8'),
-    )
-  ).trim()
-  const response = await call('/_speaker/agents', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ label: 'x', tokenHash: sha('t'), want: ['ssh:box'], reason: 'r', sshKey: key }),
-  })
-  const { request } = (await response.json()) as { request: { denied: string[] } }
-  assert.deepEqual(request.denied, ['ssh:box'])
-  await app.stop()
 })
 
 // An approved sandbox host whose WebSocket is connected; collects the grants of every snapshot it hears.

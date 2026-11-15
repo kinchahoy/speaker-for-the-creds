@@ -5,12 +5,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { createApp, readConfig } from '../server.ts'
-import { setOwnerPassword } from './owner.ts'
+import { freePorts, quiet, setOwnerPassword } from './owner.ts'
 
 test("the admin page counts an agent's refused requests, blocked calls and granted items", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'speaker-counts-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
-  const app = await createApp(readConfig({ DATA_DIR: dir, PUBLIC_URL: 'http://localhost' }))
+  const app = quiet(
+    await createApp(readConfig({ DATA_DIR: dir, PUBLIC_URL: 'http://localhost', ...(await freePorts()) })),
+  )
   const call = (path: string, init: RequestInit = {}) =>
     app.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init }))
   const cookie = await setOwnerPassword(call)

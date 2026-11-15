@@ -7,13 +7,13 @@ services:
       PORT: "3000"
       DATA_DIR: /data
       PUBLIC_URL: ${PUBLIC_URL:?Set PUBLIC_URL in .env to the browser-facing URL}
-      SSH_PORT: ${SSH_PORT:-2222}
+      SSH_PORT: ${SSH_PORT:?Set SSH_PORT in .env}
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"
-      # The secrets proxy (listens only when PROXY_PORT is set in .env; keep it equal to this port).
-      - "127.0.0.1:${PROXY_PORT:-3128}:${PROXY_PORT:-3128}"
+      # The secrets proxy (PROXY_PORT in .env, published on the same port number).
+      - "127.0.0.1:${PROXY_PORT:?Set PROXY_PORT in .env}:${PROXY_PORT:?Set PROXY_PORT in .env}"
       # The jump server, which listens only while an SSH or folder grant is active.
-      - "${SSH_PORT:-2222}:${SSH_PORT:-2222}"
+      - "${SSH_PORT:?Set SSH_PORT in .env}:${SSH_PORT:?Set SSH_PORT in .env}"
     volumes:
       - data:/data
     read_only: true

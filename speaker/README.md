@@ -96,7 +96,7 @@ All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/sto
 
 <sub>AI-written</sub>
 
-Set `PROXY_PORT` to turn on speaker's HTTPS proxy. It is off when unset. Publish the port next to `PORT`.
+Speaker's HTTPS proxy listens on `PROXY_PORT`, which is required. Publish the port next to `PORT`.
 {.ai}
 
 An agent holding `secret:<NAME>` sends HTTPS through the proxy with `CONNECT`. It authenticates with its speaker token as the proxy password: `http://agent:<token>@<speaker>:<PROXY_PORT>`. curl, `gh`, and `git` send it as Basic credentials.
@@ -112,7 +112,7 @@ Every other host gets `403` and a one-line message. This is not a general proxy.
 - Each agent gets one random placeholder per secret, held in memory. For each secret grant, `GET /_speaker/catalog` shows the variable with its placeholder, `HTTPS_PROXY`, where to fetch the certificate, `SSL_CERT_FILE` for `gh` (`GIT_SSL_CAINFO` or `http.sslCAInfo` for `git`), the allowed hosts, and the `gh auth setup-git` hint.
 - Set those variables on the one command that needs them, not on the whole shell. The proxy refuses every other host.
 - The log records agent, host, method, path (no query), and status. It never records the token or bodies.
-- `site:` items stay sandbox-only. Direct agents can use `secret:` items when `PROXY_PORT` is set.
+- `site:` items stay sandbox-only. Direct agents can use `secret:` items.
 
 <!-- author: ai -->
 
@@ -130,7 +130,7 @@ Define groups in `DATA_DIR/groups.json`:
 The description is optional. A group may hold any items except other groups. Copy [groups.example.json](groups.example.json) to start. The `/admin` Groups page edits the file live. If you edit it by hand, restart speaker.
 {.ai}
 
-A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items, or with `secret:` items unless `PROXY_PORT` is set.
+A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items.
 {.ai}
 
 ## Phone notifications
@@ -184,14 +184,14 @@ For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localh
 
 <sub>AI-written</sub>
 
-Agents run commands on your hosts and use your folders through a jump server inside speaker's container. Speaker listens on `SSH_PORT` only while an SSH or over-SSH folder grant is active. It hands each connection to a stock, non-root `sshd -i` with a new host key each time it starts. The relay (`relay.ts`) is each session's forced command. Set `SSH_PORT` to turn this on. Without it, speaker answers `ssh:` and `folder:` items with `denied`. [DESIGN.md](DESIGN.md#ssh-and-shares-how-speaker-controls-them) explains how the relay controls sessions and folders.
+Agents run commands on your hosts and use your folders through a jump server inside speaker's container. Speaker listens on `SSH_PORT` only while an SSH or over-SSH folder grant is active. It hands each connection to a stock, non-root `sshd -i` with a new host key each time it starts. The relay (`relay.ts`) is each session's forced command. `SSH_PORT` is required. [DESIGN.md](DESIGN.md#ssh-and-shares-how-speaker-controls-them) explains how the relay controls sessions and folders.
 
 - Targets (Setup): an alias, a host, a port, and the account speaker uses there. Adding a target pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first. You can edit the address list per target.
 - Shares (Setup): a name, a target, an absolute path, and how to deliver it (`over SSH`). Cards show the account (and any sudo warning) for `ssh:<target>`. For `folder:<share>[:rw]` they show the share, whether it is read-only or read-write, and the delivery.
 - Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker refuses an unknown name with 400 (`There is no folder named <share> that you can use.`, never listing real names) and creates no card; an item that exists but cannot be delivered is answered `denied` at once and logged. After approval, `GET /_speaker/catalog` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
 - For an `ssh:` grant, `scp` and `sftp` paths are `<target>/<absolute path on the target>`. Speaker refuses `rsync`, legacy `scp -O`, and commands on a folder grant, with a pointer to `sftp`.
 - The Active page lists open sessions with **End**. Ending a grant, revoking it, or restarting speaker ends its sessions.
-- Container: the image has `openssh-server` and `openssh-client`, and `compose.yaml` publishes `SSH_PORT` (default 2222). The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store, and in clear only in memory inside `ssh-agent`. The jump server's files (public keys, its per-start host key, the ssh-agent socket) sit in a private temporary directory.
+- Container: the image has `openssh-server` and `openssh-client`, and `compose.yaml` publishes `SSH_PORT`. The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store, and in clear only in memory inside `ssh-agent`. The jump server's files (public keys, its per-start host key, the ssh-agent socket) sit in a private temporary directory.
 
 <!-- author: ai -->
 

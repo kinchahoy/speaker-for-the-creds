@@ -24,7 +24,7 @@ const ConfigFile = z
     guestImage: z.string().min(1),
     // proxyPort is speaker's PROXY_PORT: where requests to a granted secret's hosts go so speaker can insert the secret.
     // sshPort is speaker's SSH_PORT: where the guest reaches the jump server for `folder:` grants.
-    speaker: z.object({ url: z.url(), proxyPort: port.optional(), sshPort: port.optional() }),
+    speaker: z.object({ url: z.url(), proxyPort: port, sshPort: port }),
     configRoot: z.string(),
     stateRoot: z.string(),
     outputRoot: z.string(),

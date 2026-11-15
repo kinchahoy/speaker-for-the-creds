@@ -295,10 +295,10 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
         .regex(/^[a-zA-Z0-9_-]+$/)
         .optional(),
       NTFY_TOKEN: z.string().optional(),
-      // Port of the HTTPS proxy that inserts secrets (see proxy.ts); the proxy is off when unset.
-      PROXY_PORT: z.coerce.number().int().min(1).max(65535).optional(),
-      // The jump server's port; without it SSH and folders over SSH are off.
-      SSH_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+      // Port of the HTTPS proxy that inserts secrets (see proxy.ts).
+      PROXY_PORT: z.coerce.number().int().min(1).max(65535),
+      // The jump server's port (SSH and folders over SSH).
+      SSH_PORT: z.coerce.number().int().min(1).max(65535),
       // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
     })
@@ -960,22 +960,19 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     for (const [key, request] of requests) if (request.agentId === id) requests.delete(key)
     audit('agent_revoked', { agent: id, label: agent.label })
   }
-  const proxy = config.PROXY_PORT
-    ? createProxy({
-        authenticate(token, source) {
-          const notice = lockNotice()
-          if (notice) throw new Refusal(503, `${notice.message}. ${notice.tell_user}`)
-          const found = resolveAgent(token, source)
-          if ('agent' in found) return { agent: found.agent.id }
-          if (found.refused === 'revoked')
-            throw new Refusal(403, 'The owner revoked this agent. Stop and tell the user')
-          throw new Refusal(407, 'Unknown token or address. Enroll again (read "Set up" in GET /_speaker/help)')
-        },
-        secrets: secretGrants,
-        ca: certificateAuthority,
-        log: audit,
-      })
-    : undefined
+  const proxy = createProxy({
+    authenticate(token, source) {
+      const notice = lockNotice()
+      if (notice) throw new Refusal(503, `${notice.message}. ${notice.tell_user}`)
+      const found = resolveAgent(token, source)
+      if ('agent' in found) return { agent: found.agent.id }
+      if (found.refused === 'revoked') throw new Refusal(403, 'The owner revoked this agent. Stop and tell the user')
+      throw new Refusal(407, 'Unknown token or address. Enroll again (read "Set up" in GET /_speaker/help)')
+    },
+    secrets: secretGrants,
+    ca: certificateAuthority,
+    log: audit,
+  })
   // The first visit sets the owner password and creates the store; later sign-ins unwrap it (WrongPassword if not).
   const createOwnerStore = (password: string) =>
     serial(async () => {

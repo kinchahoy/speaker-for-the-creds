@@ -72,8 +72,8 @@ const expiryTime = (ms: number) => new Date(ms).toISOString().replace(/[-:T]|\.\
 
 type Grant = { id: string; agentId: string; item: string; expiresAt: string | null }
 type Env = {
-  // SSH_PORT; without it SSH and over-SSH folders are off.
-  port: number | undefined
+  // SSH_PORT.
+  port: number
   dataDir: string
   agent(id: string): { id: string; sshKey?: string; source: string } | undefined
   // Every active grant.
@@ -97,7 +97,6 @@ type Session = {
   why?: string
 }
 export type SshSetup = {
-  enabled: boolean
   port?: number
   publicKey?: string
   error?: string
@@ -139,7 +138,6 @@ export async function createJump(env: Env) {
   const persist = () => writeFile(settingsFile, JSON.stringify(settings, null, 2), { mode: 0o600 })
   const login = userInfo().username
   const sessions = new Map<string, Session>()
-  const enabled = env.port !== undefined
   // Runtime state, all under one private temporary directory (mode 700) made when speaker unlocks. It holds the
   // ssh-agent socket, public keys and the jump server's per-start host key; speaker's private key never touches it.
   let dir = ''
@@ -158,7 +156,7 @@ export async function createJump(env: Env) {
 
   // --- Speaker's key: a stock ssh-agent holds it; nothing else sees it. ---
   async function start(key: { private: string; public: string }) {
-    if (!enabled || dir) return
+    if (dir) return
     dir = await mkdtemp(join(tmpdir(), 'speaker-'))
     process.once('exit', cleanup)
     publicKey = key.public
@@ -213,7 +211,7 @@ export async function createJump(env: Env) {
     '--',
   ]
   async function onTarget(alias: string, target: Target, command: string) {
-    if (!dir) throw new SetupError('Speaker is locked or SSH is off')
+    if (!dir) throw new SetupError('Speaker is locked')
     await writeKnownHosts({ [alias]: target })
     try {
       return (await run('ssh', [...sshArgs(alias, target), command], { timeout: 30_000 })).stdout
@@ -265,7 +263,6 @@ export async function createJump(env: Env) {
         })
         .safeParse(form),
     )
-    if (!enabled) throw new SetupError('SSH is off: set SSH_PORT and restart speaker')
     if (Object.hasOwn(settings.targets, alias)) throw new SetupError(`Target ${alias} exists; delete it first`)
     if (account === 'root' && !confirmRoot)
       throw new SetupError('Refused: root has no limits. Tick "I understand" to use root anyway')
@@ -326,10 +323,8 @@ export async function createJump(env: Env) {
   }
 
   // --- What an item means for an agent ---
-  const off = () => (enabled ? undefined : 'SSH is off on this speaker')
   // Set when an ssh: or folder: item names no target or share. Names are never listed to agents, so this only says no.
   function unknownName(item: string) {
-    if (!enabled) return undefined // with SSH off, `unavailable` says so
     const target = targetOf(item)
     if (target !== undefined && !Object.hasOwn(settings.targets, target))
       return `There is no SSH target named ${target} that you can use.`
@@ -341,16 +336,13 @@ export async function createJump(env: Env) {
   // Why an ssh: or folder: item cannot be delivered to this agent, or undefined when it can.
   function unavailable(agentId: string, item: string) {
     const target = targetOf(item)
-    if (target !== undefined)
-      return off() ?? (settings.targets[target] ? undefined : `there is no target named ${target}`)
+    if (target !== undefined) return settings.targets[target] ? undefined : `there is no target named ${target}`
     const folder = shareOf(item)
     if (!folder) return undefined
     const share = settings.shares[folder.name]
     if (!share) return `there is no share named ${folder.name}`
     if (share.delivery === 'vm') return `${folder.name} is not delivered over SSH`
-    return (
-      off() ?? (settings.targets[share.target]?.sftp ? undefined : `the target of ${folder.name} has no sftp-server`)
-    )
+    return settings.targets[share.target]?.sftp ? undefined : `the target of ${folder.name} has no sftp-server`
   }
   const overSsh = (grant: { agentId: string; item: string }) =>
     unavailable(grant.agentId, grant.item) === undefined &&
@@ -379,7 +371,6 @@ export async function createJump(env: Env) {
     }
   }
   const setup = (error?: string): SshSetup => ({
-    enabled,
     port: env.port,
     publicKey: publicKey || undefined,
     error,
@@ -653,7 +644,6 @@ export async function createJump(env: Env) {
   }
 
   return {
-    enabled,
     start,
     sync,
     unknownName,

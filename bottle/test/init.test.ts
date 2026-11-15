@@ -119,7 +119,7 @@ const lockedSpeaker = async (t: TestContext, owner: string) => {
       response.writeHead(signedIn ? 303 : 401).end();
     } else if (url === "/_speaker/catalog" && request.headers.authorization && !approved) response.writeHead(401).end("{}");
     else if (!unlocked && url.startsWith("/_speaker/") && !url.endsWith("/health")) response.writeHead(503).end("{}");
-    else if (request.method === "POST" && url === "/_speaker/hosts") response.writeHead(201).end('{"id":"h1"}');
+    else if (request.method === "POST" && url === "/_speaker/hosts") response.writeHead(201).end('{"id":"h1","proxyPort":3128,"sshPort":2222}');
     else response.end('{"ok":true}');
   });
   return { port, unlocked: () => unlocked, approved: () => approved };

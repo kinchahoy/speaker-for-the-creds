@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { hostStates, hostTable, IllegalTransition, sessionTable, transition } from '../lifecycle.ts'
 import { createApp, readConfig } from '../server.ts'
-import { setOwnerPassword } from './owner.ts'
+import { freePorts, quiet, setOwnerPassword } from './owner.ts'
 
 test('every table target is a known state and terminal states accept no event', () => {
   for (const [states, table] of [
@@ -29,12 +29,19 @@ test('PUBLIC_URL is required', () => {
   assert.throws(() => readConfig({}), /PUBLIC_URL/)
 })
 
+test('PROXY_PORT and SSH_PORT are required', () => {
+  assert.throws(() => readConfig({ PUBLIC_URL: 'http://localhost', SSH_PORT: '2222' }), /PROXY_PORT/)
+  assert.throws(() => readConfig({ PUBLIC_URL: 'http://localhost', PROXY_PORT: '3128' }), /SSH_PORT/)
+})
+
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 
 async function setup(t: TestContext) {
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-lifecycle-'))
   t.after(() => rm(dataDir, { recursive: true, force: true }))
-  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost' }))
+  const app = quiet(
+    await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...(await freePorts()) })),
+  )
   const call = (path: string, init: RequestInit = {}) =>
     app.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init }))
   const json = (path: string, body: object, headers: Record<string, string>) =>

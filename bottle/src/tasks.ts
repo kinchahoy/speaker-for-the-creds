@@ -246,7 +246,7 @@ export class Tasks {
     let guest: Guest;
     try {
       // Speaker's proxy certificate, fetched once for the guest's trust store and bottle's own tunnel to the proxy.
-      const ca = this.config.speaker.proxyPort ? await upstream(speakerCa(this.config)) : undefined;
+      const ca = await upstream(speakerCa(this.config));
       writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, keys, [], [], []);
       guest = await this.#boot(
         this.config,
@@ -254,8 +254,8 @@ export class Tasks {
         template.limits,
         { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, modelCalls: `${outputDir}/_control/model-calls.jsonl` },
         { BOTTLE_TOKEN: guestToken, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
-        { url: this.config.speaker.url, agentToken: agent.agentToken, ...(ca ? { ca } : {}) },
-        ca === undefined ? undefined : speakerProxy(this.config, agent.agentToken, ca),
+        { url: this.config.speaker.url, agentToken: agent.agentToken, ca },
+        speakerProxy(this.config, agent.agentToken, ca),
       );
     } catch (error) {
       rmSync(`${this.config.stateRoot}/tasks/${id}`, { recursive: true, force: true });

@@ -39,7 +39,7 @@ const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
         bindHost,
         controlPort,
         guestPort: 7002,
-        speaker: { url: "http://127.0.0.1:7000" },
+        speaker: { url: "http://127.0.0.1:7000", proxyPort: 7003, sshPort: 7004 },
         maxTasks: 1,
         guestImage: "bottle-guest",
         configRoot: join(root, "config"),

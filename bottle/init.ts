@@ -323,7 +323,8 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     controlPort,
     guestPort,
     guestImage: image,
-    speaker: { url: speakerUrl },
+    // The ports are placeholders from config.example.json until `register` learns the real ones from speaker.
+    speaker: { ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")).speaker, url: speakerUrl },
     configRoot,
     stateRoot,
     outputRoot,

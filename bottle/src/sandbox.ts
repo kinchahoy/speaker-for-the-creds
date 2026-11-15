@@ -61,11 +61,10 @@ export const countModelRequest = (live: Live) => {
 };
 
 /**
- * Where requests to a granted secret's hosts go: through speaker's proxy (`proxy`, undefined when speaker has no proxy
- * port), which holds the value and swaps the agent's placeholder in. `allow` answers for those hosts (undefined for every
+ * Where requests to a granted secret's hosts go: through speaker's proxy (`proxy`), which holds the value and swaps the agent's placeholder in. `allow` answers for those hosts (undefined for every
  * other host, which the rest of the policy decides); `dispatcher` is the upstream route for them.
  */
-export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: Dispatcher | undefined) => {
+export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: Dispatcher) => {
   const covered = (host: string) =>
     coversAny(
       unexpired(live.secretHosts).flatMap((entry) => entry.hosts),
@@ -74,17 +73,13 @@ export const secretRoute = (live: Pick<Live, "secretHosts" | "events">, proxy: D
   return {
     allow: (host: string) => {
       if (!covered(host)) return undefined;
-      if (proxy) return true;
-      // Never fall back to a direct request: the placeholder would reach the real host instead of the secret.
-      note(live, `blocked a request to ${host}: speaker's proxy is not configured (speaker.proxyPort)`);
-      return false;
+      return true;
     },
     dispatcher: (host: string) => {
       if (!covered(host)) return undefined;
-      if (!proxy) throw new Error(`speaker's proxy is not configured; refusing a direct request to ${host}`);
       return proxy;
     },
-    close: async () => void (await proxy?.close()),
+    close: async () => void (await proxy.close()),
   };
 };
 
@@ -151,7 +146,7 @@ const publicLookup = ((hostname: string, options: dns.LookupOptions, callback: (
   })) as unknown as typeof dns.lookup;
 
 /** The guest's only route to the internet: allowed hosts go direct, secret hosts go through speaker's proxy, the rest get 403. */
-export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, speaker: { proxy?: string; agentToken: string }) => {
+export const egressProxy = (live: Live, route: ReturnType<typeof secretRoute>, speaker: { proxy: string; agentToken: string }) => {
   // Open connections by host. A CONNECT tunnel is checked once, so `sweep` closes any whose host lost its grant.
   const open = new Map<number, string>();
   const proxy = new ProxyServer({
@@ -289,7 +284,7 @@ export const modelDoor =
  * its requests, so a `folder:` grant is deliverable over SSH.
  */
 export const speakerDoor =
-  (speaker: { url: string; agentToken: string }, sshKey?: string): RequestListener =>
+  (speaker: { url: string; agentToken: string }, sshKey: string): RequestListener =>
   async (req, res) => {
     const target = new URL(req.url ?? "/", speaker.url);
     if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET"))
@@ -297,7 +292,7 @@ export const speakerDoor =
     const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
     await forward(req, res, target, {
       headers: { authorization: `Bearer ${speaker.agentToken}` },
-      ...(sshKey && requests ? { json: { sshKey } } : {}),
+      ...(requests ? { json: { sshKey } } : {}),
     });
   };
 
@@ -413,8 +408,8 @@ export async function boot(
   limits: { cpus: number; memoryMiB: number; rootfsGiB: number },
   paths: { work: string; artifacts: string; guestConfig: string; modelCalls: string },
   env: Record<string, string>,
-  speaker: { url: string; agentToken: string; ca?: string },
-  proxy: Dispatcher | undefined,
+  speaker: { url: string; agentToken: string; ca: string },
+  proxy: Dispatcher,
 ): Promise<Guest> {
   msbHome();
   const { MiB, Sandbox } = await import("microsandbox");
@@ -422,20 +417,18 @@ export async function boot(
   const dir = paths.work.slice(0, paths.work.lastIndexOf("/"));
   const socketDir = socketFolder();
   const route = secretRoute(live, proxy);
-  const proxyPort = config.speaker.proxyPort;
   const egress = egressProxy(live, route, {
-    ...(proxyPort ? { proxy: `${new URL(config.speaker.url).hostname}:${proxyPort}` } : {}),
+    proxy: `${new URL(config.speaker.url).hostname}:${config.speaker.proxyPort}`,
     agentToken: speaker.agentToken,
   });
-  // Folders arrive over SSH through speaker (see `folderSync`); without speaker.sshPort the guest has no way to them.
-  const sshPort = config.speaker.sshPort;
-  const key = sshPort ? await newSshKey(dir) : undefined;
+  // Folders arrive over SSH through speaker (see `folderSync`).
+  const key = await newSshKey(dir);
   const servers = [
     await serveEgress(egress, `${socketDir}/egress.sock`),
     await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.modelCalls), modelReply),
-    await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key?.public)),
+    await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key.public)),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
-    ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),
+    await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, config.speaker.sshPort),
   ];
   let folders: NodeJS.Timeout | undefined;
   // Revoking or expiring a grant closes the task's open connections to that host within a second.

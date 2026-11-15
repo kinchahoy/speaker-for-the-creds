@@ -49,19 +49,17 @@ describe("egress proxy decision", () => {
     for (const ip of ["::1", "fc00::1", "::ffff:192.168.1.5", "2606:4700:4700::1111"]) assert.equal(await egressDecision(view, route, ip), "refuse", ip);
   });
 
-  test("a grant change applies to the next request, and a secret host is never sent direct when speaker's proxy is down", async () => {
+  test("a grant change applies to the next request", async () => {
     const view = state();
-    const route = secretRoute(view, undefined);
+    const route = secretRoute(view, speakerProxy);
     assert.equal(await egressDecision(view, route, "new.test"), "refuse");
     view.hosts.push({ host: "new.test", expiresAt: null });
     assert.equal(await egressDecision(view, route, "new.test"), "direct");
-    assert.equal(await egressDecision(view, route, "httpbin.org"), "refuse");
-    assert.match(view.events.at(-1)!.text, /blocked a request to httpbin\.org: speaker's proxy is not configured/);
   });
 
   test("the proxy answers a refused host with 403", async () => {
     const view = state();
-    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { agentToken: "t" });
+    const proxy = egressProxy(view, secretRoute(view, speakerProxy), { proxy: "127.0.0.1:1", agentToken: "t" });
     const socket = join(root, "egress.sock");
     const server = await serveEgress(proxy, socket);
     const client = connect(socket);

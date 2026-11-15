@@ -6,7 +6,8 @@
   "guestImage": "bottle-guest",
   "speaker": {
     "url": "http://100.64.0.10:7000",
-    "proxyPort": 7003
+    "proxyPort": 7003,
+    "sshPort": 7004
   },
   "configRoot": "/srv/bottle/config",
   "stateRoot": "/srv/bottle/state",

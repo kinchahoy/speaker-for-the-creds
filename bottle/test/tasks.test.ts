@@ -12,7 +12,7 @@ import test, { type TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { serve } from "../../speaker/node_modules/@hono/node-server/dist/index.mjs";
 import { createApp, readConfig } from "../../speaker/server.ts";
-import { setOwnerPassword } from "../../speaker/test/owner.ts";
+import { freePorts, setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
 import { Catalog, pi } from "../src/pi.ts";
@@ -39,7 +39,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   const root = await mkdtemp(join(tmpdir(), "bottle-tasks-"));
   const dirs = { configRoot: join(root, "config"), stateRoot: join(root, "state"), outputRoot: join(root, "output") };
   for (const dir of Object.values(dirs)) await mkdir(dir);
-  const app = await createApp(readConfig({ DATA_DIR: join(root, "speaker"), PUBLIC_URL: "http://localhost" }));
+  const app = await createApp(readConfig({ DATA_DIR: join(root, "speaker"), PUBLIC_URL: "http://localhost", ...(await freePorts()) }));
   const wss = new WebSocketServer({ noServer: true });
   const server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1", websocket: { server: wss } }) as Server;
   await once(server, "listening");
@@ -68,7 +68,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     guestPort: 2,
     maxTasks: 2,
     guestImage: "test",
-    speaker: { url },
+    speaker: { url, proxyPort: 1, sshPort: 2 },
     localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] },
     hostedProviders: [],
   } satisfies Config;
@@ -122,6 +122,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     tasks.stop();
     for (const stub of stubs) stub.close();
     for (const client of wss.clients) client.terminate();
+    app.proxy.close();
     await app.stop();
     server.closeAllConnections();
     server.close();

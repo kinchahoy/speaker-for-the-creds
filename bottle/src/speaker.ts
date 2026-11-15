@@ -42,7 +42,7 @@ export const readHostToken = (config: Config) => {
   return readFileSync(path, "utf8").trim();
 };
 
-const Registered = z.object({ id: z.string(), proxyPort: z.number().optional(), sshPort: z.number().optional() });
+const Registered = z.object({ id: z.string(), proxyPort: z.number(), sshPort: z.number() });
 
 /**
  * Registers this machine as a sandbox host: writes a fresh token to the state directory, asks speaker to list the host
@@ -67,7 +67,7 @@ export const registerHost = async (config: Config, configPath: string, name: str
   const { id, proxyPort, sshPort } = Registered.parse(await response.json());
   writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
   const file = JSON.parse(readFileSync(configPath, "utf8"));
-  file.speaker = { url: config.speaker.url, ...(proxyPort ? { proxyPort } : {}), ...(sshPort ? { sshPort } : {}) };
+  file.speaker = { url: config.speaker.url, proxyPort, sshPort };
   writeFileSync(configPath, `${JSON.stringify(file, null, 2)}\n`);
   return id;
 };
@@ -117,7 +117,7 @@ export type Speaker = ReturnType<typeof speakerClient>;
 /** Speaker's proxy certificate authority: secret hosts are TLS-terminated there, so the guest and bottle's tunnel must trust it. */
 export const speakerCa = async (config: Config) => {
   const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
-  if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is PROXY_PORT set and speaker unlocked?`);
+  if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is speaker unlocked?`);
   return response.text();
 };
 
@@ -127,11 +127,8 @@ export const speakerCa = async (config: Config) => {
  * proxy certificate authority (`ca`, from speakerCa) for the tunnel only; the secret itself never reaches bottle.
  */
 export const speakerProxy = (config: Config, agentToken: string, ca: string) => {
-  const { proxyPort } = config.speaker;
-  if (!proxyPort)
-    throw new Error("speaker.proxyPort is not set in config.json: speaker has no PROXY_PORT, or run `mise run bottle register` again to learn it");
   return new ProxyAgent({
-    uri: `http://${new URL(config.speaker.url).hostname}:${proxyPort}`,
+    uri: `http://${new URL(config.speaker.url).hostname}:${config.speaker.proxyPort}`,
     token: `Basic ${Buffer.from(`agent:${agentToken}`).toString("base64")}`,
     requestTls: { ca },
   });

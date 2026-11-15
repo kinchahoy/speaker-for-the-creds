@@ -127,8 +127,7 @@ export function catalogView(
   offeredGroups: [string, Group][],
   outcome: (request: Request) => object,
 ) {
-  const { config, services, grants, requests, connections, jump, live, credentialOf, coverFor, enforcementOf, baseOf } =
-    core
+  const { services, grants, requests, connections, jump, live, credentialOf, coverFor, enforcementOf, baseOf } = core
   const mine = [...grants.values()].filter((grant) => grant.agentId === agent.id && live(grant))
   const state = (id: string, write: boolean) => {
     const rule = write ? services[id].write : services[id].read
@@ -142,7 +141,7 @@ export function catalogView(
   const listed = Object.entries(services).filter(
     ([id, service]) => credentialOf(id) !== undefined && (service.read !== 'open' || coverFor(agent.id, id, false)),
   )
-  const secrets = config.PROXY_PORT ? secretsView(core, c, agent) : {}
+  const secrets = secretsView(core, c, agent)
   const groupsView = Object.fromEntries(
     offeredGroups.map(([name, group]) => {
       // Targets and shares are never named to agents, not even inside a group: only a count shows.

@@ -257,7 +257,7 @@ What the table means in practice:
 
 ## Deployment
 
-One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally a push topic, `TRUSTED_PROXY` and `PROXY_PORT` (the secrets proxy, off when unset). Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
+One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally a push topic, `TRUSTED_PROXY`, and the required `PROXY_PORT` (the secrets proxy) and `SSH_PORT` (the jump server). Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
 
 Placement:
 

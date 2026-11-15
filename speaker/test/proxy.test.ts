@@ -11,7 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { serve } from '@hono/node-server'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createApp, readConfig } from '../server.ts'
-import { setOwnerPassword } from './owner.ts'
+import { freePorts, quiet, setOwnerPassword } from './owner.ts'
 
 const upstreamSecret = 'secret-only-the-upstream-should-see'
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -56,7 +56,9 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
   await writeFile(join(dataDir, 'groups.json'), JSON.stringify(groups))
-  const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...env }))
+  const app = quiet(
+    await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...(await freePorts()), ...env })),
+  )
   const server = serve({
     fetch: app.fetch,
     port: 0,
