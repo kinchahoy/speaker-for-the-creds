@@ -272,6 +272,26 @@ test("a grant that restarts Pi writes the change for the guest, and the grant is
   });
 });
 
+test("an approved mcp: grant puts the server into Pi's MCP config, and a revoke removes it", async (t) => {
+  const f = await fixture(t, {
+    mcps: { files: { label: "Files", transport: "stdio", command: "/opt/mcp/files", args: ["--ro"], tools: ["read-file"], write: false } },
+    extensions: {},
+  });
+  const task = await f.tasks.create({ template: "offline" });
+  const servers = () => JSON.parse(readFileSync(`${task.guestConfigDir}/mcp.json`, "utf8")).mcpServers;
+  await f.tasks.speaker.request({ agentId: task.agentId, want: ["mcp:files"], reason: "read files", duration: "1h" });
+  await until(() => f.tasks.pendingRequests(task).length === 1);
+  const body = new URLSearchParams({ duration: "1h", items: "mcp:files", shown: "mcp:files" });
+  assert.equal((await f.ownerPost(`/requests/${f.tasks.pendingRequests(task)[0]!.id}/approve`, body)).status, 303);
+  await until(() => task.mcpRunning.includes("files") && task.state === "idle");
+  assert.deepEqual(Object.keys(servers()), ["files"]);
+  assert.equal(servers().files.command, "/opt/mcp/files");
+  const grantId = task.grants.find((grant) => grant.item === "mcp:files")!.id;
+  assert.equal((await f.ownerPost("/grants/revoke", new URLSearchParams({ id: grantId }))).status, 303);
+  await until(() => task.mcpRunning.length === 0 && task.state === "idle");
+  assert.deepEqual(servers(), {});
+});
+
 test("a task whose Pi dies right after a restart is pi-down with Pi's stderr, and the grant is not in force", async (t) => {
   const f = await fixture(t, notes);
   const task = await f.tasks.create({ template: "offline" });

@@ -43,7 +43,7 @@ The repository holds only code. Each running VM also gets a few short-lived sock
 mise run init bottle --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model
 ```
 
-The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)). `mise run bottle doctor` rechecks the host later.
+The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test task. With `--password-stdin`, `init bottle` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)).
 {.ai}
 
 To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle/templates.json` and `bottle/catalog.json` into `configRoot`.
@@ -54,7 +54,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Set them by hand only if you skip registering. `secret:` items need the proxy port; without it, a task granted a secret cannot reach the secret's hosts. `folder:` grants need the SSH port (see The VM).
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
-- `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, `doctor`, and `build`. It defaults to `~/.bottle/config.json`.
+- `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
 
 <!-- author: ai -->
 
@@ -175,7 +175,7 @@ docker save <image> | msb load --tag <guestImage>   # into ~/.bottle/microsandbo
 
 <sub>AI-written</sub>
 
-Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. `mise run bottle doctor` checks that the guest image loads and boots.
+Each task runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime.
 {.ai}
 
 The guest has no network device. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
@@ -225,9 +225,19 @@ A task with a local model starts Pi at once and does not wait for its first requ
 - `workGiB` is a launch-time free-space check. Enforce work and output quotas through the host filesystem before unattended tasks share a disk with other services.
 - `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.
   - An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command: `transport: "stdio"`, an absolute `command`, `args`, the advertised `tools`, and whether it can write.
+    ```json
+    {
+      "mcps": {
+        "files": { "label": "Project files", "transport": "stdio", "command": "/opt/mcp/files", "args": ["--root", "/work"], "tools": ["read-file", "list-dir"], "write": false }
+      },
+      "extensions": {}
+    }
+    ```
+
+    Each tool name is lowercase letters, digits, `_` or `-`, and the list must be non-empty with no repeats. Pi registers them as `mcp__files__read_file` and so on. Granting `mcp:files` writes the server into Pi's `mcp.json` at the next restart, and a revoke or expiry removes it the same way.
   - Remote and hosted MCP servers are not catalog entries; they are speaker services. Add one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search). A task asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. So the shipped catalog has no `mcps` entries, and a remote entry fails validation with that explanation.
   - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), an optional system-prompt note, and optional `files` (config file name under `~/.pi/agent` to JSON or string content; see Add an extension). An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
-- bottle reads `catalog.json` at startup and checks that every extension's `guestPath` is in the guest image. `bottle build` copies the image's `/opt/pi-plugins.manifest` to `<stateRoot>/guest-plugins.txt`, so the check needs no VM. A wrong path stops startup naming the entry, and `bottle doctor` reports the same error. A missing manifest means the image was not built with this bottle: run `bottle build`.
+- bottle reads `catalog.json` at startup and checks that every extension's `guestPath` is in the guest image. `bottle build` copies the image's `/opt/pi-plugins.manifest` to `<stateRoot>/guest-plugins.txt`, so the check needs no VM. A wrong path stops startup naming the entry. A missing manifest means the image was not built with this bottle: run `bottle build`.
 - Every task loads only the always-on extensions pi-loop-police and pi-token-speed from `/opt/pi-extensions`. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
 - Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
 - Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its tasks' grants until the connection returns. A task's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
@@ -265,8 +275,6 @@ A hosted provider's key is a speaker secret like any other. In `config.json`, se
 3. Add an entry to the live `<configRoot>/catalog.json` (`~/.bottle/config/catalog.json`; `bottle/catalog.json` has the shipped ones): `label`, `guestPath` (`/opt/pi-plugins/<name>`), `description`, `tools`, `sites`, and optionally `note` and `files`. `tools` must be the names the package registers, because Pi's `--tools` is an allowlist and an unlisted tool stays hidden. The `sites` are hosts the extension itself contacts; when the extension is requested they are added as separate `site:` grants and end with the extension's grant.
 4. Optional `files`: `{ "<name>.json": { ... } }` writes `~/.pi/agent/<name>.json` in the guest, only for tasks that load the extension (a string value is written as is, anything else as JSON). A name has no directory part and cannot replace bottle's own `models.json`, `settings.json`, `mcp.json`, or `APPEND_SYSTEM.md`. The shipped `pi-web-access` entry is the example, with browser cookies and hosted extraction off.
 5. Reload without restarting: `pkill -HUP -f "bottle/src/server.ts"`. The catalog is re-validated against the image, swapped in, and re-sent to speaker. A bad catalog is refused (the SIGHUP logs it) and the old one stays. Running tasks are not restarted for a new or changed entry. A grant for an entry you removed is skipped with a task note, and that task's Pi restarts at its next idle point without it.
-
-`bottle doctor` checks the catalog and every `guestPath` after the image checks.
 {.ai}
 
 <!-- author: ai -->

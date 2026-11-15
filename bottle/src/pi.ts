@@ -2,7 +2,7 @@ import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
-import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
+import type { Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./grants.ts";
 import type { Grant } from "./speaker.ts";
@@ -339,14 +339,3 @@ export const pi = {
   /** The transcript improves archive browsing, but an exporter failure never discards the session or artifacts. */
   export: (guest: Guest) => guest.exec(`pi --export ${SESSION} /work/transcript.html || true`),
 };
-
-/** `node src/pi.ts`: the doctor's check that catalog.json is valid and names only extensions the guest image has. */
-if (import.meta.main) {
-  try {
-    const catalog = loadCatalog(loadConfig(configPathFromEnv()));
-    console.log(`catalog ok: ${Object.keys(catalog.extensions).length} extensions, ${Object.keys(catalog.mcps).length} MCP servers`);
-  } catch (error) {
-    console.error((error as Error).message);
-    process.exit(1);
-  }
-}

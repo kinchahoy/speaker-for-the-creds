@@ -94,7 +94,6 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | `mise run bottle attach <id>` | Join Pi in a running guest |
 | `mise run bottle stop <id>` | Stop and archive a task |
 | `mise run bottle build bottle-guest` | Build the guest image and load it into microsandbox |
-| `mise run bottle doctor` | Check this host for bottle's prerequisites |
 | `mise run speaker:up` | Build and run speaker in its hardened container |
 
 Every `mise run bottle <command>` also works as plain `bottle <command>` after `pnpm -C bottle link --global` (run `pnpm setup` once first if pnpm's global bin directory is not on your PATH). `mise run bottle help` lists the commands.

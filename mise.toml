@@ -41,7 +41,7 @@ dir = "speaker"
 run = "node --watch --env-file-if-exists=.env server.ts"
 
 [tasks.bottle]
-description = "Run bottle: mise run bottle serve|doctor|build|register|run|ls|attach|stop (mise run bottle help)"
+description = "Run bottle: mise run bottle serve|build|register|run|ls|attach|stop (mise run bottle help)"
 dir = "bottle"
 run = "node src/cli.ts"
 

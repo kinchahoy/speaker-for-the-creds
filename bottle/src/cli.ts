@@ -8,7 +8,7 @@ import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
-/** The owner's terminal client: `bottle serve | doctor | build | register | run | ls | attach | stop`. */
+/** The owner's terminal client: `bottle serve | build | register | run | ls | attach | stop`. */
 type Task = {
   id: string;
   name: string;
@@ -35,12 +35,6 @@ const SCRIPTS = {
     help: `usage: ${SELF} serve
 
 Runs the bottle service in the foreground. Ctrl-C stops it.`,
-  },
-  doctor: {
-    script: "doctor.sh",
-    help: `usage: ${SELF} doctor
-
-Checks this host for bottle's prerequisites (Linux or macOS) and prints the fix for anything missing.`,
   },
   build: {
     script: "guest/build.sh",
@@ -116,7 +110,6 @@ const usage = `usage: ${SELF} <command> [options]
   register   Register this host as a speaker sandbox host
 
   serve      Run the bottle service
-  doctor     Check this host's prerequisites
   build      Build the guest image
 
 Run \`${SELF} help <command>\` or \`${SELF} <command> --help\` for options.`;
