@@ -40,7 +40,6 @@ const targetSchema = z.object({
 const shareSchema = z.object({
   target: aliasSchema,
   path: z.string().regex(/^\/[^\0\r\n]*$/, 'Use an absolute path on the target'),
-  delivery: z.enum(['vm', 'ssh', 'both']),
 })
 const settingsSchema = z.object({
   targets: z.record(aliasSchema, targetSchema).default({}),
@@ -313,7 +312,7 @@ export async function createJump(env: Env) {
     })
     settings.shares[name] = share
     await persist()
-    env.audit('ssh_share_saved', { share: name, target: share.target, path: share.path, delivery: share.delivery })
+    env.audit('ssh_share_saved', { share: name, target: share.target, path: share.path })
   }
   async function removeShare(name: string) {
     if (!Object.hasOwn(settings.shares, name)) throw new SetupError('Unknown share')
@@ -341,7 +340,6 @@ export async function createJump(env: Env) {
     if (!folder) return undefined
     const share = settings.shares[folder.name]
     if (!share) return `there is no share named ${folder.name}`
-    if (share.delivery === 'vm') return `${folder.name} is not delivered over SSH`
     return settings.targets[share.target]?.sftp ? undefined : `the target of ${folder.name} has no sftp-server`
   }
   const overSsh = (grant: { agentId: string; item: string }) =>

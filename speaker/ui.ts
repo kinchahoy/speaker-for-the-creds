@@ -282,9 +282,6 @@ const labels: Record<string, string> = {
   ask: 'Ask the owner',
   open: 'Open (any agent may read)',
   never: 'Never',
-  vm: 'VM mount',
-  ssh: 'Over SSH',
-  both: 'VM mount or over SSH',
 }
 const hidden = (name: string, value: string) => html`<input name="${name}" type="hidden" value="${value}">`
 const input = (name: string, label: string, type = 'text', value = '') =>
@@ -482,12 +479,12 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
     ssh.shares,
   ).map(
     ([name, share]) =>
-      html`<li class="row"><div class="row-main">${mark('folder')}<div><strong>${name}</strong> <small>${share.target}:${share.path} · ${labels[share.delivery]}</small>${ssh.targets[share.target]?.home === share.path ? html` <mark>home directory</mark>` : ''}</div></div><div class="actions">${button('/admin/ssh/shares/delete', hidden('name', name), 'Delete', `Delete share ${name}? Open sessions and grants for it end.`)}</div></li>`,
+      html`<li class="row"><div class="row-main">${mark('folder')}<div><strong>${name}</strong> <small>${share.target}:${share.path}</small>${ssh.targets[share.target]?.home === share.path ? html` <mark>home directory</mark>` : ''}</div></div><div class="actions">${button('/admin/ssh/shares/delete', hidden('name', name), 'Delete', `Delete share ${name}? Open sessions and grants for it end.`)}</div></li>`,
   )}</ul><details><summary>Add a share</summary><form method="post" action="/admin/ssh/shares/save">${input('name', 'Name agents ask for (folder:NAME)')}${select(
     'target',
     'Target',
     targets.map(([alias]) => alias),
-  )}${input('path', 'Absolute path on the target')}${select('delivery', 'Delivery', ['ssh', 'vm', 'both'], 'ssh')}<button>Save share</button></form></details>`
+  )}${input('path', 'Absolute path on the target')}<button>Save share</button></form></details>`
   const groupForm = (id: string, group: Group) =>
     html`<form method="post" action="/admin/groups/save">${input('id', 'Group id', 'text', id)}${input('description', 'Description (one line, optional)', 'text', group.description)}${area('items', 'Items, one per line', group.items.join('\n'), 5)}<button>Save group</button></form>`
   const groupRows = Object.entries(groups).map(

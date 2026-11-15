@@ -96,7 +96,7 @@ A sandboxed agent that needs a homelab service, SSH or a folder uses the same fl
 
 **Flow.**
 1. Pi requests `folder:myproject:rw` with the reason.
-2. Speaker picks the delivery. If the sandbox host holds the folder and the share allows VM mounts, the card says "VM mount" and Pi gets a normal directory. Otherwise, if the share allows SSH, the card says "over SSH" and Pi mounts the folder with `sshfs` through speaker, which needs FUSE in the VM. If neither applies, the request is answered `denied`.
+2. The card says "over SSH": Pi mounts the folder with `sshfs` through speaker, which needs FUSE in the VM.
 3. The owner approves. Pi edits files and runs the tests.
 4. At the end, or on Revoke, the mount is removed (over SSH, the `sshfs` mount stops working and the message gives the unmount command).
 

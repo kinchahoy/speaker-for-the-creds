@@ -177,7 +177,7 @@ Limits: commands are not folder-limited (they run as the target's agent account)
 
 ### How a folder grant reaches the agent
 
-Folders always arrive over SSH (through speaker). The agent asks only for `folder:<share>`. A share set to deliver by VM mount only is answered like a denial, because speaker has no VM-mount delivery.
+Folders always arrive over SSH (through speaker). The agent asks only for `folder:<share>`.
 
 The card, `/catalog` and the Active list label each folder grant **over SSH**. A sandboxed agent mounts the share with `sshfs`, which needs FUSE in the sandbox. `sshfs` is slower than a local mount for metadata-heavy work (`grep -r`, `find`, `git status` over many small files), because each file operation is a network round trip through speaker; reading or writing individual files is fine.
 

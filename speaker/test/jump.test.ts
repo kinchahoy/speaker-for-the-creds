@@ -133,7 +133,6 @@ async function fixture(t: TestContext) {
       ['name', name],
       ['target', 'box'],
       ['path', join(world, name)],
-      ['delivery', 'ssh'],
     ])
 
   // An agent with its own throwaway key, enrolled over real HTTP so speaker sees its address.
@@ -352,17 +351,16 @@ async function sandboxHost(f: Fixture, t: TestContext) {
     grants,
   }
 }
-const saveShare = (f: Fixture, name: string, delivery: string) =>
+const saveShare = (f: Fixture, name: string) =>
   f.ownerForm('/ssh/shares/save', [
     ['name', name],
     ['target', 'box'],
     ['path', join(f.world, 'pics')],
-    ['delivery', delivery],
   ])
 
 test('a folder needs an sshKey, is delivered over SSH, and the sandbox host hears the grant', async (t) => {
   const f = await fixture(t)
-  await saveShare(f, 'mixed', 'ssh')
+  await saveShare(f, 'mixed')
   const host = await sandboxHost(f, t)
   assert.equal((await host.ask({ want: ['folder:mixed'] })).status, 400)
   const sshKey = (await readFile(join(f.dir, 'agent_key.pub'), 'utf8')).trim()
