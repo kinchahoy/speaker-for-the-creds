@@ -21,6 +21,7 @@ export type Setup = {
 }
 
 const css = `
+.masked{-webkit-text-security:disc}
 :root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);caret-color:var(--accent);
 --bg:light-dark(var(--gray-0),oklch(17% .012 262));--surface:light-dark(#fff,oklch(22% .015 262));--surface-2:light-dark(var(--gray-1),oklch(26% .016 262));--ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),oklch(32% .015 262));
 --accent:light-dark(var(--indigo-8),var(--indigo-4));--on-accent:light-dark(#fff,oklch(16% .04 265));--region:light-dark(var(--indigo-0),oklch(19.5% .022 264));--ticket:light-dark(#fff,oklch(24% .018 262));--perf:light-dark(var(--indigo-3),oklch(38% .04 264));
@@ -280,7 +281,10 @@ const labels: Record<string, string> = {
 }
 const hidden = (name: string, value: string) => html`<input name="${name}" type="hidden" value="${value}">`
 const input = (name: string, label: string, type = 'text', value = '') =>
-  html`<label>${label}<input name="${name}" type="${type}" value="${value}" ${raw(type === 'password' ? 'autocomplete="new-password"' : '')}></label>`
+  // A credential is masked text, not a password field, so the browser does not offer to save it as a login.
+  type === 'password'
+    ? html`<label>${label}<input name="${name}" type="text" value="${value}" class="masked" autocomplete="off" spellcheck="false" autocapitalize="off" data-1p-ignore data-lpignore="true"></label>`
+    : html`<label>${label}<input name="${name}" type="${type}" value="${value}"></label>`
 const select = (name: string, label: string, values: readonly string[], chosen = '') =>
   html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${labels[value] ?? value}</option>`)}</select></label>`
 const area = (name: string, label: string, value = '', rows = 2) =>
