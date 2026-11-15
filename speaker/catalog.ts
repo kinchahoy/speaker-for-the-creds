@@ -1,5 +1,6 @@
 import type { Context } from 'hono'
-import { type Agent, type Core, type Group, plural, type Request, statusOf } from './core.ts'
+import { type Agent, type Core, type Group, plural } from './core.ts'
+import type { Request } from './engine.ts'
 import { kindOf } from './items.ts'
 
 // What an agent sees of its own standing: GET /_speaker/catalog, as JSON and as plain markdown.
@@ -127,8 +128,9 @@ export function catalogView(
   offeredGroups: [string, Group][],
   outcome: (request: Request) => object,
 ) {
-  const { services, grants, requests, connections, jump, live, credentialOf, coverFor, enforcementOf, baseOf } = core
-  const mine = [...grants.values()].filter((grant) => grant.agentId === agent.id && live(grant))
+  const { services, engine, connections, jump, credentialOf, coverFor, enforcementOf, baseOf } = core
+  const mine = engine.grants(agent.id)
+  const requests = [...engine.requests.values()].filter((request) => request.subject === agent.id)
   const state = (id: string, write: boolean) => {
     const rule = write ? services[id].write : services[id].read
     const grant = coverFor(agent.id, id, write)
@@ -181,11 +183,7 @@ export function catalogView(
       agent: agent.agent,
       source: agent.source,
       kind: agent.host ? 'sandboxed' : 'direct',
-      status: mine.length
-        ? 'active'
-        : [...requests.values()].some((r) => r.agentId === agent.id && statusOf(r) === 'pending')
-          ? 'pending'
-          : 'idle',
+      status: mine.length ? 'active' : requests.some((r) => engine.statusOf(r) === 'pending') ? 'pending' : 'idle',
     },
     services: Object.fromEntries(
       listed.map(([id, service]) => [
@@ -203,13 +201,7 @@ export function catalogView(
     // Complete command lines for the agent's SSH and folder grants.
     ssh: jump.commands(agent.id, new URL(baseOf(c)).hostname.replace(/^\[|\]$/g, '')),
     groups: groupsView,
-    requests: [...requests.values()]
-      .filter((request) => request.agentId === agent.id)
-      .map((request) => ({
-        ...outcome(request),
-        want: request.want,
-        reason: request.reason,
-      })),
+    requests: requests.map((request) => ({ ...outcome(request), want: request.want, reason: request.reason })),
     text: catalogText({
       services: listed.map(([id, service]) => ({
         id,

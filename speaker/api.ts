@@ -20,15 +20,13 @@ import {
   identitySchema,
   idSchema,
   invalid,
-  itemsWhere,
   noCounts,
-  type Request,
   requestSchema,
   same,
-  statusOf,
   union,
 } from './core.ts'
 import { catalogView } from './catalog.ts'
+import type { Approval, Request } from './engine.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
 
 export type SpeakerApi = ReturnType<typeof agentApi>
@@ -36,7 +34,6 @@ export type SpeakerApi = ReturnType<typeof agentApi>
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${core.baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', core.baseOf(c))
-  // Every agent-facing 401 names the next step and points at the skill.
   const unauthorized = (
     c: Context,
     error: 'enroll' | 'register' | 'approval_required',
@@ -77,7 +74,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       return unauthorized(c, 'register', 'This sandbox host token was registered from another address', {
         next: 'Register again: bottle register',
       })
-    if (host?.status === 'approved') c.set('caller', { role: 'host', host })
+    if (host && core.hostGrant(host.id)) c.set('caller', { role: 'host', host })
     else if (host)
       return unauthorized(c, 'approval_required', 'The owner has not approved this sandbox host yet', {
         tell_user: tellUser(c, `host-${host.id}`),
@@ -101,96 +98,46 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     return caller.agent
   }
   // Holds a call for up to `Speaker-Wait` seconds (max 120) until `settled`; without the header it answers at once.
+  // Each look waits for a decision in progress, so a grant is seen only once it is in place.
   const hold = async (c: Context<Env>, settled: () => boolean) => {
     const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
-    while (!settled() && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
+    while (!(await core.engine.serial(settled)) && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
-  // Item kinds an agent may ask for: services, groups, secrets, SSH and folders, plus what its
-  // sandbox host enforces.
-  const allowedKinds = (agent: Agent): string[] => [
-    'service',
-    'group',
-    'secret',
-    'ssh',
-    'folder',
-    ...(core.hostOf(agent)?.kinds ?? []),
-  ]
-  // A group is offered only if every member is a kind the agent can use.
   const offered = (agent: Agent) =>
     Object.entries(core.groups).filter(([, group]) =>
-      group.items.every((item) => allowedKinds(agent).includes(kindOf(item) ?? '')),
+      group.items.every((item) => core.allowedKinds(agent).includes(kindOf(item) ?? '')),
     )
   const catalogHint = 'GET /_speaker/catalog'
-  const list = (names: string[], none: string) => (names.length ? names.join(', ') : none)
-  // Expands groups, adds the sites of each extension (and which extension brought them), and refuses any name this agent may not ask for: the whole call
-  // fails with the names it may use (never shares or targets), before anything reaches the owner.
+  // Expands groups, adds the sites each extension needs (remembering which extension brought them), and asks each kind
+  // whether the name is real: one name the agent may not ask for fails the whole call, with the names it may use
+  // (never shares or targets), before anything reaches the owner.
   function resolveItems(want: string[], agent: Agent) {
-    const catalog = core.connections.get(agent.host ?? '')?.catalog
     const items = want.flatMap((item) => {
       if (kindOf(item) !== 'group') return [item]
       const group = offered(agent).find(([name]) => `group:${name}` === item)
       if (!group)
         throw invalid(
-          `${item} is not something you can ask for. Groups you can ask for: ${list(
-            offered(agent).map(([name]) => `group:${name}`),
-            'none',
-          )}.`,
+          `${item} is not something you can ask for. Groups you can ask for: ${
+            offered(agent)
+              .map(([name]) => `group:${name}`)
+              .join(', ') || 'none'
+          }.`,
           undefined,
           400,
           catalogHint,
         )
       return group[1].items
     })
-    const refuse = (item: string, real: string[], what: string, none: string) =>
-      invalid(
-        `${item} is not something you can ask for. ${what} you can ask for: ${list(real, none)}.`,
-        undefined,
-        400,
-        catalogHint,
-      )
     for (const item of items) {
       const kind = kindOf(item) ?? ''
-      if (!allowedKinds(agent).includes(kind))
+      if (!core.allowedKinds(agent).includes(kind))
         throw invalid(`${item} is not available to this agent`, itemForms, 400, catalogHint)
-      const target = core.serviceItem(item)
-      if (target && (!Object.hasOwn(core.services, target.id) || core.credentialOf(target.id) === undefined))
-        throw refuse(
-          item,
-          Object.keys(core.services)
-            .filter((id) => core.credentialOf(id) !== undefined)
-            .flatMap((id) => [`${id}.read`, `${id}.full`]),
-          'Services',
-          'none',
-        )
-      if (kind === 'secret') {
-        const names = Object.keys(core.ownerSecrets())
-        if (!names.includes(item.slice('secret:'.length))) throw refuse(item, names, 'Secrets', 'none')
-      }
-      if (kind === 'ext' && !catalog?.extensions.some(({ id }) => `ext:${id}` === item))
-        throw refuse(
-          item,
-          (catalog?.extensions ?? []).map(({ id }) => id),
-          'Extensions',
-          'none',
-        )
-      if (kind === 'mcp' && !catalog?.mcps.some(({ id }) => `mcp:${id}` === item))
-        throw refuse(
-          item,
-          (catalog?.mcps ?? []).map(({ id }) => id),
-          'MCP servers',
-          'none',
-        )
-      const unknown = core.jump.unknownName(item)
-      if (unknown)
-        throw invalid(
-          unknown,
-          undefined,
-          400,
-          'Use the exact name your task or the owner gave you; read "Folders and SSH" in GET /_speaker/help',
-        )
+      const refused = core.kinds[kind].validate(item, agent.id)
+      if (refused) throw invalid(refused.message, undefined, 400, refused.next)
     }
     // An extension brings the sites it needs, so one approval covers both. A site brought only by an extension (not
     // asked for itself) is recorded against it: it ends with that extension's grant.
+    const catalog = core.connections.get(agent.host ?? '')?.catalog
     const bundled: Record<string, string> = {}
     for (const item of items)
       if (kindOf(item) === 'ext')
@@ -198,18 +145,15 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           if (!items.includes(`site:${host}`)) bundled[`site:${host}`] ??= item
     return { items: union(items, Object.keys(bundled)), bundled }
   }
-  // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
   const applying = (request: Request) =>
-    request.grantIds.flatMap((id) => {
-      const grant = core.grants.get(id)
-      return grant && core.live(grant) && core.enforcementOf(grant) !== 'enforced' ? [grant.item] : []
-    })
-  // A request as the agent sees it: per-item outcome, and what to do next.
+    core.engine
+      .outcomeOf(request)
+      .approved.filter((grant) => core.engine.live(grant) && core.enforcementOf(grant) !== 'enforced')
+      .map((grant) => grant.item)
   const outcome = (c: Context, request: Request) => {
-    const status = statusOf(request),
-      granted = itemsWhere(request, 'granted'),
-      denied = itemsWhere(request, 'denied')
-    const retry = core.retryAfter(request.agentId, denied)
+    const status = core.engine.statusOf(request),
+      { granted, denied, expiresAt } = core.engine.outcomeOf(request)
+    const retry = core.engine.retryAfter(request.subject, denied)
     const waiting = applying(request)
     return {
       id: request.id,
@@ -217,7 +161,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       granted: granted.filter((item) => !waiting.includes(item)),
       denied,
       ...(waiting.length ? { applying: waiting } : {}),
-      ...(granted.length ? { expiresAt: request.expiresAt ? new Date(request.expiresAt).toISOString() : null } : {}),
+      ...(granted.length ? { expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null } : {}),
       ...(retry ? { retry_after: retry } : {}),
       ...(status === 'pending'
         ? {
@@ -233,12 +177,10 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               : {}),
     }
   }
-  // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
     let items: string[], bundled: Record<string, string>
     try {
       ;({ items, bundled } = resolveItems(input.want, agent))
-      // A newer key replaces the older one.
       if (input.sshKey) {
         agent.sshKey = input.sshKey
         core.syncJump()
@@ -255,17 +197,70 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       if (error instanceof HTTPException) core.tally(agent, 'refused', error.message)
       throw error
     }
-    const request = core.createRequest(agent, items, input.want, input.reason, input.duration, undefined, bundled)
+    const request = core.engine.request('agent', agent.id, items, { ...input, bundled })
     await hold(c, () => settled(request))
-    return outcome(c, request)
+    return core.engine.serial(() => outcome(c, request))
   }
   // Decided, and in force on the sandbox. `mcp:` and `ext:` take effect when Pi is idle, which a held call prevents, so
   // only the others are waited for.
   const settled = (request: Request) =>
-    statusOf(request) !== 'pending' && !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? ''))
+    core.engine.statusOf(request) !== 'pending' &&
+    !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? ''))
+  // The one flow for a call that needs an item (Layer 2): the item's admission, then the agent's grant for any item in
+  // `covers`; without one, a request for `item` (joined if already pending), held up to Speaker-Wait, then the grant
+  // or what to do next. Resolves to the grant (undefined for an open item) or the refusal to answer with.
+  async function gate(
+    c: Context<Env>,
+    agent: Agent,
+    item: string,
+    covers: string[],
+    call: string,
+    trigger: string,
+  ): Promise<{ grant?: Approval } | Response> {
+    const admission = core.kinds[kindOf(item) ?? ''].admission(item, agent.id)
+    // `why` is the line on the owner's page; `message` is the agent's.
+    const blocked = (why: string, error: 'denied' | 'approval_required', message: string, fields: ErrorFields) => {
+      core.tally(agent, 'blocked', `${call}: ${why}`)
+      return agentError(c, 403, error, message, { item, ...fields })
+    }
+    if (admission.to === 'open') return {}
+    if (admission.to !== 'ask') {
+      const why = admission.to === 'never' ? `the owner blocks ${item}` : `${item} is unavailable: ${admission.why}`
+      return blocked(why, 'denied', `${why[0].toUpperCase()}${why.slice(1)}`, {
+        next: 'Stop: the owner blocks this; do not request it.',
+      })
+    }
+    const held = core.engine.held(agent.id, covers)
+    if (held) return { grant: held }
+    const until = core.engine.lockedUntil(agent.id, item)
+    if (until !== undefined)
+      return blocked(
+        `${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
+        'denied',
+        `The owner denied ${item}`,
+        { next: 'Stop: the owner denied this request.', retry_after: new Date(until).toISOString() },
+      )
+    const request = core.engine.request('agent', agent.id, [item], {
+      reason: c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
+      duration: '2h',
+      trigger,
+    })
+    await hold(c, () => core.engine.statusOf(request) !== 'pending')
+    const grant = await core.engine.serial(() => core.engine.held(agent.id, covers))
+    if (grant) return { grant }
+    return core.engine.statusOf(request) === 'decided'
+      ? blocked(`no grant for ${item}`, 'denied', `The owner denied ${item}`, {
+          request: request.id,
+          next: 'Stop: the owner denied this request.',
+        })
+      : blocked(`no grant for ${item}`, 'approval_required', `${item} needs the owner's approval`, {
+          request: request.id,
+          next: 'Repeat this call with Speaker-Wait: 60 (and Speaker-Reason: <one sentence>)',
+          tell_user: tellUser(c, `request-${request.id}`),
+        })
+  }
   // Enrollment and registration are unauthenticated: one shared budget caps how many identities anyone can create.
   // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
-  // Declares a route's JSON body type for the typed client; the handler still parses it itself.
   const json =
     <T>(): MiddlewareHandler<Env, string, { in: { json: T } }> =>
     (_c, next) =>
@@ -284,15 +279,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     },
   })
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
-  // The routes are one chain so that `SpeakerApi` carries their paths to bottle's typed client.
   return (
     app
       .get('/_speaker/health', (c) => c.json({ ok: true }))
-      // The proxy's public certificate: agents trust it for the hosts of their secrets.
       .get('/_speaker/proxy/ca.pem', locked, async (c) =>
         c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
       )
-      // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
       .use('/skill.md', etag())
       .use('/_speaker/help', etag())
       .get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
@@ -341,19 +333,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       })
       .post('/_speaker/hosts', locked, enrollmentLimit, json<z.input<typeof hostBody>>(), async (c) => {
         const input = hostBody.parse(await c.req.json())
-        const host: Host = {
-          id: core.rid(),
-          ...input,
-          status: 'pending',
-          source: core.sourceOf(c),
-          registeredAt: Date.now(),
-        }
-        core.hosts.set(host.id, host)
-        await core.saveHosts()
+        const host: Host = { id: core.rid(), ...input, source: core.sourceOf(c), registeredAt: Date.now() }
         core.audit('host_registered', { host: host.id, name: host.name })
-        // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
+        core.registerHost(host)
         return c.json(
-          { id: host.id, status: host.status, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
+          { id: host.id, status: 'pending' as const, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
           201,
         )
       })
@@ -424,17 +408,15 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           }
         }),
       )
-      // A sandbox host checking that speaker has approved it (the auth middleware has already refused unapproved ones).
       .get('/_speaker/hosts/self', (c) => {
         const caller = c.get('caller')
         if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
-        return c.json({ id: caller.host.id, name: caller.host.name, status: caller.host.status })
+        return c.json({ id: caller.host.id, name: caller.host.name, status: 'approved' as const })
       })
       .post('/_speaker/hosts/agents', json<z.input<typeof identitySchema>>(), async (c) => {
         const host = hostCaller(c)
         const identity = identitySchema.parse(await c.req.json())
         const token = randomBytes(32).toString('base64url')
-        // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
         const agent: Agent = {
           id: core.rid(),
           tokenHash: hash(token),
@@ -479,12 +461,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       // new one, even after it was decided.
       .get('/_speaker/requests/:id', async (c) => {
         const caller = c.get('caller')
-        const request = core.requests.get(c.req.param('id'))
+        const request = core.engine.requests.get(c.req.param('id'))
         const mine =
           request !== undefined &&
           (caller.role === 'host'
-            ? core.agentById(request.agentId)?.host === caller.host.id
-            : request.agentId === caller.agent.id)
+            ? core.agentById(request.subject)?.host === caller.host.id
+            : request.subject === caller.agent.id)
         if (!request || !mine)
           throw invalid(
             'No such request (decided requests are kept for a day)',
@@ -496,7 +478,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const result = outcome(c, request)
         return c.json(result, result.status === 'pending' ? 202 : 200)
       })
-      // Notes and the caller's current state for one service.
       .get('/_speaker/help/:name', (c) => {
         const agent = agentCaller(c)
         const name = c.req.param('name')
@@ -542,7 +523,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           agent = agentCaller(c),
           method = c.req.method,
           path = `/${parts.join('/')}`
-        // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
         let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
         const trimmed = (p: string) => p.replace(/\/+$/, '')
         const readPost = method === 'POST' && service.readPaths?.some((p) => trimmed(p) === trimmed(path))
@@ -559,60 +539,21 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           ;({ write, detail } = await core.mcpAccess(serviceId, text))
         }
         const item = `${serviceId}.${write ? 'full' : 'read'}`
-        const rule = write ? service.write : service.read
-        if (rule === 'never') {
-          core.tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
-          return agentError(c, 403, 'denied', `The owner blocks ${item}`, {
-            item,
-            next: 'Stop: the owner blocks this; do not request it.',
-          })
-        }
         const secret = core.credentialOf(serviceId)
         if (secret === undefined)
           return agentError(c, 503, 'no_key', `${serviceId} has no key configured yet`, {
             tell_user: `The owner adds a key for ${serviceId} at ${core.baseOf(c)}/admin?section=services`,
           })
-        if (rule === 'ask' && !core.coverFor(agent.id, serviceId, write)) {
-          const until = core.lockedUntil(agent.id, item)
-          if (until !== undefined) {
-            core.tally(
-              agent,
-              'blocked',
-              `${method} ${serviceId}: ${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
-            )
-            return agentError(c, 403, 'denied', `The owner denied ${item}`, {
-              item,
-              next: 'Stop: the owner denied this request.',
-              retry_after: new Date(until).toISOString(),
-            })
-          }
-          // A call files a request for exactly the item its method implies.
-          const request = core.createRequest(
-            agent,
-            [item],
-            [item],
-            c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
-            '2h',
-            `${method} ${detail ? `${path} · ${detail}` : path}`,
-          )
-          await hold(c, () => statusOf(request) !== 'pending')
-          if (!core.coverFor(agent.id, serviceId, write)) {
-            core.tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
-            if (statusOf(request) === 'decided')
-              return agentError(c, 403, 'denied', `The owner denied ${item}`, {
-                item,
-                request: request.id,
-                next: 'Stop: the owner denied this request.',
-              })
-            return agentError(c, 403, 'approval_required', `${item} needs the owner's approval`, {
-              item,
-              request: request.id,
-              next: 'Repeat this call with Speaker-Wait: 60 (and Speaker-Reason: <one sentence>)',
-              tell_user: tellUser(c, `request-${request.id}`),
-            })
-          }
-        }
-        const grant = rule === 'ask' ? core.coverFor(agent.id, serviceId, write) : undefined
+        const gated = await gate(
+          c,
+          agent,
+          item,
+          write ? [item] : [`${serviceId}.full`, item],
+          `${method} ${serviceId}`,
+          `${method} ${detail ? `${path} · ${detail}` : path}`,
+        )
+        if (gated instanceof Response) return gated
+        const { grant } = gated
         const target = core.upstreamUrl(service, secret, parts, incoming.search)
         if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
         if (grant) core.useOf(grant)
@@ -632,7 +573,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             headers.delete(name)
         core.applyCredential(service, secret, headers)
         const start = Date.now()
-        // proxy() validates a malformed Connection header (400), drops response hop-by-hop headers and content-encoding.
         const upstream = await proxy(target, {
           raw: c.req.raw,
           strictConnectionProcessing: true,
@@ -655,7 +595,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           status: upstream?.status ?? 502,
           latencyMs: Date.now() - start,
           grant: grant?.id ?? null,
-          rule,
+          rule: service[write ? 'write' : 'read'],
         })
         if (!upstream)
           return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer`, {

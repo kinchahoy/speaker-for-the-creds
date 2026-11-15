@@ -9,18 +9,15 @@ import { z } from 'zod'
 import {
   agentError,
   type Core,
-  type Host,
   decisionSchema,
   groupDescriptionSchema,
   groupItemsSchema,
   idSchema,
-  itemsWhere,
   newPasswordSchema,
   ownerSecretSchema,
   serviceSchema,
   urlSchema,
 } from './core.ts'
-import { hostTable, transition } from './lifecycle.ts'
 import { WrongPassword } from './store.ts'
 import { active, icons, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
 
@@ -62,8 +59,6 @@ export function adminApp(core: Core) {
     await next()
   })
   admin.use('*', csrf({ origin: publicOrigin }))
-  // Assets from the installed packages: htmx, Open Props' colour, shadow, border, size and font tokens, and the Lucide
-  // sprite cut down to the icons in ui.ts.
   const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
   const cached = (type: string, body: string) => (c: Context) =>
     c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
@@ -78,7 +73,6 @@ export function adminApp(core: Core) {
   admin.get('/assets/htmx.js', cached('text/javascript', asset('htmx.org/dist/htmx.min.js')))
   admin.get('/assets/open-props.css', cached('text/css', props))
   admin.get('/assets/icons.svg', cached('image/svg+xml', sprite))
-  // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'
   const current = (id: string | undefined) => id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
@@ -94,7 +88,6 @@ export function adminApp(core: Core) {
     core.sessions.set(id, Date.now() + sessionLife)
     return id
   }
-  // Sign-in is the only way in: the first visit sets the owner password, later visits sign in with it.
   const signInLimit = rateLimiter({
     windowMs: 15 * 60_000,
     limit: 5,
@@ -104,7 +97,6 @@ export function adminApp(core: Core) {
     message: 'Too many failed attempts; wait a few minutes.',
   })
   const passwordBody = z.object({ password: z.string() })
-  // One password check for the form and the API: same audit lines, and it unlocks speaker after a restart.
   const signIn = async (c: Context, password: string) => {
     try {
       await core.signIn(password)
@@ -115,10 +107,6 @@ export function adminApp(core: Core) {
     }
     core.audit('owner_signed_in')
     return true
-  }
-  const revokeGrant = (id: string) => {
-    if (!core.grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
-    core.revokeGrants((grant) => grant.id === id)
   }
   const authPage = (c: Context, error?: string, status: 200 | 400 | 401 = 200) => {
     // Plain HTTP from another machine sends the password in clear.
@@ -165,43 +153,34 @@ export function adminApp(core: Core) {
     if (current(token) && apiTokens.has(token as string)) return await next()
     return apiError(c, 401, 'Sign in with POST /admin/api/signin and send Authorization: Bearer <token>')
   })
-  admin.get('/api/pending', (c) => {
-    const { requests, agents, details } = core.view()
-    const pending = requests
-      .filter((r) => r.status === 'pending')
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((r) => ({
-        id: r.id,
-        agent: agents.find((a) => a.id === r.agentId)?.label ?? 'Unknown agent',
-        items: r.items.map((item) => ({ item, ...details[`${r.agentId} ${item}`] })),
-        reason: r.reason,
-        duration: r.duration,
-        createdAt: r.createdAt,
-      }))
-    return c.json({ pending })
-  })
+  admin.get('/api/pending', (c) => c.json({ pending: core.engine.cards() }))
   admin.get('/api/active', (c) =>
     c.json({
-      grants: core.view().grants.map((g) => ({ id: g.id, agent: g.label, item: g.item, expiresAt: g.expiresAt })),
+      grants: core.engine.grants().map((g) => ({
+        id: g.id,
+        who: core.engine.whoOf(g),
+        item: g.item,
+        expiresAt: g.expiresAt,
+        ...core.engine.describe(g),
+      })),
     }),
   )
-  // Approve as asked: every item still pending on the card.
   const pendingOf = (id: string) => {
-    const request = core.requests.get(id)
-    return request ? itemsWhere(request, 'pending') : []
+    const request = core.engine.requests.get(id)
+    return request ? core.engine.outcomeOf(request).pending : []
   }
   admin.post('/api/requests/:id/approve', async (c) => {
     const { duration } = decisionSchema.pick({ duration: true }).parse(await c.req.json())
     const items = pendingOf(c.req.param('id'))
-    await core.decide(c.req.param('id'), items, items, duration)
+    await core.engine.decide(c.req.param('id'), items, items, duration)
     return c.body(null, 204)
   })
   admin.post('/api/requests/:id/deny', async (c) => {
-    await core.decide(c.req.param('id'), [], pendingOf(c.req.param('id')), '2h')
+    await core.engine.decide(c.req.param('id'), [], pendingOf(c.req.param('id')), '2h')
     return c.body(null, 204)
   })
   admin.post('/api/grants/:id/revoke', (c) => {
-    revokeGrant(c.req.param('id'))
+    core.engine.revoke(c.req.param('id'))
     return c.body(null, 204)
   })
   admin.all('/api/*', (c) => apiError(c, 404, 'No such owner API route'))
@@ -210,8 +189,6 @@ export function adminApp(core: Core) {
     if (c.req.method !== 'GET') return c.text('Sign in at /admin', 401)
     return c.req.path === '/admin' ? authPage(c) : c.redirect('/admin', 303)
   })
-  // Newest entries first from audit.jsonl, optionally narrowed to one grant, agent, service, target or share, or to
-  // entries containing some text. The page shows the newest 500 matches.
   admin.get('/log', async (c) => {
     const query = c.req.query()
     const { grant, agent, service, target, share } = query
@@ -245,7 +222,7 @@ export function adminApp(core: Core) {
     )
   })
   const panels = {
-    inbox: () => inbox(core.view(), core.groups, core.unlocked().vault.secrets),
+    inbox: () => inbox(core.view(), core.groups),
     active: () => active(core.view()),
   }
   admin.get('/', (c) => {
@@ -279,7 +256,6 @@ export function adminApp(core: Core) {
       return c.html(layout(nonce, 'active', live('active', panels.active())))
     return c.html(layout(nonce, 'approvals', live('inbox', panels.inbox())))
   })
-  // A live panel again, or 204 when it shows the same as the hash the page holds.
   admin.get('/panel/:name{inbox|active}', (c) => {
     const name = c.req.param('name') as keyof typeof panels
     const inner = panels[name]()
@@ -330,9 +306,9 @@ export function adminApp(core: Core) {
     core.mcpTools.delete(input.id)
     await core.saveServices()
     core.audit('service_saved', { service: input.id })
+    core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
-  // Lists an MCP service's tools now, so the editor shows how they classify (read-only vs write).
   admin.post('/services/tools', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
     if (!core.services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
@@ -349,26 +325,21 @@ export function adminApp(core: Core) {
     delete core.unlocked().vault.services[id]
     await core.saveServices()
     await core.unlocked().save()
-    core.revokeGrants((grant) => grant.item.startsWith(`${id}.`))
-    for (const [key, request] of core.requests)
-      if (itemsWhere(request, 'pending').some((item) => item.startsWith(`${id}.`))) core.requests.delete(key)
     core.audit('service_deleted', { service: id })
+    core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
-  // Secrets agents may use without seeing them (inserted by the secrets proxy). A blank value keeps
-  // the stored one.
   admin.post('/secrets/save', async (c) => {
     const input = ownerSecretSchema.parse(await fields(c))
     const { vault } = core.unlocked()
     const value = input.value || vault.secrets[input.name]?.value
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
-    // Grants read the hosts live, so a newly allowed host would quietly widen every grant already given: end them.
-    const before = vault.secrets[input.name]?.hosts ?? []
-    if (input.hosts.some((host) => !before.includes(host)))
-      core.revokeGrants((grant) => grant.item === `secret:${input.name}`)
     vault.secrets[input.name] = { value, hosts: input.hosts, env: input.env }
     await core.unlocked().save()
     core.audit('secret_saved', { secret: input.name })
+    // Grants read the hosts live, so a newly allowed host would quietly widen every grant already given: reconcile
+    // ends them (their reach grew).
+    core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/secrets/delete', async (c) => {
@@ -378,6 +349,7 @@ export function adminApp(core: Core) {
     delete vault.secrets[name]
     await core.unlocked().save()
     core.audit('secret_deleted', { secret: name })
+    core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/password', async (c) => {
@@ -427,73 +399,43 @@ export function adminApp(core: Core) {
     if (!host) throw new HTTPException(404, { message: 'Unknown sandbox host' })
     return host
   }
-  const removeHost = (host: Host) => {
-    for (const agent of core.enrolled()) if (agent.host === host.id) core.endAgent(agent.id)
-    core.connections.get(host.id)?.ws.close(1008, 'removed')
-    core.hosts.delete(host.id)
-  }
   admin.post('/hosts/:id/approve', async (c) => {
     const host = hostById(c.req.param('id'))
-    host.status = transition('host', hostTable, host.status, 'approve')
-    core.audit('host_approved', { host: host.id })
-    // A host registering again from the same address under the same name is the same machine: its older entries
-    // (their tokens are bound to that address and are unusable now) go, with their agents.
-    for (const old of core.hosts.values())
-      if (old.id !== host.id && old.name === host.name && old.source === host.source) {
-        removeHost(old)
-        core.audit('host_replaced', { host: old.id, by: host.id, name: old.name })
-      }
-    await core.saveHosts()
+    const request = [...core.engine.requests.values()].find(
+      (r) => r.subject === host.id && core.engine.statusOf(r) === 'pending',
+    )
+    if (!request) throw new HTTPException(409, { message: 'This sandbox host is already approved' })
+    const items = core.engine.outcomeOf(request).pending
+    await core.engine.decide(request.id, items, items, 'permanent')
     return redirect(c)
   })
-  // Removing a host (pending or approved) also ends its agents; its tokens stop working.
-  admin.post('/hosts/:id/remove', async (c) => {
-    const host = hostById(c.req.param('id'))
-    removeHost(host)
-    core.audit('host_removed', { host: host.id })
-    await core.saveHosts()
+  admin.post('/hosts/:id/remove', (c) => {
+    core.engine.endSubject(hostById(c.req.param('id')).id)
     return redirect(c)
   })
   admin.post('/agents/:id/revoke', (c) => {
     core.endAgent(c.req.param('id'))
     return redirect(c)
   })
-  // Extending moves the end to max(current end, now) + the span the owner originally granted.
   admin.post('/grants/extend', async (c) => {
-    const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    const grant = core.grants.get(id)
-    if (!grant) throw new HTTPException(404, { message: 'Grant not found' })
-    if (grant.expiresAt === null || grant.grantedMs === undefined)
-      throw new HTTPException(409, { message: 'Nothing to extend' })
-    const end = Math.max(Date.parse(grant.expiresAt), Date.now()) + grant.grantedMs
-    grant.expiresAt = new Date(end).toISOString()
-    for (const site of core.grants.values()) if (site.with?.includes(id)) site.expiresAt = grant.expiresAt
-    for (const request of core.requests.values())
-      if (request.grantIds.includes(id) && (request.expiresAt ?? 0) < end) request.expiresAt = end
-    core.push()
-    core.audit('grant_extended', { grant: id, agent: grant.agentId, expiresAt: grant.expiresAt })
+    core.engine.extend(z.object({ id: idSchema }).parse(await fields(c)).id)
     return redirect(c)
   })
   admin.post('/requests/:id/approve', async (c) => {
     const { duration, items, shown } = decisionSchema.parse(await fields(c))
-    await core.decide(c.req.param('id'), items, shown, duration)
+    await core.engine.decide(c.req.param('id'), items, shown, duration)
     return redirect(c)
   })
   admin.post('/requests/:id/deny', async (c) => {
     const { shown } = decisionSchema.pick({ shown: true }).parse(await fields(c))
-    await core.decide(c.req.param('id'), [], shown, '2h')
+    await core.engine.decide(c.req.param('id'), [], shown, '2h')
     return redirect(c)
   })
   admin.post('/grants/revoke', async (c) => {
-    revokeGrant(z.object({ id: idSchema }).parse(await fields(c)).id)
+    core.engine.revoke(z.object({ id: idSchema }).parse(await fields(c)).id)
     return redirect(c)
   })
-  // Targets, shares and open sessions; a target or share that goes takes its grants with it.
-  core.jump.routes(admin, fields, () =>
-    core.revokeGrants(
-      (grant) => /^(ssh|folder):/.test(grant.item) && core.jump.unavailable(grant.agentId, grant.item) !== undefined,
-    ),
-  )
+  core.jump.routes(admin, fields, core.engine.reconcile)
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   return admin
 }

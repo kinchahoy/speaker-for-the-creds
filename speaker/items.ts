@@ -11,6 +11,8 @@ export const itemPatterns = {
   mcp: /^mcp:[a-zA-Z0-9_-]+$/,
   ext: /^ext:[a-zA-Z0-9_-]+$/,
   group: /^group:[a-zA-Z0-9_-]+$/,
+  // A sandbox host's own registration (`host:<id>`); only a sandbox host asks for it, by registering.
+  host: /^host:[a-zA-Z0-9_-]+$/,
 }
 export type ItemKind = keyof typeof itemPatterns
 export const itemForms = [

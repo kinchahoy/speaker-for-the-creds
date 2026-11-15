@@ -9,9 +9,16 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { WSContext } from 'hono/ws'
 import writeFile from 'write-file-atomic'
 import { z } from 'zod'
-import { durationNames, durations, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
+import {
+  type Approval,
+  createEngine,
+  type Description,
+  type Engine,
+  type Kind,
+  type Refusal as Refused,
+} from './engine.ts'
+import { durationNames, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
-import { hostStates } from './lifecycle.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
 import { createStore, generateSshKey, openStore, type Store, type Vault } from './store.ts'
 
@@ -32,10 +39,6 @@ const sshKeySchema = z
   )
 const durationSchema = z.enum(durationNames).default('2h')
 const adminDurationSchema = z.enum([...durationSchema.unwrap().options, 'permanent']).default('2h')
-// Three denials of the same item for the same agent within this window lock it: it is answered as denied, without
-// asking the owner, until the window after the third denial has passed.
-const denialLimit = 3
-const denialWindow = 15 * 60_000
 const requestLifetime = 2 * 3600_000
 const agentIdleLimit = 7 * 86_400_000
 // MCP JSON-RPC methods that only read or manage the protocol session; tools/call is classified per tool.
@@ -111,7 +114,6 @@ export const hostSchema = z.object({
   name: z.string().trim().min(1).max(100),
   kinds: z.array(z.enum(hostKinds)).max(hostKinds.length),
   tokenHash: hashSchema,
-  status: z.enum(hostStates),
   // The address it registered from: like an agent token, a host token only works from there. A host saved before
   // this field matches no address and is told to register again.
   source: z.string().default(''),
@@ -171,10 +173,7 @@ export const decisionSchema = z.object({
 export type Service = z.infer<typeof serviceSchema>
 export type Group = z.infer<typeof groupsSchema>[string]
 export type Host = z.infer<typeof hostSchema>
-type Duration = z.infer<typeof adminDurationSchema>
 type Usage = { uses: number; lastUsedAt: number | null }
-// What the owner sees at a glance: requests that reached them, items decided, and what speaker turned away (a request
-// refused before the owner saw it, a call blocked for lack of a grant), with the latest such message.
 type Counts = {
   requests: number
   granted: number
@@ -202,52 +201,17 @@ export type Agent = Usage & {
   createdAt: number
   lastSeen: number
 }
-// Grants exist only while they are in force: expiry and revocation delete them (and are logged as `grant_expired` and
-// `grant_revoked`).
-export type Grant = Usage & {
-  id: string
-  agentId: string
-  item: string
-  // null: until revoked (owner only).
-  expiresAt: string | null
-  // The span the owner approved; Extend adds it again.
-  grantedMs?: number
-  requestId: string
-  // A site grant brought only by an extension: the ext grant(s) it ends with. It ends when the last of them does.
-  with?: string[]
-}
-export type Outcome = 'pending' | 'granted' | 'denied'
-export type Request = {
-  id: string
-  agentId: string
-  want: string[]
-  // Every item asked for after group expansion, and where it stands. A repeated POST of the same set joins this request.
-  outcomes: Record<string, Outcome>
-  // Set when nobody decided within the request lifetime; otherwise the status follows from the outcomes.
-  expired?: true
-  reason: string
-  duration: z.infer<typeof durationSchema>
-  // The service call that filed it, if any.
-  trigger?: string
-  // When the granted items end (null: until revoked).
-  expiresAt?: number | null
-  grantIds: string[]
-  // Sites brought only by an extension in this request (site item -> ext item): their grants end with the extension's.
-  bundled?: Record<string, string>
-  createdAt: number
-  decidedAt?: number
-}
-export const itemsWhere = (request: Request, outcome: Outcome) =>
-  Object.keys(request.outcomes).filter((item) => request.outcomes[item] === outcome)
-type RequestState = 'pending' | 'decided' | 'expired'
-export const statusOf = (request: Request): RequestState =>
-  request.expired ? 'expired' : itemsWhere(request, 'pending').length ? 'pending' : 'decided'
 // How far a grant has reached what enforces it. `enforced`: it is in force (speaker itself enforces it, or the
 // sandbox host reported it applied). `sent`: sent to a connected sandbox host, not yet reported applied.
 // `host-offline`: its sandbox host is not connected.
 type Enforcement = 'enforced' | 'sent' | 'host-offline'
-type GrantView = Grant & { label: string; agent: string; enforcement: Enforcement; bundledWith: string[] }
-type RequestView = Request & { status: RequestState; items: string[] }
+export type GrantView = Approval & {
+  label: string
+  agent: string
+  enforcement: Enforcement
+  bundledWith: string[]
+  detail: Description
+}
 // One connected sandbox host: its socket, the grants it reported applied, and what it can start inside its VMs
 // (MCP servers and Pi extensions, with the sites they need).
 export type Connection = {
@@ -259,13 +223,11 @@ export type Connection = {
 type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
 type AgentView = Agent & { sandboxHost?: string; grants: number }
 export type View = {
-  hosts: Host[]
+  hosts: (Host & { grant?: string })[]
   agents: AgentView[]
-  requests: RequestView[]
+  cards: ReturnType<Engine['cards']>
   grants: GrantView[]
-  // Open SSH sessions, and what an ssh: or folder: item reaches for an agent (keyed `agentId item`).
   sessions: { id: string; agent: string; what: string; started: number }[]
-  details: Record<string, { text: string; warning?: string }>
 }
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
 
@@ -345,13 +307,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const groupsFile = file('groups.json')
   const groups = groupsSchema.parse(JSON.parse((await optionalFile(groupsFile)) ?? '{}'))
   const hostsFile = file('hosts.json')
-  const hosts = new Map(
-    z
-      .array(hostSchema)
-      .parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
-      .map((host) => [host.id, host]),
-  )
-  const saveHosts = () => save(hostsFile, [...hosts.values()])
+  const storedHosts = z.array(hostSchema).parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
+  const hosts = new Map<string, Host>(storedHosts.map((host) => [host.id, host]))
+  // The records only: a restarted speaker asks the owner to approve every known host again.
+  const saveHosts = () => writeFile.sync(hostsFile, JSON.stringify([...hosts.values()], null, 2), { mode: 0o600 })
   // Keys and sign-in. The store appears when the owner first sets a password; after every restart speaker is locked
   // until the owner signs in, which unwraps the data key. Sessions live in memory only. Until the owner has set a
   // password and unlocked, speaker serves no agent, sandbox host or proxy call (see lockNotice).
@@ -361,7 +320,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (vault.state !== 'unlocked') throw new Error('Speaker is locked')
     return vault.store
   }
-  // What the owner has stored, empty until unlocked.
   const ownerSecrets = (): Vault['secrets'] => (vault.state === 'unlocked' ? vault.store.vault.secrets : {})
   const unlock = async (opened: Store) => {
     vault = { state: 'unlocked', store: opened }
@@ -389,17 +347,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return created
   }
   const sessions = new Map<string, number>()
-  // Agents, grants, requests and usage live in memory only: a restart starts them empty.
   const agents = new Map<string, Agent>()
-  const grants = new Map<string, Grant>()
-  const requests = new Map<string, Request>()
   const agentById = (id: string) => {
     const agent = agents.get(id)
     return agent?.status === 'enrolled' ? agent : undefined
   }
   const enrolled = () => [...agents.values()].filter((agent) => agent.status === 'enrolled')
-  // The one agent token check, for the API and the proxy: the agent behind a token, or why there is none. Every
-  // agent token only works from the address it enrolled from. (The lock is checked by each caller before this.)
   const resolveAgent = (
     token: string,
     source: string | undefined,
@@ -412,7 +365,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const agentByToken = (digest: string) => [...agents.values()].find((agent) => same(agent.tokenHash, digest))
   const connections = new Map<string, Connection>()
-  const strikes = new Map<string, number[]>()
   // The log: every event goes to standard output and is appended to audit.jsonl, which the admin Log page reads, so
   // the record outlives a restart. It is never trimmed; delete or rotate the file by hand.
   const auditFile = file('audit.jsonl')
@@ -442,61 +394,23 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     agent.counts.lastRefusal = message
   }
   const rid = () => randomBytes(16).toString('hex')
-  const live = (grant: { expiresAt: string | null }) =>
-    grant.expiresAt === null || Date.parse(grant.expiresAt) > Date.now()
-  const expiry = (duration: Duration) =>
-    duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
   // SSH and folders over SSH: targets, shares, the jump server and its relay (see jump.ts).
   const jump = await createJump({
     port: config.SSH_PORT,
     dataDir,
     agent: agentById,
-    grants: () => [...grants.values()].filter(live),
+    grants: () =>
+      engine.grants().map(({ id, subject, item, expiresAt }) => ({ id, agentId: subject, item, expiresAt })),
     audit,
     expire: () => sweep(),
   })
   const syncJump = () => void jump.sync().catch(() => undefined)
-  // A request ends once, from pending: decided when its last item is answered, expired when nobody answers in time.
-  function endRequest(request: Request, status: 'decided' | 'expired') {
-    if (status === 'expired') request.expired = true
-    else request.decidedAt = Date.now()
-    audit(`request_${status}`, {
-      request: request.id,
-      agent: request.agentId,
-      from: 'pending',
-      granted: itemsWhere(request, 'granted'),
-      denied: itemsWhere(request, 'denied'),
-    })
-  }
-  const endGrant = (grant: Grant, event: 'expired' | 'revoked') => {
-    grants.delete(grant.id)
-    audit(`grant_${event}`, { grant: grant.id, agent: grant.agentId, item: grant.item })
-    // Sites that came with an extension end with it, unless another extension grant still holds them.
-    for (const site of [...grants.values()])
-      if (site.with?.includes(grant.id)) {
-        site.with = site.with.filter((id) => id !== grant.id && grants.has(id))
-        if (!site.with.length) endGrant(site, event)
-      }
-  }
-  // Applies clock-driven transitions before every HTTP request: expired grants and requests, idle agents.
   function sweep() {
     const now = Date.now()
     for (const [id, end] of sessions) if (end <= now) sessions.delete(id)
-    let ended = false
-    for (const grant of grants.values())
-      if (!live(grant)) {
-        endGrant(grant, 'expired')
-        ended = true
-      }
-    for (const [id, request] of requests) {
-      const status = statusOf(request)
-      if (status === 'pending' && now - request.createdAt >= requestLifetime) endRequest(request, 'expired')
-      else if (status !== 'pending' && now - (request.decidedAt ?? request.createdAt) >= 86_400_000) requests.delete(id)
-    }
-    const hasGrant = (id: string) => [...grants.values()].some((grant) => grant.agentId === id)
+    engine.sweep()
     for (const agent of enrolled())
-      if (now - agent.lastSeen > agentIdleLimit && !hasGrant(agent.id)) agents.delete(agent.id)
-    if (ended) push()
+      if (now - agent.lastSeen > agentIdleLimit && !engine.grants(agent.id).length) agents.delete(agent.id)
   }
   // The upstream URL for an agent-facing path, or undefined when it would leave the service's base path.
   const upstreamUrl = (service: Service, secret: string, parts: string[], search: string) => {
@@ -534,7 +448,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   })
   type McpTool = { readOnly: boolean; destructive: boolean; annotated: boolean }
   const mcpTools = new Map<string, { at: number; tools: Map<string, McpTool> }>()
-  // Lists an MCP service's tools with speaker's own credentialed session through the official MCP client.
   async function listMcpTools(id: string) {
     const service = services[id],
       secret = credentialOf(id)
@@ -600,37 +513,279 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return { write: notes.length > 0, detail: notes.join(', ') }
   }
 
-  // What a sandbox host enforces: every active grant of its agents, and their requests.
   const hostOf = (agent: { host?: string }) => (agent.host ? hosts.get(agent.host) : undefined)
+  const catalogOf = (agentId: string) => connections.get(agentById(agentId)?.host ?? '')?.catalog
   const secretHosts = (name: string) => (Object.hasOwn(ownerSecrets(), name) ? ownerSecrets()[name].hosts : [])
-  // A sandbox host mounts its agents' over-SSH folders with `sshfs`, so it hears those grants; every other over-SSH
-  // grant is between the agent and the relay alone.
+  const serviceItem = (item: string) => {
+    const [, id, level] = /^([a-zA-Z0-9_-]+)\.(read|full)$/.exec(item) ?? []
+    return id ? { id, write: level === 'full' } : undefined
+  }
+  // Item kinds an agent may ask for: services, groups, secrets, SSH and folders, plus what its sandbox host enforces.
+  const allowedKinds = (agent: Agent): string[] => [
+    'service',
+    'group',
+    'secret',
+    'ssh',
+    'folder',
+    ...(hostOf(agent)?.kinds ?? []),
+  ]
+  const hostItem = (id: string) => `host:${id}`
+  const hostGrant = (id: string) => engine.held(id, [hostItem(id)])
+
+  const refuse = (item: string, real: string[], what: string): Refused => ({
+    message: `${item} is not something you can ask for. ${what} you can ask for: ${real.length ? real.join(', ') : 'none'}.`,
+    next: 'GET /_speaker/catalog',
+  })
+  const unavailable = (why: string) => ({ to: 'unavailable', why }) as const
+  // A wildcard over a whole top-level domain, such as *.com: approving it opens far more than one service.
+  const broad = (hosts: string[]) => {
+    const wide = hosts.filter((host) => host.startsWith('*.') && !host.slice(2).includes('.'))
+    return wide.length ? `very broad: ${wide.join(', ')} matches every host under it` : undefined
+  }
+  const base: Omit<Kind, 'where' | 'describe'> = {
+    subject: 'agent',
+    validate: () => undefined,
+    admission: () => ({ to: 'ask' }),
+    snapshot: () => ({}),
+    granted: () => undefined,
+    ended: () => undefined,
+  }
+  const overSsh: Omit<Kind, 'where'> = {
+    ...base,
+    validate(item) {
+      const message = jump.unknownName(item)
+      return message
+        ? {
+            message,
+            next: 'Use the exact name your task or the owner gave you; read "Folders and SSH" in GET /_speaker/help',
+          }
+        : undefined
+    },
+    admission(item, agentId) {
+      const why = jump.unavailable(agentId, item)
+      return why === undefined ? { to: 'ask' } : unavailable(why)
+    },
+    describe: (item) => jump.describe(item),
+    granted: () => jump.sync(),
+  }
+  const hostEntry = (agentId: string, list: 'mcps' | 'extensions', item: string) =>
+    catalogOf(agentId)?.[list].find(({ id }) => item === `${list === 'mcps' ? 'mcp' : 'ext'}:${id}`)
+  const inCatalog =
+    (list: 'mcps' | 'extensions', what: string) =>
+    (item: string, agentId: string): Refused | undefined =>
+      hostEntry(agentId, list, item)
+        ? undefined
+        : refuse(
+            item,
+            (catalogOf(agentId)?.[list] ?? []).map(({ id }) => id),
+            what,
+          )
+  const kinds: Record<string, Kind> = {
+    service: {
+      ...base,
+      where: 'both',
+      validate: (item) => {
+        const target = serviceItem(item)
+        return target && Object.hasOwn(services, target.id) && credentialOf(target.id) !== undefined
+          ? undefined
+          : refuse(
+              item,
+              Object.keys(services)
+                .filter((id) => credentialOf(id) !== undefined)
+                .flatMap((id) => [`${id}.read`, `${id}.full`]),
+              'Services',
+            )
+      },
+      admission(item) {
+        const { id, write } = serviceItem(item) as { id: string; write: boolean }
+        if (!Object.hasOwn(services, id)) return unavailable(`there is no service ${id}`)
+        if (credentialOf(id) === undefined) return unavailable(`${id} has no key`)
+        return { to: write ? services[id].write : services[id].read }
+      },
+      describe(item) {
+        const { id, write } = serviceItem(item) as { id: string; write: boolean }
+        const service = Object.hasOwn(services, id) ? services[id] : undefined
+        if (!service) return { text: 'no longer set up', reach: [] }
+        return {
+          text: `${write ? 'read and change' : 'read'} ${service.baseUrl}${service.mcp ? ' · MCP server' : ''}`,
+          // What `.read` lets through grows with the read paths and the MCP read-only tools.
+          reach: [
+            service.baseUrl,
+            ...(service.mcp ? ['MCP read-only tools'] : []),
+            ...(write ? [] : (service.readPaths ?? []).map((path) => `POST ${path}`)),
+          ],
+          risk: write ? 'read/write' : undefined,
+        }
+      },
+    },
+    secret: {
+      ...base,
+      where: 'host',
+      validate: (item) =>
+        Object.hasOwn(ownerSecrets(), item.slice('secret:'.length))
+          ? undefined
+          : refuse(item, Object.keys(ownerSecrets()), 'Secrets'),
+      admission: (item) =>
+        Object.hasOwn(ownerSecrets(), item.slice('secret:'.length))
+          ? { to: 'ask' }
+          : unavailable(`there is no secret ${item.slice('secret:'.length)}`),
+      // Granting a secret opens the hosts its value goes to.
+      describe(item) {
+        const hosts = secretHosts(item.slice('secret:'.length))
+        return hosts.length
+          ? { text: `sent to ${hosts.join(', ')}`, reach: hosts, warning: broad(hosts), risk: 'secret' }
+          : { text: 'not set up: it will do nothing', reach: [], risk: 'secret' }
+      },
+      // The sandbox host routes those hosts to speaker's proxy; it never hears the value.
+      snapshot: (item) => ({ hosts: secretHosts(item.slice('secret:'.length)) }),
+    },
+    site: {
+      ...base,
+      where: 'host',
+      describe: (item) => ({
+        text: 'the sandbox may reach this site',
+        reach: [item.slice('site:'.length)],
+        warning: broad([item.slice('site:'.length)]),
+      }),
+    },
+    ssh: { ...overSsh, where: 'speaker' },
+    folder: { ...overSsh, where: 'both' },
+    mcp: {
+      ...base,
+      where: 'host',
+      validate: inCatalog('mcps', 'MCP servers'),
+      describe: (item, agentId) => ({
+        text: `${hostEntry(agentId, 'mcps', item)?.label ?? 'MCP server'} · runs in the sandbox`,
+        reach: [item],
+      }),
+    },
+    ext: {
+      ...base,
+      where: 'host',
+      validate: inCatalog('extensions', 'Extensions'),
+      describe: (item, agentId) => ({
+        text: `${hostEntry(agentId, 'extensions', item)?.label ?? 'Pi extension'} · runs in the sandbox`,
+        reach: [item],
+      }),
+    },
+    // A sandbox host registering: approving lets it create agents and enforce the kinds it named. It stays until the
+    // owner removes it; removing it (or denying the registration) ends its agents and forgets it.
+    host: {
+      ...base,
+      subject: 'host',
+      where: 'speaker',
+      describe(_item, id) {
+        const host = hosts.get(id)
+        if (!host) return { text: 'removed', reach: [] }
+        const replaces = [...hosts.values()].filter(
+          (o) => o.id !== id && o.name === host.name && o.source === host.source,
+        )
+        return {
+          text: `Approving lets this sandbox host create agents and enforce grants for ${host.kinds.join(', ') || 'no item kinds'}.`,
+          reach: host.kinds,
+          warning: replaces.length
+            ? replaces
+                .map(
+                  (o) =>
+                    `Approving replaces the ${hostGrant(o.id) ? 'approved' : 'pending'} host ${o.name} registered ${o.registeredAt ? new Date(o.registeredAt).toISOString() : 'at an unknown time'}: it and its agents are removed.`,
+                )
+                .join(' ')
+            : undefined,
+        }
+      },
+      // The same name from the same address is the same machine registering again: its older entries (their tokens
+      // are bound to that address and are unusable now) go, with their agents.
+      granted(approval) {
+        const host = hosts.get(approval.subject) as Host
+        audit('host_approved', { host: host.id })
+        for (const old of [...hosts.values()])
+          if (old.id !== host.id && old.name === host.name && old.source === host.source) {
+            engine.endSubject(old.id)
+            audit('host_replaced', { host: old.id, by: host.id, name: old.name })
+          }
+        saveHosts()
+      },
+      ended(approval) {
+        const host = hosts.get(approval.subject)
+        if (!host) return
+        hosts.delete(host.id)
+        for (const agent of enrolled()) if (agent.host === host.id) endAgent(agent.id)
+        connections.get(host.id)?.ws.close(1008, 'removed')
+        saveHosts()
+        audit('host_removed', { host: host.id })
+      },
+    },
+  }
+  const engine = createEngine({
+    kinds,
+    kindOf: (item) => kindOf(item) as string,
+    audit,
+    changed: () => push(),
+    subjects: {
+      agent: {
+        durations: [...durationNames, 'permanent'],
+        wait: requestLifetime,
+        field: 'agent',
+        exists: (id) => agentById(id) !== undefined,
+        who(id) {
+          const agent = agentById(id)
+          return agent
+            ? {
+                label: agent.label,
+                says: agent.agent,
+                via: hostOf(agent)?.name,
+                source: agent.source,
+                key: agent.tokenHash.slice(0, 8),
+                at: agent.createdAt,
+              }
+            : { label: 'Unknown agent', source: '' }
+        },
+        count(id, field, n) {
+          const agent = agentById(id)
+          if (agent) agent.counts[field] += n
+        },
+      },
+      host: {
+        durations: ['permanent'],
+        wait: Number.POSITIVE_INFINITY,
+        field: 'host',
+        exists: (id) => hosts.has(id),
+        who(id) {
+          const host = hosts.get(id)
+          return { label: `Sandbox host ${host?.name ?? id}`, source: host?.source ?? '', at: host?.registeredAt }
+        },
+        count: () => undefined,
+      },
+    },
+  })
+  const askHost = (id: string) => engine.request('host', id, [hostItem(id)], { reason: '', duration: 'permanent' })
+  const registerHost = (host: Host) => {
+    hosts.set(host.id, host)
+    askHost(host.id)
+    saveHosts()
+  }
+  for (const id of hosts.keys()) askHost(id)
+
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
-    grants: [...grants.values()]
-      .filter(
-        (grant) =>
-          live(grant) &&
-          agentById(grant.agentId)?.host === hostId &&
-          (!jump.overSsh(grant) || grant.item.startsWith('folder:')),
-      )
-      .map(({ id, agentId, item, expiresAt }) => ({
+    grants: engine
+      .grants()
+      .filter((grant) => agentById(grant.subject)?.host === hostId && kinds[grant.kind].where !== 'speaker')
+      .map(({ id, subject, item, kind, expiresAt }) => ({
         id,
-        agentId,
+        agentId: subject,
         item,
         expiresAt,
-        // A secret grant carries the hosts the owner bound it to, never the value.
-        ...(item.startsWith('secret:') ? { hosts: secretHosts(item.slice('secret:'.length)) } : {}),
+        ...kinds[kind].snapshot(item),
       })),
-    // What a sandboxed agent may ask for, so the sandbox host can name them in its instructions.
     secrets: Object.entries(ownerSecrets()).map(([name, { hosts, env }]) => ({ name, hosts, env })),
-    requests: [...requests.values()]
-      .filter((request) => agentById(request.agentId)?.host === hostId)
+    requests: [...engine.requests.values()]
+      .filter((request) => agentById(request.subject)?.host === hostId)
       .map((request) => ({
         id: request.id,
-        agentId: request.agentId,
-        status: statusOf(request),
-        what: itemsWhere(request, 'pending').join(', '),
+        agentId: request.subject,
+        status: engine.statusOf(request),
+        what: engine.outcomeOf(request).pending.join(', '),
         reason: request.reason,
       })),
   })
@@ -643,22 +798,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     push()
   }, 10_000).unref()
 
-  // Serialize decisions; a failed one reaches its caller without poisoning the queue.
-  let queue: Promise<unknown> = Promise.resolve()
-  function serial<T>(operation: () => T | Promise<T>): Promise<T> {
-    const result = queue.then(operation)
-    queue = result.catch(() => undefined)
-    return result
-  }
-  const serviceItem = (item: string) => {
-    const [, id, level] = /^([a-zA-Z0-9_-]+)\.(read|full)$/.exec(item) ?? []
-    return id ? { id, write: level === 'full' } : undefined
-  }
-  const grantFor = (agentId: string, item: string) =>
-    [...grants.values()].find((grant) => live(grant) && grant.agentId === agentId && grant.item === item)
-  // `.full` includes read, so either item covers a read.
   const coverFor = (agentId: string, service: string, write: boolean) =>
-    grantFor(agentId, `${service}.full`) ?? (write ? undefined : grantFor(agentId, `${service}.read`))
+    engine.held(agentId, write ? [`${service}.full`] : [`${service}.full`, `${service}.read`])
   // Secrets proxy (proxy.ts). One random placeholder per agent per secret; the agent puts it where the secret goes and
   // speaker swaps it for the value in requests to the secret's allowed hosts.
   const placeholders = new Map<string, string>()
@@ -667,10 +808,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
     return placeholders.get(key) as string
   }
-  // The agent's active `secret:` grants whose secret still exists in the store.
   const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; until: string | null })[] =>
-    [...grants.values()]
-      .filter((grant) => grant.agentId === agentId && grant.item.startsWith('secret:') && live(grant))
+    engine
+      .grants(agentId)
+      .filter((grant) => grant.kind === 'secret')
       .flatMap((grant) => {
         const name = grant.item.slice('secret:'.length),
           owned = Object.hasOwn(ownerSecrets(), name) ? ownerSecrets()[name] : undefined
@@ -696,146 +837,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     target.uses++
     target.lastUsedAt = Date.now()
   }
-  function addGrant(request: Request, item: string, expiresAt: string | null, duration: Duration, bundle?: string[]) {
-    const replaced = [...grants.values()].filter((old) => old.agentId === request.agentId && old.item === item)
-    for (const old of replaced) grants.delete(old.id)
-    const grant: Grant = {
-      id: rid(),
-      agentId: request.agentId,
-      item,
-      expiresAt,
-      requestId: request.id,
-      uses: 0,
-      lastUsedAt: null,
-    }
-    if (duration !== 'permanent') grant.grantedMs = durations[duration]
-    if (bundle?.length) grant.with = bundle
-    // Sites bundled with a grant this one replaces now follow the new grant.
-    for (const site of grants.values())
-      if (site.with?.some((id) => replaced.some((old) => old.id === id)))
-        site.with = union(site.with.map((id) => (replaced.some((old) => old.id === id) ? grant.id : id)))
-    grants.set(grant.id, grant)
-    request.grantIds.push(grant.id)
-    audit('grant_created', { grant: grant.id, agent: grant.agentId, item, expiresAt })
-  }
-  const revokeGrants = (matches: (grant: Grant) => boolean) => {
-    for (const grant of [...grants.values()]) if (matches(grant)) endGrant(grant, 'revoked')
-    push()
-  }
-  const strikeKey = (agentId: string, item: string) => `${agentId}\n${item}`
-  const recentStrikes = (key: string) => (strikes.get(key) ?? []).filter((at) => Date.now() - at < denialWindow)
-  // When asking the owner works again for an item denied three times (a time in ms), else undefined.
-  const lockedUntil = (agentId: string, item: string) => {
-    const struck = recentStrikes(strikeKey(agentId, item))
-    return struck.length >= denialLimit ? struck[struck.length - 1] + denialWindow : undefined
-  }
-  const retryAfter = (agentId: string, items: string[]) => {
-    const until = Math.max(0, ...items.map((item) => lockedUntil(agentId, item) ?? 0))
-    return until ? new Date(until).toISOString() : undefined
-  }
-  // The owner's decision on what the card showed: grants the ticked items and denies the other shown ones. An item
-  // added to the request after the card was rendered stays pending, and so does the request.
-  function decide(id: string, approved: string[], shown: string[], duration: Duration) {
-    return serial(async () => {
-      const request = requests.get(id)
-      if (!request) throw new HTTPException(404, { message: 'Request not found' })
-      if (statusOf(request) !== 'pending')
-        throw new HTTPException(409, { message: `Request is already ${statusOf(request)}` })
-      const owner = agentById(request.agentId)
-      if (!owner) throw new HTTPException(409, { message: 'Agent was removed' })
-      const take = new Set(approved)
-      const seen = new Set(shown)
-      const pending = itemsWhere(request, 'pending')
-      const yes = pending.filter((item) => seen.has(item) && take.has(item))
-      const no = pending.filter((item) => seen.has(item) && !take.has(item))
-      if (!yes.length && !no.length) throw new HTTPException(409, { message: 'None of the shown items are pending' })
-      const expiresAt = expiry(duration)
-      // Extensions first: a bundled site binds to the ext grant just made. A site the agent already holds on its own
-      // stays as it is; one bundled with another extension gains this one.
-      const bundledOf = (item: string) => {
-        const ext = request.bundled?.[item]
-        return ext && yes.includes(ext) ? ext : undefined
-      }
-      for (const item of yes.filter((item) => !bundledOf(item))) addGrant(request, item, expiresAt, duration)
-      for (const item of yes.filter(bundledOf)) {
-        const ext = bundledOf(item) as string
-        const extGrant = [...grants.values()].find((g) => g.agentId === request.agentId && g.item === ext)
-        const held = [...grants.values()].find((g) => g.agentId === request.agentId && g.item === item && live(g))
-        if (held && !held.with) continue
-        if (extGrant) addGrant(request, item, expiresAt, duration, union(held?.with ?? [], [extGrant.id]))
-        else addGrant(request, item, expiresAt, duration)
-      }
-      // The agent is told "granted" only once the jump server is listening for its new grants.
-      if (yes.length) await jump.sync()
-      for (const item of no)
-        strikes.set(strikeKey(request.agentId, item), [...recentStrikes(strikeKey(request.agentId, item)), Date.now()])
-      for (const item of yes) request.outcomes[item] = 'granted'
-      for (const item of no) request.outcomes[item] = 'denied'
-      owner.counts.granted += yes.length
-      owner.counts.denied += no.length
-      if (yes.length) request.expiresAt = expiresAt === null ? null : Date.parse(expiresAt)
-      if (statusOf(request) === 'decided') endRequest(request, 'decided')
-      push()
-    })
-  }
-  // Items the owner never grants are denied at once, open reads need no grant, and locked items are denied without a
-  // card; the rest go to the owner in one request. Asking for exactly the set a pending request already holds joins
-  // that request (this is how a caller waits by posting again); any other set is a request of its own.
-  function createRequest(
-    agent: Agent,
-    items: string[],
-    want: string[],
-    reason: string,
-    duration: Request['duration'],
-    trigger?: string,
-    bundled: Record<string, string> = {},
-  ) {
-    const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((item) => b.includes(item))
-    const existing = [...requests.values()].find(
-      (r) => r.agentId === agent.id && statusOf(r) === 'pending' && sameSet(Object.keys(r.outcomes), items),
-    )
-    if (existing) {
-      if (reason) Object.assign(existing, { reason, duration })
-      return existing
-    }
-    const outcomes: Record<string, Outcome> = {}
-    for (const item of items) {
-      const target = serviceItem(item)
-      const service = target && services[target.id]
-      const rule = service && (target.write ? service.write : service.read)
-      const missing = jump.unavailable(agent.id, item)
-      // An item that cannot be delivered is denied at once and logged for the owner, with no card.
-      if (missing !== undefined) {
-        audit('request_unavailable', { agent: agent.id, item, why: missing })
-        outcomes[item] = 'denied'
-      } else if (rule === 'never' || lockedUntil(agent.id, item) !== undefined) outcomes[item] = 'denied'
-      else outcomes[item] = rule === 'open' ? 'granted' : 'pending'
-    }
-    const request: Request = {
-      id: rid(),
-      agentId: agent.id,
-      want: union(want),
-      outcomes,
-      reason,
-      duration,
-      trigger,
-      ...(Object.keys(bundled).length ? { bundled } : {}),
-      grantIds: [],
-      createdAt: Date.now(),
-    }
-    requests.set(request.id, request)
-    const count = (outcome: Outcome) => itemsWhere(request, outcome).length
-    if (count('pending')) agent.counts.requests++
-    agent.counts.granted += count('granted')
-    agent.counts.denied += count('denied')
-    push()
-    audit('request_created', { request: request.id, agent: agent.id, items, reason, trigger })
-    if (!count('pending')) {
-      if (count('granted')) request.expiresAt = null
-      endRequest(request, 'decided')
-    }
-    return request
-  }
   // The caller's address is the socket's; only the trusted proxy may name another one, with the last
   // X-Forwarded-For entry it appended. In-process app.fetch callers have no socket and share 'unknown'.
   const peerOf = (c: Context) =>
@@ -855,62 +856,48 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         .replace(/^::ffff:/, '') || peer
     )
   }
-  // Links and commands given to agents use the address the caller used to reach speaker.
   const baseOf = (c: Context) => {
     const url = new URL(c.req.url)
     const proto = peerOf(c) === config.TRUSTED_PROXY ? c.req.header('x-forwarded-proto') : undefined
     return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`
   }
-  const enforcementOf = (grant: Grant): Enforcement => {
-    const hostId = agentById(grant.agentId)?.host
-    if (!hostId || serviceItem(grant.item) || jump.overSsh(grant)) return 'enforced'
+  const enforcementOf = (grant: Approval): Enforcement => {
+    const hostId = agentById(grant.subject)?.host
+    if (!hostId || kinds[grant.kind].where !== 'host') return 'enforced'
     const connection = connections.get(hostId)
     if (!connection) return 'host-offline'
     return connection.applied.has(grant.id) ? 'enforced' : 'sent'
   }
-  const view = (): View => {
-    const asViews = [...requests.values()].map((request) => ({
-      ...request,
-      status: statusOf(request),
-      items: itemsWhere(request, 'pending'),
-    }))
-    return {
-      hosts: [...hosts.values()],
-      agents: enrolled().map((agent) => ({
-        ...agent,
-        sandboxHost: hostOf(agent)?.name,
-        grants: [...grants.values()].filter((grant) => grant.agentId === agent.id).length,
-      })),
-      requests: asViews,
-      grants: [...grants.values()].filter(live).map((grant) => {
-        const agent = agentById(grant.agentId)
+  const view = (): View => ({
+    hosts: [...hosts.values()].map((host) => ({ ...host, grant: hostGrant(host.id)?.id })),
+    agents: enrolled().map((agent) => ({
+      ...agent,
+      sandboxHost: hostOf(agent)?.name,
+      grants: engine.grants(agent.id).length,
+    })),
+    cards: engine.cards(),
+    grants: engine
+      .grants()
+      .filter((grant) => kinds[grant.kind].subject === 'agent')
+      .map((grant) => {
+        const agent = agentById(grant.subject)
         return {
           ...grant,
           label: agent?.label ?? '',
           agent: agent?.agent ?? '',
           enforcement: enforcementOf(grant),
-          bundledWith: (grant.with ?? []).flatMap((id) => grants.get(id)?.item ?? []),
+          bundledWith: (grant.with ?? []).flatMap((id) => engine.approvals.get(id)?.item ?? []),
+          detail: engine.describe(grant),
         }
       }),
-      sessions: jump.sessions(),
-      details: Object.fromEntries(
-        [
-          ...asViews.filter((r) => r.status === 'pending').flatMap((r) => r.items.map((i) => [r.agentId, i])),
-          ...[...grants.values()].filter(live).map((g) => [g.agentId, g.item]),
-        ].flatMap(([agentId, item]) => {
-          const detail = jump.describe(agentId, item)
-          return detail ? [[`${agentId} ${item}`, detail]] : []
-        }),
-      ),
-    }
-  }
+    sessions: jump.sessions(),
+  })
   function endAgent(id: string) {
     const agent = agentById(id)
     if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
     agent.status = 'revoked'
     agent.revokedAt = Date.now()
-    revokeGrants((grant) => grant.agentId === id)
-    for (const [key, request] of requests) if (request.agentId === id) requests.delete(key)
+    engine.endSubject(id)
     audit('agent_revoked', { agent: id, label: agent.label })
   }
   const proxy = createProxy({
@@ -926,9 +913,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     ca: certificateAuthority,
     log: audit,
   })
-  // The first visit sets the owner password and creates the store; later sign-ins unwrap it (WrongPassword if not).
   const createOwnerStore = (password: string) =>
-    serial(async () => {
+    engine.serial(async () => {
       if (vault.state !== 'unset') throw new HTTPException(409, { message: 'The owner password is already set' })
       await unlock(await createStore(storeFile, password, await newVault()))
     })
@@ -948,8 +934,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     enrolled,
     agentByToken,
     resolveAgent,
-    grants,
-    requests,
+    engine,
+    kinds,
     connections,
     sessions,
     readLog,
@@ -968,29 +954,24 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     checkPassword,
     audit,
     rid,
-    live,
     sweep,
     push,
     syncJump,
     snapshot,
-    serial,
     serviceItem,
+    allowedKinds,
     coverFor,
     secretGrants,
     certificateAuthority,
     useOf,
     tally,
-    revokeGrants,
-    lockedUntil,
-    retryAfter,
-    decide,
-    createRequest,
     listMcpTools,
     mcpAccess,
     upstreamUrl,
     applyCredential,
     hostOf,
-    saveHosts,
+    hostGrant,
+    registerHost,
     saveServices: () => save(servicesFile, services),
     saveGroups: () => save(groupsFile, groups),
     peerOf,

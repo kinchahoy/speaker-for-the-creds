@@ -162,7 +162,19 @@ async function setup(t: TestContext) {
   const revokeAll = async () => {
     for (const id of await grantIds()) await ownerForm('/grants/revoke', { id })
   }
-  return { call, proxyPort, sshPort, seen, keyless, agent, revokeAll, ownerForm, upstreamPort: port(upstream) }
+  return {
+    call,
+    proxyPort,
+    sshPort,
+    seen,
+    keyless,
+    agent,
+    revokeAll,
+    grantIds,
+    keylessPort: port(keylessUpstream),
+    ownerForm,
+    upstreamPort: port(upstream),
+  }
 }
 type Me = {
   secrets: Record<
@@ -396,6 +408,44 @@ test('adding a host to a secret ends the grants already given for it; removing a
   await agent.ask(['secret:GITHUB_TOKEN'])
   await save('localhost')
   assert.equal((await agent.me()).secrets.GITHUB_TOKEN.state, 'granted')
+})
+
+test('deleting a secret ends its grants and drops pending requests for it', async (t) => {
+  const s = await setup(t)
+  const holder = await s.agent('holder')
+  await holder.ask(['secret:GITHUB_TOKEN'])
+  const waiter = await s.agent('waiter')
+  const filed = await s.call('/_speaker/requests', {
+    method: 'POST',
+    headers: waiter.headers,
+    body: JSON.stringify({ want: ['secret:GITHUB_TOKEN'], reason: 'later' }),
+  })
+  const { id } = (await filed.json()) as { id: string }
+  await s.ownerForm('/secrets/delete', { name: 'GITHUB_TOKEN' })
+  const grants = async () => ((await holder.me()) as unknown as { grants: { item: string }[] }).grants
+  assert.deepEqual(await grants(), [])
+  const outcome = await (await s.call(`/_speaker/requests/${id}`, { headers: waiter.headers })).json()
+  assert.deepEqual([outcome.status, outcome.denied], ['decided', ['secret:GITHUB_TOKEN']])
+})
+
+const weather = (baseUrl: string, read = 'ask') => ({ id: 'weather', baseUrl, authType: 'none', read, write: 'ask' })
+
+test('a service whose base URL changes loses its grants', async (t) => {
+  const s = await setup(t)
+  const agent = await s.agent('reader')
+  await agent.ask(['weather.read'])
+  assert.equal((await s.grantIds()).length, 1)
+  await s.ownerForm('/services/save', weather('http://127.0.0.1:1/elsewhere'))
+  assert.equal((await s.grantIds()).length, 0)
+})
+
+test('a service the owner sets to never loses its grants', async (t) => {
+  const s = await setup(t)
+  const agent = await s.agent('reader')
+  await agent.ask(['weather.read'])
+  assert.equal((await s.grantIds()).length, 1)
+  await s.ownerForm('/services/save', weather(`http://127.0.0.1:${s.keylessPort}/api`, 'never'))
+  assert.equal((await s.grantIds()).length, 0)
 })
 
 test('a keyless service forwards calls without any credential', async (t) => {

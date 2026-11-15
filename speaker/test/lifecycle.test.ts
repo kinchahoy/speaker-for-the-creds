@@ -4,25 +4,28 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
-import { hostStates, hostTable, IllegalTransition, sessionTable, transition } from '../lifecycle.ts'
+import { approvalStates, approvalTable, IllegalTransition, sessionTable, transition } from '../lifecycle.ts'
 import { createApp, readConfig } from '../server.ts'
 import { freePorts, quiet, setOwnerPassword } from './owner.ts'
 
 test('every table target is a known state and terminal states accept no event', () => {
-  for (const [states, table] of [
-    [hostStates, hostTable],
+  const tables: [readonly string[], Record<string, Record<string, string | undefined>>][] = [
+    [approvalStates, approvalTable],
     [['connecting', 'open', 'closed'], sessionTable],
-  ] as const) {
+  ]
+  for (const [states, table] of tables) {
     assert.deepEqual(Object.keys(table).sort(), [...states].sort())
     for (const moves of Object.values(table))
-      for (const to of Object.values(moves)) assert.ok((states as readonly string[]).includes(to as string))
+      for (const to of Object.values(moves)) assert.ok(states.includes(to ?? ''))
   }
-  assert.deepEqual(hostTable.approved, {})
+  for (const end of ['open', 'denied', 'expired', 'revoked'] as const) assert.deepEqual(approvalTable[end], {})
 })
 
 test('transitions: legal moves land on the table state, illegal moves throw', () => {
-  assert.equal(transition('host', hostTable, 'pending', 'approve'), 'approved')
-  assert.throws(() => transition('host', hostTable, 'approved', 'approve'), IllegalTransition)
+  assert.equal(transition('approval', approvalTable, 'pending', 'grant'), 'granted')
+  assert.equal(transition('approval', approvalTable, 'granted', 'extend'), 'granted')
+  assert.throws(() => transition('approval', approvalTable, 'granted', 'grant'), IllegalTransition)
+  assert.throws(() => transition('approval', approvalTable, 'denied', 'revoke'), IllegalTransition)
 })
 
 test('PUBLIC_URL is required', () => {

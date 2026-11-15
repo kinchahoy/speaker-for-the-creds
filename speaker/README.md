@@ -153,14 +153,14 @@ A small JSON API under `/admin/api` lets the Herdr mod in `herdr/mods/speaker` r
 | Route | Does |
 | --- | --- |
 | `POST /admin/api/signin` `{ "password": "…" }` | `{ "token": "…" }`: the same password check, rate limit (5 failures per 15 minutes, shared with the form) and audit lines as the form; it unlocks speaker after a restart the same way. The token lives in speaker's in-memory session map for 12 hours. |
-| `GET /admin/api/pending` | `{ pending: [{ id, agent, items: [{ item, text?, warning? }], reason, duration, createdAt }] }` |
-| `GET /admin/api/active` | `{ grants: [{ id, agent, item, expiresAt }] }` |
+| `GET /admin/api/pending` | `{ pending: [card] }`, the same cards the Inbox shows, sandbox host registrations included: `{ id, subject, type: "agent" \| "host", who: { label, says?, via?, source, key?, at? }, reason, trigger?, duration, durations, want, items: [{ item, kind, text, reach, warning?, risk?, with? }], createdAt }` |
+| `GET /admin/api/active` | `{ grants: [{ id, who, item, expiresAt, text, reach, warning?, risk? }] }`, a sandbox host's approval included (revoking it removes the host) |
 | `POST /admin/api/requests/<id>/approve` `{ "duration": "2h" }` | approves every pending item on the card (`204`) |
 | `POST /admin/api/requests/<id>/deny` | denies the card (`204`) |
 | `POST /admin/api/grants/<id>/revoke` | ends the grant (`204`) |
 
 - Every route except sign-in takes only `Authorization: Bearer <token>`. The session cookie is never accepted there, and an API token is never accepted as the cookie. Anything else answers `401` in speaker's error shape (`{ "error": "denied", "message": … }`).
-- Finer decisions (unticking items, Extend, sandbox hosts, Setup, Log) stay in `/admin`.
+- Finer decisions (unticking items, Extend, Setup, Log) stay in `/admin`. A sandbox host's registration is a card like any other, so the mod approves and denies it too.
 
 The mod: link it in with `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker` (from the repository root), copy its `config.example.json` to `config.json` with speaker's URL, and check it with `herdr-app check ~/.config/herdr-app/mods/speaker`. It docks as a one-line bar at the bottom ("speaker · 2 waiting"). Click it to open the inbox and type the owner password once per Herdr start. The token stays in the mod's memory, never on disk. The bar polls every 10 seconds and posts a toast for each new request. Clicking the toast opens the inbox. Each card shows the agent, the items with any warning, the reason, a duration choice, **Approve as asked**, **Deny** and **Open in browser**. Below the cards is a short Active list with **Revoke**.
 {.ai}

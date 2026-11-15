@@ -7,7 +7,6 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { appHome, closeOverlay, nextCommand, notify, openOverlay, props, theme } from "herdr";
 import * as fs from "fs/promises";
 
-const durations = ["30m", "1h", "2h", "1d", "30d", "permanent"];
 let base; // speaker's URL, from config.json
 let token; // the owner API bearer token; gone when Herdr quits or speaker answers 401
 
@@ -65,7 +64,7 @@ export default class Speaker extends View {
       if (!this.inbox)
         for (const r of this.pending.filter((r) => !this.seen.has(r.id))) {
           this.seen.add(r.id);
-          notify({ title: `${r.agent} asks for access`, body: r.items.map((i) => i.item).join(", "), level: "warning", action: { name: "speaker.open" } });
+          notify({ title: `${r.who.label} asks for access`, body: r.items.map((i) => i.item).join(", "), level: "warning", action: { name: "speaker.open" } });
         }
       cx.notify();
     });
@@ -88,17 +87,19 @@ export default class Speaker extends View {
     const browser = (anchor) => (_e, cx) => cx.open_url(`${base}/admin${anchor}`);
     const heading = (text) => div().pt(10).text_size(11.5).text_color(t.dim).child(text);
     const card = (r) => v_flex().gap(6).p(12).rounded(9).border_1().border_color(t.border).bg(t.surface)
-      .child(h_flex().justify_between().child(div().font_semibold().child(r.agent)).child(div().text_color(t.dim).text_size(11.5).child(ago(r.createdAt))))
+      .child(h_flex().justify_between().child(div().font_semibold().child(r.who.label)).child(div().text_color(t.dim).text_size(11.5).child(ago(r.createdAt))))
+      .child(div().text_color(t.dim).text_size(11.5).child([r.who.says, r.who.via && `via ${r.who.via}`, `from ${r.who.source || "unknown address"}`].filter(Boolean).join(" · ")))
       .children(r.items.map((i) => v_flex()
-        .child(h_flex().gap(6).child(div().text_color(t.accent).child(i.item)).when(Boolean(i.text), (el) => el.child(div().text_color(t.muted).child(i.text))))
+        .child(h_flex().gap(6).child(div().text_color(t.accent).child(i.item)).when(Boolean(i.risk), (el) => el.child(div().text_color(t.blocked).child(i.risk))))
+        .child(div().text_color(t.muted).child(i.text))
         .when(Boolean(i.warning), (el) => el.child(div().text_color(t.blocked).child(i.warning)))))
-      .child(div().text_color(r.reason ? t.foreground : t.dim).child(r.reason || "No reason given"))
-      .child(h_flex().gap(4).children(durations.map((d) => {
+      .when(r.type === "agent", (el) => el.child(div().text_color(r.reason ? t.foreground : t.dim).child(r.reason || "No reason given")))
+      .when(r.durations.length > 1, (el) => el.child(h_flex().gap(4).children(r.durations.map((d) => {
         const on = (this.chosen[r.id] ?? r.duration) === d;
         return div().id(`d-${r.id}-${d}`).px(7).py(2).rounded(5).text_size(11.5).cursor_pointer()
           .bg(on ? t.selected : t.surface).text_color(on ? t.foreground : t.muted).hover((s) => s.bg(t.hover))
           .on_click((_e, cx) => { this.chosen[r.id] = d; cx.notify(); }).child(d);
-      })))
+      }))))
       .child(h_flex().gap(8).pt(4)
         .child(button(`a-${r.id}`, "Approve as asked", true, (_e, cx) => this.act(cx, () => api(`/requests/${r.id}/approve`, { duration: this.chosen[r.id] ?? r.duration }))))
         .child(button(`n-${r.id}`, "Deny", false, (_e, cx) => this.act(cx, () => api(`/requests/${r.id}/deny`, {}))))
@@ -114,7 +115,7 @@ export default class Speaker extends View {
         .children(this.pending.map(card))
         .child(heading("Active"))
         .children(this.grants.map((g) => h_flex().gap(8).items_center()
-          .child(div().flex_1().truncate().child(`${g.agent} · ${g.item}`)).child(div().text_color(t.dim).child(left(g.expiresAt)))
+          .child(div().flex_1().truncate().child(`${g.who.label} · ${g.item}`)).child(div().text_color(t.dim).child(left(g.expiresAt)))
           .child(button(`r-${g.id}`, "Revoke", false, (_e, cx) => this.act(cx, () => api(`/grants/${g.id}/revoke`, {}))))))
         .when(!this.grants.length, (el) => el.child(div().text_color(t.dim).child("No live grants")))
         .child(h_flex().pt(8).child(button("admin", "Open in browser", false, browser("")))));

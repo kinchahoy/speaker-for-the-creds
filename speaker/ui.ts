@@ -20,7 +20,6 @@ export type Setup = {
   error?: string
 }
 
-// Open Props (colours, shadows, borders, sizes, fonts) is served separately; the colour roles below pick from its palette per scheme.
 const css = `
 :root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);caret-color:var(--accent);
 --bg:light-dark(var(--gray-0),oklch(17% .012 262));--surface:light-dark(#fff,oklch(22% .015 262));--surface-2:light-dark(var(--gray-1),oklch(26% .016 262));--ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),oklch(32% .015 262));
@@ -82,7 +81,6 @@ dialog{max-width:440px;width:calc(100% - 32px);padding:20px;border:1px solid var
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 `
 
-// Each kind of item: its Lucide icon and colour hue; admin.ts builds the served sprite from these (symbol ids become i-<kind>).
 export const icons: Record<string, [icon: string, hue: number]> = {
   brand: ['key-round', 268],
   service: ['key-round', 70],
@@ -201,7 +199,6 @@ const htmxConfig = JSON.stringify({
   includeIndicatorStyles: false,
   allowEval: false,
   allowScriptTags: false,
-  // Every answer is shown (a refused form shows its message) except 204, which means the panel is unchanged.
   responseHandling: [
     { code: '204', swap: false },
     { code: '.*', swap: true },
@@ -226,7 +223,6 @@ const kinds = {
   mcp: 'MCP',
   ext: 'Extensions',
 }
-// Kind chips and a text box that narrow the cards and rows of the live panels (see pageScript).
 const filterBar = html`<div class="chips" role="search" hidden><input type="text" name="q" placeholder="Filter by name or item" aria-label="Search"><label><input type="radio" name="kind" value="" checked>All</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${mark(k)}${text}</label>`)}</div>`
 const filterEmpty = html`<div id="filter-empty" class="panel" hidden><p>No items match this filter.</p><button type="button" class="secondary" data-clear-filter>Clear filter</button></div>`
 const intros: Record<Section, string> = {
@@ -242,7 +238,6 @@ export const layout = (nonce: string | undefined, section: Section, body: Html |
     ([id, label, href]) => html`<a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}</a>`,
   )}</nav></div></header><main><p><small>${intros[section]}</small></p>${section === 'approvals' || section === 'active' ? html`${filterBar}${filterEmpty}` : ''}${typeof body === 'string' ? raw(body) : body}</main>${confirmDialog}</body></html>`
 
-// Sign-in and first-run pages: centered card with brand lockup.
 const authPage = (
   heading: string,
   intro: string,
@@ -290,30 +285,14 @@ const select = (name: string, label: string, values: readonly string[], chosen =
   html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${labels[value] ?? value}</option>`)}</select></label>`
 const area = (name: string, label: string, value = '', rows = 2) =>
   html`<label>${label}<textarea name="${name}" rows="${rows}">${value}</textarea></label>`
-// One button posting `fields`; with `confirm`, htmx asks first (via #confirm-dialog when JS is running).
 const button = (action: string, fields: Html | string, label: string, confirm = '', kind = 'secondary') =>
   html`<form method="post" action="${action}" ${raw(confirm ? `hx-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button class="${kind}">${label}</button></form>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16)
-// A time the page rewrites into the viewer's zone (UTC until the script runs); `countdown` adds the time left.
 const local = (ms: number, countdown = false) =>
   html`<time datetime="${new Date(ms).toISOString()}" data-local ${raw(countdown ? 'data-left' : '')}>${time(ms)} UTC</time>`
-const kindOf = (item: string) => (item.includes(':') ? item.split(':')[0] : 'service')
-// Where and when a sandbox host registered: told apart in the lists by address and time.
-const registered = (h: { source: string; registeredAt: number }) =>
+const registered = (h: { source: string; registeredAt?: number }) =>
   html`from ${h.source || 'unknown address'} · registered ${h.registeredAt ? local(h.registeredAt) : 'at an unknown time'}`
-// Items that can change things (or reach out with a credential) are highlighted and explicitly badged on the card.
-const risky = (item: string) => /^(ssh|secret):|\.full$|^folder:.+:rw$/.test(item)
-const riskTag = (item: string) =>
-  item.startsWith('ssh:')
-    ? 'SSH'
-    : item.startsWith('secret:')
-      ? 'secret'
-      : /\.full$|^folder:.+:rw$/.test(item)
-        ? 'read/write'
-        : ''
-// A wildcard over a whole top-level domain, such as *.com: approving it opens far more than one service.
-const broad = (host: string) => host.startsWith('*.') && !host.slice(2).includes('.')
 const empty = (text: string) => html`<p><small>${text}</small></p>`
 
 // A live panel: htmx asks again every 5 seconds with the hash of what it shows; an unchanged panel answers 204.
@@ -323,87 +302,58 @@ export const live = (id: string, inner: string) =>
   `<section id="${id}" class="panel${id === 'inbox' ? ' region' : ''}" hx-get="/admin/panel/${id}?h=${digest(inner)}" hx-trigger="every 5s" hx-swap="outerHTML">${inner}</section>`
 export const unchanged = (inner: string, hash?: string) => hash === digest(inner)
 
-// --- Inbox: sandbox hosts waiting to register and access requests, one card each ---
-export function inbox({ hosts, agents, requests, details }: View, groups: Record<string, Group>, owned: Owned) {
+export function inbox({ agents, cards }: View, groups: Record<string, Group>) {
   const byId = new Map(agents.map((a) => [a.id, a]))
   // An agent whose identity (same label and agent string) enrolled in the 30 minutes before it.
-  const twin = (a: View['agents'][number]) => {
-    const earlier = agents.filter(
-      (o) =>
-        o.id !== a.id &&
-        o.label === a.label &&
-        o.agent === a.agent &&
-        a.createdAt - o.createdAt > 0 &&
-        a.createdAt - o.createdAt < 1_800_000,
-    )
-    return earlier.length
+  const twin = (a: View['agents'][number] | undefined) => {
+    const earlier = a
+      ? agents.filter(
+          (o) =>
+            o.id !== a.id &&
+            o.label === a.label &&
+            o.agent === a.agent &&
+            a.createdAt - o.createdAt > 0 &&
+            a.createdAt - o.createdAt < 1_800_000,
+        )
+      : []
+    return a && earlier.length
       ? html` <mark>same agent enrolled ${Math.round((a.createdAt - Math.max(...earlier.map((o) => o.createdAt))) / 60_000)} min earlier</mark>`
       : ''
   }
-  // A secret's row names the hosts its value will be sent to: granting it opens those hosts.
-  const sentTo = (item: string) => {
-    const name = item.slice('secret:'.length)
-    return Object.hasOwn(owned, name)
-      ? ` · sent to ${owned[name].hosts.join(', ')}`
-      : ' · not set up: it will do nothing'
+  const pick = (i: View['cards'][number]['items'][number]) =>
+    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" checked>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark>${i.warning}</mark>` : ''}</span></label>`
+  const meta = ({ who, type, subject }: View['cards'][number]) =>
+    type === 'host'
+      ? html`<small class="card-meta" id="host-${subject}">${registered({ source: who.source, registeredAt: who.at })}</small>`
+      : who.says !== undefined
+        ? html`<small class="card-meta">says it is ${who.says}${who.via ? ` · via ${who.via}` : ''} · from ${who.source} · key <code>${who.key}</code>${twin(byId.get(subject))}</small>`
+        : ''
+  const cardHtml = (r: View['cards'][number]) => {
+    const pending = r.items.map((i) => i.item)
+    // The groups the request asked for, each with the members still pending, then the items asked for on their own.
+    const asked = r.want
+      .filter((w) => w.startsWith('group:') && Object.hasOwn(groups, w.slice(6)))
+      .map((w) => ({ name: w.slice(6), ...groups[w.slice(6)] }))
+      .map((g) => ({ ...g, members: r.items.filter((i) => g.items.includes(i.item)) }))
+      .filter((g) => g.members.length)
+    const loose = r.items.filter((i) => !asked.some((g) => g.members.includes(i)))
+    const duration =
+      r.durations.length > 1
+        ? select('duration', 'Allow access for', r.durations, r.duration)
+        : hidden('duration', r.durations[0])
+    return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${r.who.label}</strong><small>${r.type === 'host' ? 'wants to register' : local(r.createdAt)}</small></div>${meta(r)}</header>${r.type === 'agent' ? html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>` : ''}<form method="post" action="/admin/requests/${r.id}/approve">${pending.map((item) => hidden('shown', item))}${asked.map(
+      (g) =>
+        html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map(pick)}</fieldset>`,
+    )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map(pick)}</fieldset>` : ''}<div class="stub">${duration}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
   }
-  const pick = (agentId: string, item: string, bundled: Record<string, string> = {}) => {
-    const detail = details[`${agentId} ${item}`]
-    const tag = riskTag(item)
-    const hosts = item.startsWith('site:')
-      ? [item.slice('site:'.length)]
-      : item.startsWith('secret:')
-        ? (owned[item.slice('secret:'.length)]?.hosts ?? [])
-        : []
-    const wide = hosts.filter(broad)
-    return html`<label class="${risky(item) ? 'risky' : ''}"><input type="checkbox" name="items" value="${item}" checked>${mark(kindOf(item))}<span><code>${item}</code>${bundled[item] ? html` <small>(needed by ${bundled[item]}; ends with it)</small>` : ''}${tag ? html` <span class="badge badge-warn">${tag}</span>` : ''} <small>${detail ? detail.text : kindOf(item)}${item.startsWith('secret:') ? sentTo(item) : ''}</small>${detail?.warning ? html` <mark>${detail.warning}</mark>` : ''}${wide.length ? html` <mark>very broad: ${wide.join(', ')} matches every host under it</mark>` : ''}</span></label>`
-  }
-  // Approving a host removes the approved ones with the same name and address: say so on its card.
-  const replaced = (h: View['hosts'][number]) =>
-    hosts
-      .filter((o) => o.id !== h.id && o.name === h.name && o.source === h.source)
-      .map(
-        (o) =>
-          html`<p><mark>Approving replaces the ${o.status} host ${o.name} registered ${o.registeredAt ? local(o.registeredAt) : 'at an unknown time'}: it and its agents are removed.</mark></p>`,
-      )
-  const hostCards = hosts
-    .filter((h) => h.status === 'pending')
-    .map(
-      (h) =>
-        html`<article id="host-${h.id}"><header><div class="card-head"><strong>Sandbox host ${h.name}</strong><small>wants to register</small></div><small class="card-meta">${registered(h)}</small></header>${replaced(h)}<p>Approving lets this sandbox host create agents and enforce grants for ${h.kinds.join(', ') || 'no item kinds'}.</p><form method="post" action="/admin/hosts/${h.id}/approve" class="actions stub"><button class="approve">Approve</button><button class="deny" formaction="/admin/hosts/${h.id}/remove">Deny</button></form></article>`,
-    )
-  const requestCards = requests
-    .filter((r) => r.status === 'pending')
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .map((r) => {
-      const agent = byId.get(r.agentId)
-      const label = agent?.label ?? 'Unknown agent'
-      // The groups the request asked for, each with the members still pending, then the items asked for on their own.
-      const asked = r.want
-        .filter((w) => w.startsWith('group:') && Object.hasOwn(groups, w.slice(6)))
-        .map((w) => ({
-          name: w.slice(6),
-          ...groups[w.slice(6)],
-          members: groups[w.slice(6)].items.filter((i) => r.items.includes(i)),
-        }))
-        .filter((g) => g.members.length)
-      const loose = r.items.filter((item) => !asked.some((g) => g.members.includes(item)))
-      return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map(kindOf))].join(' ')}"><header><div class="card-head"><strong>${label}</strong><small>${local(r.createdAt)}</small></div>${agent ? html`<small class="card-meta">says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''} · from ${agent.source} · key <code>${agent.tokenHash.slice(0, 8)}</code>${twin(agent)}</small>` : ''}</header><p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
-        (g) =>
-          html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>`,
-      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
-    })
-  const cards = [...hostCards, ...requestCards]
   return String(
-    html`<h2>Inbox ${cards.length ? html`<small class="count">${cards.length} pending</small>` : ''}</h2>${cards.length ? html`<div class="cards">${cards}</div>` : empty('Nothing to approve. New requests appear here as soon as an agent asks for access.')}`,
+    html`<h2>Inbox ${cards.length ? html`<small class="count">${cards.length} pending</small>` : ''}</h2>${cards.length ? html`<div class="cards">${cards.map(cardHtml)}</div>` : empty('Nothing to approve. New requests appear here as soon as an agent asks for access.')}`,
   )
 }
 
-// --- Active: agents with live grants/sessions first, idle agents below, and approved sandbox hosts ---
 const chips = { enforced: '', sent: 'granted, not yet applied', 'host-offline': 'waiting for sandbox host' }
 const uses = (n: number, query: string) =>
   n ? html`<a href="/admin/log?${query}">${plural(n, 'use', 'uses')}</a>` : 'unused'
-// One line of counts: what the agent asked, what was decided, and what speaker turned away (warned when non-zero).
 const tallies = ({ counts: c }: View['agents'][number]) => {
   const warn = (n: number, word: string) => (n ? html`<span class="warn">${n} ${word}</span>` : `${n} ${word}`)
   return html`<br><small title="${c.lastRefusal ?? ''}">${c.requests} ${c.requests === 1 ? 'request' : 'requests'} · ${c.granted} granted · ${c.denied} denied · ${warn(c.refused, 'refused')} · ${warn(c.blocked, 'blocked')}</small>`
@@ -414,26 +364,24 @@ const span = (ms: number) =>
     : ms % 3_600_000 === 0
       ? `${ms / 3_600_000}h`
       : `${Math.round(ms / 60_000)}m`
-export function active({ hosts, agents, grants, sessions, details }: View) {
+export function active({ hosts, agents, grants, sessions }: View) {
   const end = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Number.POSITIVE_INFINITY)
-  const soonest = (id: string) => Math.min(Number.POSITIVE_INFINITY, ...grants.filter((g) => g.agentId === id).map(end))
-  const grantRow = (g: View['grants'][number]) => {
-    const detail = details[`${g.agentId} ${g.item}`]
-    return html`<li id="grant-${g.id}" class="grant-row" data-kind="${kindOf(g.item)}">${mark(kindOf(g.item))}<div class="grant-info"><code>${g.item}</code>${g.bundledWith.length ? html` <small>(comes with ${g.bundledWith.join(', ')} and ends with it)</small>` : ''} ${detail ? html`<small>${detail.text}</small>${detail.warning ? html` <mark>${detail.warning}</mark>` : ''}` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`${g.grantedMs ? html`<span class="meter" data-total="${g.grantedMs}"><i></i></span>` : ''}${local(Date.parse(g.expiresAt), true)}`}${chips[g.enforcement] ? html` · <mark data-state="${g.enforcement}">${chips[g.enforcement]}</mark>` : ''}${kindOf(g.item) === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small></div><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
-  }
+  const soonest = (id: string) => Math.min(Number.POSITIVE_INFINITY, ...grants.filter((g) => g.subject === id).map(end))
+  const grantRow = (g: View['grants'][number]) =>
+    html`<li id="grant-${g.id}" class="grant-row" data-kind="${g.kind}">${mark(g.kind)}<div class="grant-info"><code>${g.item}</code>${g.bundledWith.length ? html` <small>(comes with ${g.bundledWith.join(', ')} and ends with it)</small>` : ''} <small>${g.detail.text}</small>${g.detail.warning ? html` <mark>${g.detail.warning}</mark>` : ''}<br><small>${g.expiresAt === null ? html`<mark>Until revoked</mark>` : html`${g.grantedMs ? html`<span class="meter" data-total="${g.grantedMs}"><i></i></span>` : ''}${local(Date.parse(g.expiresAt), true)}`}${chips[g.enforcement] ? html` · <mark data-state="${g.enforcement}">${chips[g.enforcement]}</mark>` : ''}${g.kind === 'service' ? html` · ${uses(g.uses, `grant=${encodeURIComponent(g.id)}`)}` : ''}</small></div><div class="actions">${g.expiresAt !== null && g.grantedMs !== undefined ? button('/admin/grants/extend', hidden('id', g.id), `Extend ${span(g.grantedMs)}`) : ''}${button('/admin/grants/revoke', hidden('id', g.id), 'Revoke', `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`)}</div></li>`
   const agentCard = (a: View['agents'][number], mine: View['grants'], open: View['sessions']) =>
-    html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => kindOf(g.item)), ...open.map(() => 'ssh')])].join(' ')}"><header>${mark('agent')}<span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header>${mine.length || open.length ? html`<ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li class="grant-row" data-kind="ssh">${mark('ssh')}<div class="grant-info"><code>${s.what}</code><br><small>SSH session open since ${local(s.started)}</small></div><div class="actions">${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</div></li>`)}</ul>` : ''}</article>`
+    html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh')])].join(' ')}"><header>${mark('agent')}<span><strong>${a.label}</strong> <small>${a.agent}${a.sandboxHost ? ` · via ${a.sandboxHost}` : ''} · ${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html` · last used ${local(a.lastUsedAt)}` : ''}</small>${tallies(a)}</span>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</header>${mine.length || open.length ? html`<ul class="rows">${mine.map(grantRow)}${open.map((s) => html`<li class="grant-row" data-kind="ssh">${mark('ssh')}<div class="grant-info"><code>${s.what}</code><br><small>SSH session open since ${local(s.started)}</small></div><div class="actions">${button('/admin/ssh/sessions/end', hidden('id', s.id), 'End', `End this SSH session now? ${s.what}`)}</div></li>`)}</ul>` : ''}</article>`
   const sorted = [...agents].sort((a, b) => soonest(a.id) - soonest(b.id))
   const withAccess: Html[] = []
   const idle: Html[] = []
   for (const a of sorted) {
-    const mine = grants.filter((g) => g.agentId === a.id).sort((x, y) => end(x) - end(y))
+    const mine = grants.filter((g) => g.subject === a.id).sort((x, y) => end(x) - end(y))
     const open = sessions.filter((s) => s.agent === a.id)
     if (mine.length || open.length) withAccess.push(agentCard(a, mine, open))
     else idle.push(agentCard(a, mine, open))
   }
   const hostBlocks = hosts
-    .filter((h) => h.status === 'approved')
+    .filter((h) => h.grant)
     .map(
       (h) =>
         html`<article><header>${mark('host')}<span><strong>Sandbox host ${h.name}</strong> <small>${h.kinds.join(', ') || 'no item kinds'} · approved · ${registered(h)}</small></span>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</header></article>`,
@@ -443,7 +391,6 @@ export function active({ hosts, agents, grants, sessions, details }: View) {
   )
 }
 
-// --- Setup: services, secrets, groups, SSH targets and shares, the owner password ---
 const groupErrors: Record<string, string> = {
   empty: 'Group not saved: list at least one item, one per line.',
   line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
@@ -489,7 +436,6 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
   return html`${jumpNav}<section class="panel" id="setup-services"><h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line (adding a host ends the grants already given for this secret)')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details></section><section class="panel" id="groups"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner password</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section><p><small>Credentials stay on this server.</small></p>`
 }
 
-// --- Log: newest first, narrowed by the filters in the address ---
 const s = (value: unknown) => String(value ?? '')
 const what = (e: LogEntry): Html | '' => {
   if (e.event === 'ssh_file') return html`<code>${s(e.op)} ${s(e.path)}</code> <small>${s(e.share ?? e.target)}</small>`

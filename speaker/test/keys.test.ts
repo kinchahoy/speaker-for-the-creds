@@ -275,12 +275,18 @@ test('the owner API: sign-in gives a bearer token that lists, approves, denies a
     assert.equal(response.status, 403)
     return ((await response.json()) as { request: string }).request
   }
-  type Pending = { id: string; agent: string; items: { item: string }[]; reason: string; duration: string }
+  type Pending = {
+    id: string
+    who: { label: string }
+    items: { item: string; risk?: string }[]
+    reason: string
+    duration: string
+  }
   const pending = async () => ((await (await api('/pending', token)).json()) as { pending: Pending[] }).pending
   const first = await blocked()
   assert.deepEqual(
-    (await pending()).map((r) => [r.id, r.agent, r.items.map((i) => i.item)]),
-    [[first, 'tok', ['demo.full']]],
+    (await pending()).map((r) => [r.id, r.who.label, r.items.map((i) => [i.item, i.risk])]),
+    [[first, 'tok', [['demo.full', 'read/write']]]],
   )
   assert.equal((await api(`/requests/${first}/approve`, token, { duration: '30m' })).status, 204)
   assert.equal((await api(`/requests/${first}/approve`, token, { duration: '30m' })).status, 409)

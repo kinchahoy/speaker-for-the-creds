@@ -17,6 +17,7 @@ import { promisify } from 'node:util'
 import type { Context, Hono } from 'hono'
 import writeFile from 'write-file-atomic'
 import { z } from 'zod'
+import type { Description } from './engine.ts'
 import { type SessionState, sessionTable, transition } from './lifecycle.ts'
 import type { FromSpeaker, ToSpeaker } from './relay.ts'
 
@@ -348,11 +349,14 @@ export async function createJump(env: Env) {
   const sshGrants = (agentId?: string) =>
     env.grants().filter((grant) => overSsh(grant) && (agentId === undefined || grant.agentId === agentId))
   // The card's view of an item: what it reaches, and a warning when it is broader than it looks.
-  function describe(agentId: string, item: string) {
+  function describe(item: string): Description {
     const target = settings.targets[targetOf(item) ?? '']
+    const at = (t: Target) => `${t.account}@${t.host}:${t.port}`
     if (target)
       return {
-        text: `commands as ${target.account}@${target.host}:${target.port}`,
+        text: `commands as ${at(target)}`,
+        reach: [at(target)],
+        risk: 'SSH',
         warning: target.sudo
           ? 'passwordless sudo works for this account'
           : target.account === 'root'
@@ -361,11 +365,13 @@ export async function createJump(env: Env) {
       }
     const folder = shareOf(item)
     const share = folder && settings.shares[folder.name]
-    if (!folder || !share) return undefined
+    const host = share && settings.targets[share.target]
+    if (!folder || !share || !host) return { text: 'no longer set up', reach: [] }
     return {
       text: `${share.target}:${share.path} · ${folder.rw ? 'read-write' : 'read-only'} · over SSH`,
-      warning:
-        settings.targets[share.target]?.home === share.path ? "this share is the account's home directory" : undefined,
+      reach: [`${at(host)}:${share.path}`],
+      risk: folder.rw ? 'read/write' : undefined,
+      warning: host.home === share.path ? "this share is the account's home directory" : undefined,
     }
   }
   const setup = (error?: string): SshSetup => ({
