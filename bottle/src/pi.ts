@@ -314,8 +314,12 @@ const checked = async (operation: string, promise: Promise<CommandResult>) => {
 
 /** Pi runs under dtach in the guest. dtach starts pi-launch; `dtach -p` pushes keystrokes to it. */
 const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
-/** True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone would wait forever. */
-const alive = "ps -C pi -o stat= | grep -qv '^Z'";
+/**
+ * True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone
+ * would wait forever. Pi names itself `pi` only once loaded; on a cold disk it runs for a while as node with
+ * /usr/local/bin/pi in its arguments, so either counts (the `[i]` keeps this shell's own command line from matching).
+ */
+const alive = "ps -eo stat=,comm=,args= | grep -v '^Z' | grep -qE '^[^ ]+ +pi |/usr/local/bin/p[i] '";
 /** pi-launch sends Pi's stderr here, since dtach's terminal is gone once Pi exits. */
 const stderrLog = "/run/pi.err";
 const running = async (guest: Guest) => (await guest.exec(alive)).exitCode === 0;
