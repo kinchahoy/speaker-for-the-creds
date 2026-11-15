@@ -626,10 +626,10 @@ test('a card lists groups and loose items, and Approve decides only the items it
   assert.deepEqual([done.status, done.denied], ['decided', ['extra.full']])
 })
 
-test('the admin pages have no JSON routes', async (t) => {
+test('the owner session cookie reaches no JSON route, and the live panels poll', async (t) => {
   const f = await setup(t)
-  for (const path of ['/admin/api/requests', '/admin/api/grants'])
-    assert.equal((await f.call(path, { headers: f.ownerHeaders })).status, 404)
+  for (const path of ['/admin/api/pending', '/admin/api/active', '/admin/api/requests'])
+    assert.equal((await f.call(path, { headers: f.ownerHeaders })).status, 401)
   // A live panel polls with the hash of what it shows: unchanged answers 204, a new request answers the new panel.
   const poll = /hx-get="([^"]+)"/.exec(await (await f.call('/admin', { headers: f.ownerHeaders })).text())?.[1] ?? ''
   assert.equal((await f.call(poll, { headers: f.ownerHeaders })).status, 204)

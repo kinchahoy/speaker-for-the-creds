@@ -1,13 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { once } from 'node:events'
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
-import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
-import { setTimeout as sleep } from 'node:timers/promises'
 import { createApp, readConfig } from '../server.ts'
 import { freePorts, ownerPassword, sessionCookie, quiet, setOwnerPassword } from './owner.ts'
 
@@ -111,23 +107,10 @@ test('a wrong password is refused and sign-in is rate limited', async (t) => {
   assert.equal((await restarted.enroll('tok')).status, 503)
 })
 
-test('agents and sandbox hosts get `locked` until the owner signs in, and a push announces the restart', async (t) => {
+test('agents and sandbox hosts get `locked` until the owner signs in', async (t) => {
   const dir = await dataDir(t)
   await setOwnerPassword((await start(dir)).call)
-  const pushes: { message: string; click: string }[] = []
-  const ntfy = createServer(async (req, res) => {
-    let text = ''
-    for await (const chunk of req) text += chunk
-    pushes.push(JSON.parse(text))
-    res.end('{}')
-  }).listen(0, '127.0.0.1')
-  await once(ntfy, 'listening')
-  t.after(() => ntfy.close())
-
-  const restarted = await start(dir, {
-    NTFY_URL: `http://127.0.0.1:${(ntfy.address() as AddressInfo).port}`,
-    NTFY_TOPIC: 'speaker',
-  })
+  const restarted = await start(dir)
   const bearer = { authorization: 'Bearer anything' }
   for (const [path, init] of [
     ['/_speaker/agents', { method: 'POST', body: '{}' }],
@@ -141,12 +124,6 @@ test('agents and sandbox hosts get `locked` until the owner signs in, and a push
   }
   assert.equal((await restarted.call('/_speaker/health')).status, 200)
   assert.equal((await restarted.call('/skill.md')).status, 200)
-  while (!pushes.length) await sleep(20)
-  assert.deepEqual(
-    pushes.map((push) => [push.message, push.click]),
-    [['Speaker restarted: sign in at http://localhost/admin to unlock', 'http://localhost/admin#unlock']],
-  )
-
   assert.equal((await restarted.signIn()).status, 303)
   assert.equal((await restarted.enroll('tok')).status, 201)
 })
@@ -252,4 +229,91 @@ test('changing the password re-wraps the keys: the old password stops working, t
     await restarted.call('/admin?section=services', { headers: { cookie: sessionCookie(back) } })
   ).text()
   assert.match(page, /Credential: configured/)
+})
+
+test('the owner API: sign-in gives a bearer token that lists, approves, denies and revokes; the cookie is refused', async (t) => {
+  const dir = await dataDir(t)
+  await setOwnerPassword((await start(dir)).call)
+  const s = await start(dir)
+  const api = (path: string, token?: string, body?: object, headers: Record<string, string> = {}) =>
+    s.call(`/admin/api${path}`, {
+      method: body ? 'POST' : 'GET',
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+  const signIn = async (password = ownerPassword) => api('/signin', undefined, { password })
+
+  // API sign-in failures count toward the form's lockout (5 in all), and the API sign-in unlocks speaker.
+  for (let i = 0; i < 3; i++) assert.equal((await signIn('wrong')).status, 401)
+  assert.equal((await s.enroll('tok')).status, 503)
+  const signedIn = await signIn()
+  assert.equal(signedIn.status, 200)
+  const { token } = (await signedIn.json()) as { token: string }
+  assert.equal((await s.enroll('tok')).status, 201)
+
+  // Only the bearer token opens /admin/api: no token, a wrong one, or the session cookie get 401 in the error shape.
+  const cookie = sessionCookie(await s.signIn())
+  for (const response of [
+    await api('/pending'),
+    await api('/pending', 'not-a-token'),
+    await api('/pending', undefined, undefined, { cookie }),
+    await api('/pending', cookie.split('=')[1]),
+    await api('/requests/x/deny', undefined, {}, { cookie, origin: 'http://localhost' }),
+  ]) {
+    assert.equal(response.status, 401)
+    assert.equal(((await response.json()) as { error: string }).error, 'denied')
+  }
+  // And the token is no session cookie.
+  assert.match(await (await s.call('/admin', { headers: { cookie: `speaker_session=${token}` } })).text(), /Sign in/)
+
+  const blocked = async () => {
+    const response = await s.call('/demo/x', { method: 'POST', headers: { authorization: 'Bearer tok' } })
+    assert.equal(response.status, 403)
+    return ((await response.json()) as { request: string }).request
+  }
+  type Pending = { id: string; agent: string; items: { item: string }[]; reason: string; duration: string }
+  const pending = async () => ((await (await api('/pending', token)).json()) as { pending: Pending[] }).pending
+  const first = await blocked()
+  assert.deepEqual(
+    (await pending()).map((r) => [r.id, r.agent, r.items.map((i) => i.item)]),
+    [[first, 'tok', ['demo.full']]],
+  )
+  assert.equal((await api(`/requests/${first}/approve`, token, { duration: '30m' })).status, 204)
+  assert.equal((await api(`/requests/${first}/approve`, token, { duration: '30m' })).status, 409)
+  assert.deepEqual(await pending(), [])
+  const { grants } = (await (await api('/active', token)).json()) as { grants: { id: string; item: string }[] }
+  assert.deepEqual(
+    grants.map((g) => g.item),
+    ['demo.full'],
+  )
+  assert.equal((await api(`/grants/${grants[0].id}/revoke`, token, {})).status, 204)
+  assert.deepEqual(((await (await api('/active', token)).json()) as { grants: [] }).grants, [])
+  assert.equal((await api(`/grants/${grants[0].id}/revoke`, token, {})).status, 404)
+
+  const second = await blocked()
+  assert.equal((await api(`/requests/${second}/deny`, token, {})).status, 204)
+  assert.deepEqual(await pending(), [])
+  // The same audit line the form decision writes.
+  const log = await (await s.call(`/admin/log?q=${second}`, { headers: { cookie } })).text()
+  assert.match(log, /request decided/)
+})
+
+test('failed owner API sign-ins and form sign-ins share one lockout', async (t) => {
+  const dir = await dataDir(t)
+  await setOwnerPassword((await start(dir)).call)
+  const s = await start(dir)
+  const apiSignIn = (password: string) =>
+    s.call('/admin/api/signin', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+  for (let i = 0; i < 3; i++) assert.equal((await apiSignIn('wrong')).status, 401)
+  for (let i = 0; i < 2; i++) assert.equal((await s.signIn('wrong')).status, 401)
+  assert.equal((await s.signIn()).status, 429)
+  assert.equal((await apiSignIn(ownerPassword)).status, 429)
 })

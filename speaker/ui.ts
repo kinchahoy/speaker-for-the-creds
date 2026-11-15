@@ -388,16 +388,10 @@ export function inbox({ hosts, agents, requests, details }: View, groups: Record
         }))
         .filter((g) => g.members.length)
       const loose = r.items.filter((item) => !asked.some((g) => g.members.includes(item)))
-      const notice = {
-        disabled: '',
-        sending: 'Sending phone notification…',
-        sent: 'Phone notification sent',
-        failed: 'Phone notification failed. Access stays locked.',
-      }[r.notification]
       return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map(kindOf))].join(' ')}"><header><div class="card-head"><strong>${label}</strong><small>${local(r.createdAt)}</small></div>${agent ? html`<small class="card-meta">says it is ${agent.agent}${agent.sandboxHost ? ` · via ${agent.sandboxHost}` : ''} · from ${agent.source} · key <code>${agent.tokenHash.slice(0, 8)}</code>${twin(agent)}</small>` : ''}</header><p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p><form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((item) => hidden('shown', item))}${asked.map(
         (g) =>
           html`<fieldset><legend><label><input type="checkbox" data-all checked><strong>${g.name}</strong> <small>${g.description ? `${g.description} · ` : ''}${plural(g.members.length, 'item', 'items')}</small></label></legend>${g.members.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>`,
-      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger || notice ? html`<footer><small>${r.trigger ? html`Triggered by <code>${r.trigger}</code> ` : ''}${notice}</small></footer>` : ''}</article>`
+      )}${loose.length ? html`<fieldset>${asked.length ? html`<legend>Not in a group</legend>` : ''}${loose.map((item) => pick(r.agentId, item, r.bundled))}</fieldset>` : ''}<div class="stub">${select('duration', 'Allow access for', ['30m', '1h', '2h', '1d', '30d', 'permanent'], r.duration)}<div class="actions"><button class="approve">Approve</button><button class="deny" formaction="/admin/requests/${r.id}/deny">Deny</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
     })
   const cards = [...hostCards, ...requestCards]
   return String(

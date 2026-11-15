@@ -72,7 +72,7 @@ A call without access answers `approval_required` with the request's ID, and fil
 | Custom header | Speaker, in the encrypted store; the header name is service configuration | The configured upstream API, in that header |
 | None | Nothing | Nothing: a keyless remote MCP server or API; speaker only gates and forwards |
 
-Speaker keeps these values encrypted on its data volume, decrypts them in memory after you sign in, and injects them only when it forwards a granted request. Agents receive a speaker token, never the upstream credential. The upstream API receives the real credential and the request data. If you set `NTFY_TOKEN`, speaker sends it to the notification service.
+Speaker keeps these values encrypted on its data volume, decrypts them in memory after you sign in, and injects them only when it forwards a granted request. Agents receive a speaker token, never the upstream credential. The upstream API receives the real credential and the request data.
 {.ai}
 
 <!-- author: ai -->
@@ -86,7 +86,7 @@ All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/sto
 
 - `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
 - In scripts, form posts to `/admin` (sign-in, approvals) need an `Origin` header matching the URL, such as `Origin: http://192.168.1.10:3000`. A successful sign-in answers `303` with the session cookie to send on later posts. Do not retry a failed sign-in blindly: after 5 failures speaker refuses for 15 minutes.
-- One lock rule: speaker serves agents, sandbox hosts, the secrets proxy and the proxy certificate only after you have set the owner password and signed in. Until then (first run, or after every restart) agent and sandbox-host calls answer `503` `locked` with a `next` and a `tell_user` line, and the proxy refuses. `/admin` shows only sign-in or the first-run password page. If ntfy is set, one push after a restart asks you to sign in. Signing in unlocks.
+- One lock rule: speaker serves agents, sandbox hosts, the secrets proxy and the proxy certificate only after you have set the owner password and signed in. Until then (first run, or after every restart) agent and sandbox-host calls answer `503` `locked` with a `next` and a `tell_user` line, and the proxy refuses. `/admin` shows only sign-in or the first-run password page. Signing in (the form or the owner API) unlocks.
 - Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
 - Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.
 
@@ -133,23 +133,37 @@ The description is optional. A group may hold any items except other groups. Cop
 A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items.
 {.ai}
 
-## Phone notifications
+## Inbox and Active
 
 <sub>AI-written</sub>
 
-```dotenv
-PUBLIC_URL=https://speaker.example.com
-NTFY_URL=https://your-ntfy-server.example
-NTFY_TOPIC=speaker-approvals
-NTFY_TOKEN=your-publish-token
-```
-
-- Speaker sends one ntfy push for each new sandbox host and request. A push carries labels and a link to `/admin`. It holds no keys and gives no approval authority.
-- Set `NTFY_URL` and `NTFY_TOPIC` together. The token is optional.
 - Each agent in `/admin` Active has a line of counts (requests, granted, denied, refused, blocked). Refused (rejected before reaching you, such as an unknown name) and blocked (a call refused for lack of a grant) turn red when non-zero; hover for the latest message. Counts reset when speaker restarts.
 - The Inbox and Active panels in `/admin` refresh every 5 seconds. Pending requests expire after 2 hours.
 - A card names the agent, where it came from, and "key" followed by the first 8 characters of the fingerprint (hash) of its agent token. Two agents that call themselves the same thing have different keys, so use it to tell them apart.
-- Self-hosted ntfy needs its [upstream push relay](https://docs.ntfy.sh/config/#ios-instant-notifications) for instant iOS delivery.
+
+<!-- author: ai -->
+
+## Owner API and the Herdr mod
+
+<sub>AI-written</sub>
+
+A small JSON API under `/admin/api` lets the Herdr mod in `herdr/mods/speaker` review and decide requests. It calls the same decide and revoke code as the `/admin` forms and writes the same audit lines.
+{.ai}
+
+| Route | Does |
+| --- | --- |
+| `POST /admin/api/signin` `{ "password": "…" }` | `{ "token": "…" }`: the same password check, rate limit (5 failures per 15 minutes, shared with the form) and audit lines as the form; it unlocks speaker after a restart the same way. The token lives in speaker's in-memory session map for 12 hours. |
+| `GET /admin/api/pending` | `{ pending: [{ id, agent, items: [{ item, text?, warning? }], reason, duration, createdAt }] }` |
+| `GET /admin/api/active` | `{ grants: [{ id, agent, item, expiresAt }] }` |
+| `POST /admin/api/requests/<id>/approve` `{ "duration": "2h" }` | approves every pending item on the card (`204`) |
+| `POST /admin/api/requests/<id>/deny` | denies the card (`204`) |
+| `POST /admin/api/grants/<id>/revoke` | ends the grant (`204`) |
+
+- Every route except sign-in takes only `Authorization: Bearer <token>`. The session cookie is never accepted there, and an API token is never accepted as the cookie. Anything else answers `401` in speaker's error shape (`{ "error": "denied", "message": … }`).
+- Finer decisions (unticking items, Extend, sandbox hosts, Setup, Log) stay in `/admin`.
+
+The mod: link it in with `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker` (from the repository root), copy its `config.example.json` to `config.json` with speaker's URL, and check it with `herdr-app check ~/.config/herdr-app/mods/speaker`. It docks as a one-line bar at the bottom ("speaker · 2 waiting"). Click it to open the inbox and type the owner password once per Herdr start. The token stays in the mod's memory, never on disk. The bar polls every 10 seconds and posts a toast for each new request. Clicking the toast opens the inbox. Each card shows the agent, the items with any warning, the reason, a duration choice, **Approve as asked**, **Deny** and **Open in browser**. Below the cards is a short Active list with **Revoke**.
+{.ai}
 
 <!-- author: ai -->
 

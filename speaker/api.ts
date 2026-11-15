@@ -351,7 +351,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         core.hosts.set(host.id, host)
         await core.saveHosts()
         core.audit('host_registered', { host: host.id, name: host.name })
-        void core.notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
         // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
         return c.json(
           { id: host.id, status: host.status, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },

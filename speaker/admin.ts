@@ -7,6 +7,7 @@ import { NONCE, secureHeaders } from 'hono/secure-headers'
 import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
+  agentError,
   type Core,
   type Host,
   decisionSchema,
@@ -80,9 +81,18 @@ export function adminApp(core: Core) {
   // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'
+  const current = (id: string | undefined) => id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
+  // Owner API tokens share the session map and lifetime, but are only ever accepted as a bearer token, never as the
+  // cookie (and a cookie's id is never accepted as a bearer token).
+  const apiTokens = new Set<string>()
   const signedIn = (c: Context) => {
     const id = getCookie(c, sessionCookie)
-    return id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
+    return current(id) && !apiTokens.has(id as string)
+  }
+  const newSession = () => {
+    const id = core.rid()
+    core.sessions.set(id, Date.now() + sessionLife)
+    return id
   }
   // Sign-in is the only way in: the first visit sets the owner password, later visits sign in with it.
   const signInLimit = rateLimiter({
@@ -93,15 +103,30 @@ export function adminApp(core: Core) {
     keyGenerator: (c) => core.sourceOf(c),
     message: 'Too many failed attempts; wait a few minutes.',
   })
+  const passwordBody = z.object({ password: z.string() })
+  // One password check for the form and the API: same audit lines, and it unlocks speaker after a restart.
+  const signIn = async (c: Context, password: string) => {
+    try {
+      await core.signIn(password)
+    } catch (error) {
+      if (!(error instanceof WrongPassword)) throw error
+      core.audit('signin_failed', { source: core.sourceOf(c) })
+      return false
+    }
+    core.audit('owner_signed_in')
+    return true
+  }
+  const revokeGrant = (id: string) => {
+    if (!core.grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
+    core.revokeGrants((grant) => grant.id === id)
+  }
   const authPage = (c: Context, error?: string, status: 200 | 400 | 401 = 200) => {
     // Plain HTTP from another machine sends the password in clear.
     const exposed = !core.baseOf(c).startsWith('https:') && !/^(127\.|::1$)/.test(core.sourceOf(c))
     return c.html(core.vault.state !== 'unset' ? signInPage(exposed, error) : setPasswordPage(exposed, error), status)
   }
   const startSession = (c: Context) => {
-    const id = core.rid()
-    core.sessions.set(id, Date.now() + sessionLife)
-    setCookie(c, sessionCookie, id, {
+    setCookie(c, sessionCookie, newSession(), {
       httpOnly: true,
       sameSite: 'Strict',
       secure: core.baseOf(c).startsWith('https:'),
@@ -119,17 +144,67 @@ export function adminApp(core: Core) {
   })
   admin.post('/signin', signInLimit, async (c) => {
     if (core.vault.state === 'unset') return c.redirect('/admin', 303)
-    const { password } = z.object({ password: z.string() }).parse(await c.req.parseBody())
-    try {
-      await core.signIn(password)
-    } catch (error) {
-      if (!(error instanceof WrongPassword)) throw error
-      core.audit('signin_failed', { source: core.sourceOf(c) })
-      return authPage(c, 'Wrong password.', 401)
-    }
-    core.audit('owner_signed_in')
+    const { password } = passwordBody.parse(await c.req.parseBody())
+    if (!(await signIn(c, password))) return authPage(c, 'Wrong password.', 401)
     return startSession(c)
   })
+  // The owner API (the Herdr mod): the same sign-in, then bearer tokens only. The cookie is never accepted here, so a
+  // browser page cannot ride the owner's session into it.
+  const apiError = (c: Context, status: 401 | 404 | 409, message: string) =>
+    agentError(c, status, status === 401 ? 'denied' : status === 404 ? 'not_found' : 'conflict', message)
+  admin.post('/api/signin', signInLimit, async (c) => {
+    if (core.vault.state === 'unset') return apiError(c, 409, 'Set the owner password at /admin first')
+    const { password } = passwordBody.parse(await c.req.json())
+    if (!(await signIn(c, password))) return apiError(c, 401, 'Wrong password')
+    const token = newSession()
+    apiTokens.add(token)
+    return c.json({ token })
+  })
+  admin.use('/api/*', async (c, next) => {
+    const token = c.req.header('authorization')?.match(/^Bearer (\S+)$/)?.[1]
+    if (current(token) && apiTokens.has(token as string)) return await next()
+    return apiError(c, 401, 'Sign in with POST /admin/api/signin and send Authorization: Bearer <token>')
+  })
+  admin.get('/api/pending', (c) => {
+    const { requests, agents, details } = core.view()
+    const pending = requests
+      .filter((r) => r.status === 'pending')
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((r) => ({
+        id: r.id,
+        agent: agents.find((a) => a.id === r.agentId)?.label ?? 'Unknown agent',
+        items: r.items.map((item) => ({ item, ...details[`${r.agentId} ${item}`] })),
+        reason: r.reason,
+        duration: r.duration,
+        createdAt: r.createdAt,
+      }))
+    return c.json({ pending })
+  })
+  admin.get('/api/active', (c) =>
+    c.json({
+      grants: core.view().grants.map((g) => ({ id: g.id, agent: g.label, item: g.item, expiresAt: g.expiresAt })),
+    }),
+  )
+  // Approve as asked: every item still pending on the card.
+  const pendingOf = (id: string) => {
+    const request = core.requests.get(id)
+    return request ? itemsWhere(request, 'pending') : []
+  }
+  admin.post('/api/requests/:id/approve', async (c) => {
+    const { duration } = decisionSchema.pick({ duration: true }).parse(await c.req.json())
+    const items = pendingOf(c.req.param('id'))
+    await core.decide(c.req.param('id'), items, items, duration)
+    return c.body(null, 204)
+  })
+  admin.post('/api/requests/:id/deny', async (c) => {
+    await core.decide(c.req.param('id'), [], pendingOf(c.req.param('id')), '2h')
+    return c.body(null, 204)
+  })
+  admin.post('/api/grants/:id/revoke', (c) => {
+    revokeGrant(c.req.param('id'))
+    return c.body(null, 204)
+  })
+  admin.all('/api/*', (c) => apiError(c, 404, 'No such owner API route'))
   admin.use('*', async (c, next) => {
     if (signedIn(c)) return await next()
     if (c.req.method !== 'GET') return c.text('Sign in at /admin', 401)
@@ -410,9 +485,7 @@ export function adminApp(core: Core) {
     return redirect(c)
   })
   admin.post('/grants/revoke', async (c) => {
-    const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!core.grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
-    core.revokeGrants((grant) => grant.id === id)
+    revokeGrant(z.object({ id: idSchema }).parse(await fields(c)).id)
     return redirect(c)
   })
   // Targets, shares and open sessions; a target or share that goes takes its grants with it.

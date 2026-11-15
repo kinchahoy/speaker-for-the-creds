@@ -189,7 +189,7 @@ For every SSH session: grant, agent, key fingerprint, source address, target, th
 
 All secrets (service keys, secrets for sandboxes, and speaker's SSH key) live in speaker and are encrypted with one random data key (AES-256-GCM). Secret values never leave speaker except inside requests to their allowed hosts (see Secrets). The data key is wrapped with a key derived from the owner's sign-in password (scrypt); a successful unwrap is also the password check, so no separate password hash is stored.
 
-- Speaker starts **locked**. It sends a push "speaker restarted: sign in to unlock"; signing in to `/admin` unwraps the data key, and secrets exist in clear only in memory. One rule covers the first run too: until the owner has set a password and signed in, agent, sandbox-host, secrets-proxy and proxy-certificate calls are refused (`locked` over HTTP, a refusal line from the proxy).
+- Speaker starts **locked**; agents are told to ask the owner to sign in. Signing in to `/admin` (or the owner API) unwraps the data key, and secrets exist in clear only in memory. One rule covers the first run too: until the owner has set a password and signed in, agent, sandbox-host, secrets-proxy and proxy-certificate calls are refused (`locked` over HTTP, a refusal line from the proxy).
 - Changing the password re-wraps the data key. A forgotten password means re-entering the service keys and re-adding speaker's key on targets; nothing else is lost.
 - A copied disk or backup reveals no secret. A takeover of the running process can, which is why grants stay short and target accounts limited.
 
@@ -204,7 +204,7 @@ The pages use Open Props tokens (`/admin/assets/open-props.css`), a small inline
 - **Setup** (`/admin?section=services`): services (URL, key, read and write rules, notes for agents), secrets with their allowed hosts, groups, SSH targets and shares, and the owner password.
 - **Log:** recent forwarded calls, SSH sessions and file operations, decisions, and requests for unknown names, filterable by agent, grant, service, target or share. It is an in-memory buffer; standard output is the full record.
 
-New requests and the locked state go to the owner's phone as a push notification that carries only a link to the card.
+**Owner API** (`/admin/api`, for the Herdr mod): sign in with the password for a bearer token, list pending requests and live grants, approve a card as asked, deny it, revoke a grant. It calls the same decide and revoke functions as the forms. Everything finer stays in the pages.
 
 ## Sandbox hosts
 
@@ -253,11 +253,12 @@ What the table means in practice:
 | `GET /_speaker/hosts/self` | sandbox host | `{ id, name, status: "approved" }`; a pending or unknown host token gets the usual `401` (`approval_required`, `enroll` or `register`), an agent token `403` `denied` |
 | `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
 | `GET /_speaker/health` | anyone | liveness |
-| `/admin/...` | owner | HTML forms only |
+| `/admin/...` | owner | HTML forms, session cookie |
+| `/admin/api/...` | owner | JSON, bearer token only (see Security model) |
 
 ## Deployment
 
-One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally a push topic, `TRUSTED_PROXY`, and the required `PROXY_PORT` (the secrets proxy) and `SSH_PORT` (the jump server). Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
+One container, running as a non-root user with a read-only root filesystem, no added capabilities and no privilege escalation, image pinned by digest. Settings: the public URL, optionally `TRUSTED_PROXY`, and the required `PROXY_PORT` (the secrets proxy) and `SSH_PORT` (the jump server). Everything else (owner password, services, targets, shares, groups) is set in `/admin` on first run.
 
 Placement:
 
@@ -270,7 +271,7 @@ Placement:
 
 - **Agent tokens** are random, stored by speaker only as SHA-256 hashes, kept by agents in a user-only header file, and bound to the address they enrolled from. Sandbox host tokens are bound the same way, to the address the host registered from; from anywhere else the host is told to register again. A revoked agent token stays refused, at enrollment too: asking again takes a new token, which reaches the owner as a new agent. That address is the socket address; when the connection comes from `TRUSTED_PROXY`, it is the last `X-Forwarded-For` entry, the one that proxy appended. `X-Forwarded-For` from any other sender is ignored.
 - **Enrollment** is unauthenticated but rate limited (20 per 15 minutes in total). It refuses malformed hashes and the hash of an empty token; enrolling again with the same token returns the existing agent.
-- **Approval** happens only in `/admin`, behind the owner's sign-in, with same-origin checks on every change. Card details supplied by the agent (label, agent string, reason) are shown as claims; the source address and fingerprint are speaker's own.
+- **Approval** happens only in `/admin`, behind the owner's sign-in, with same-origin checks on every change. The owner API under `/admin/api` takes only `Authorization: Bearer <token>` from its own sign-in (same password check, rate limit and audit lines). It never accepts the session cookie, and its tokens are never accepted as the cookie, so a browser page cannot ride the owner's session into it and no CSRF surface is added. Its tokens share the in-memory session map and lifetime and die with a restart. The Herdr mod holds its token in memory only; a direct agent running as the owner's user account on the same machine could read the mod's memory or edit its files, the single-machine limit in Rules in detail. Card details supplied by the agent (label, agent string, reason) are shown as claims; the source address and fingerprint are speaker's own.
 - **Upstream calls** do not follow redirects; a key embedded in an upstream URL is redacted from replies and logs.
 - **Limits of the model:** speaker cannot stop an agent from misusing access it was granted, and a takeover of the running speaker exposes every unlocked key. Hence short grants, least-privilege upstream tokens and limited target accounts, everything logged, and one-click revoke.
 

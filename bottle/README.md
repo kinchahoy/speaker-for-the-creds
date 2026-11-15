@@ -144,7 +144,7 @@ To start a sandboxed Pi from Herdr's + menu, add a program to `~/.config/herdr-a
 { "programs": { "bottle": { "name": "Pi (sandbox)", "run": ["bottle", "run"] } } }
 ```
 
-`herdr/mods/speaker` in this repository is a Herdr mod that toasts each new speaker card and opens it in the browser when clicked. It reads speaker's ntfy topic, so speaker needs `NTFY_URL` and `NTFY_TOPIC`. Link it in with `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`, copy its `config.example.json` to `config.json` with the same server and topic (and a read token if the topic needs one), and check it with `herdr-app check ~/.config/herdr-app/mods/speaker`. It docks as a one-line bar at the bottom that shows the newest card.
+`herdr/mods/speaker` in this repository is a Herdr mod for speaker's approvals: a bar with the number of waiting requests, a toast per new one, and an inbox to approve as asked, deny, or revoke. It uses speaker's owner API; installing and signing in are in speaker's README (Owner API and the Herdr mod).
 {.ai}
 
 ### Guest image

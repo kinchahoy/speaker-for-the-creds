@@ -19,8 +19,9 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   const app = new Hono<Env>()
   app.onError((error, c) => {
     if (error instanceof HTTPException) {
-      // Agent routes answer in JSON; admin pages keep their plain-text messages.
-      if (error.res || c.req.path.startsWith('/admin')) return error.getResponse()
+      // Agent routes and the owner API answer in JSON; admin pages keep their plain-text messages.
+      if (error.res || (c.req.path.startsWith('/admin') && !c.req.path.startsWith('/admin/api/')))
+        return error.getResponse()
       return agentError(c, error.status, 'invalid', error.message)
     }
     if (error instanceof IllegalTransition) return agentError(c, 409, 'conflict', error.message)

@@ -234,7 +234,6 @@ export type Request = {
   grantIds: string[]
   // Sites brought only by an extension in this request (site item -> ext item): their grants end with the extension's.
   bundled?: Record<string, string>
-  notification: 'disabled' | 'sending' | 'sent' | 'failed'
   createdAt: number
   decidedAt?: number
 }
@@ -287,14 +286,8 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
     .object({
       DATA_DIR: z.string().default('./data'),
       PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-      // Required: push links and the admin CSRF origin use it.
+      // Required: the admin CSRF origin and the sign-in link in `locked` answers use it.
       PUBLIC_URL: urlSchema,
-      NTFY_URL: urlSchema.optional(),
-      NTFY_TOPIC: z
-        .string()
-        .regex(/^[a-zA-Z0-9_-]+$/)
-        .optional(),
-      NTFY_TOKEN: z.string().optional(),
       // Port of the HTTPS proxy that inserts secrets (see proxy.ts).
       PROXY_PORT: z.coerce.number().int().min(1).max(65535),
       // The jump server's port (SSH and folders over SSH).
@@ -302,7 +295,6 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
     })
-    .refine((value) => Boolean(value.NTFY_URL) === Boolean(value.NTFY_TOPIC), 'Set both NTFY_URL and NTFY_TOPIC')
     .parse(environment)
 }
 
@@ -786,38 +778,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       push()
     })
   }
-  async function notify(
-    title: string,
-    anchor: string,
-    message = 'Open the approval page to decide.',
-  ): Promise<'disabled' | 'sent' | 'failed'> {
-    if (!config.NTFY_URL) return 'disabled'
-    try {
-      const response = await fetch(config.NTFY_URL, {
-        method: 'POST',
-        redirect: 'error',
-        signal: AbortSignal.timeout(5000),
-        headers: {
-          'content-type': 'application/json',
-          ...(config.NTFY_TOKEN ? { authorization: `Bearer ${config.NTFY_TOKEN}` } : {}),
-        },
-        body: JSON.stringify({
-          topic: config.NTFY_TOPIC,
-          title,
-          message,
-          click: `${config.PUBLIC_URL.replace(/\/$/, '')}/admin#${anchor}`,
-        }),
-      })
-      if (!response.ok) throw new Error('Notification rejected')
-      await response.body?.cancel()
-      return 'sent'
-    } catch (error) {
-      // Audited boundary: a push is best-effort and must never block a request.
-      // The admin page shows the failed state on the request.
-      audit('notification_failed', { anchor, cause: String(error) })
-      return 'failed'
-    }
-  }
   // Items the owner never grants are denied at once, open reads need no grant, and locked items are denied without a
   // card; the rest go to the owner in one request. Asking for exactly the set a pending request already holds joins
   // that request (this is how a caller waits by posting again); any other set is a request of its own.
@@ -861,7 +821,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       trigger,
       ...(Object.keys(bundled).length ? { bundled } : {}),
       grantIds: [],
-      notification: config.NTFY_URL ? 'sending' : 'disabled',
       createdAt: Date.now(),
     }
     requests.set(request.id, request)
@@ -871,13 +830,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     agent.counts.denied += count('denied')
     push()
     audit('request_created', { request: request.id, agent: agent.id, items, reason, trigger })
-    if (count('pending')) {
-      void notify(`${agent.label} requests ${itemsWhere(request, 'pending').join(', ')}`, `request-${request.id}`).then(
-        (state) => {
-          request.notification = state
-        },
-      )
-    } else {
+    if (!count('pending')) {
       if (count('granted')) request.expiresAt = null
       endRequest(request, 'decided')
     }
@@ -984,12 +937,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (vault.state === 'locked') await unlock(opened)
   }
   const checkPassword = (password: string) => openStore(storeFile, password)
-  if (vault.state === 'locked')
-    void notify(
-      'Speaker is locked',
-      'unlock',
-      `Speaker restarted: sign in at ${config.PUBLIC_URL.replace(/\/$/, '')}/admin to unlock`,
-    )
   return {
     config,
     skill,
@@ -1037,7 +984,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     lockedUntil,
     retryAfter,
     decide,
-    notify,
     createRequest,
     listMcpTools,
     mcpAccess,
