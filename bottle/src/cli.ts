@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -69,6 +69,12 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const ATTACHABLE = ["starting", "idle", "busy", "reconfiguring"];
 const CLOSED = ["closing", "archived", "failed-archive"];
 const attachCommand = (id: string) => (SELF === "bottle" ? `bottle attach ${id}` : `cd '${root}' && ${SELF} attach ${id}`);
+
+/** Whether Pi still runs in the guest: dtach removes its socket when Pi exits (the owner quit it). */
+const piRunning = (agent: Agent) => {
+  const check = attach(agent.sessionId, ["test", "-S", "/run/pi.dtach"]);
+  return spawnSync(check.file, check.args).status === 0;
+};
 
 /** Pi's terminal in the VM, here; resolves when the owner detaches (Ctrl-\\) or Pi's session ends. */
 const attachHere = (agent: Agent) =>
@@ -260,6 +266,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     await attachHere(agent);
     const after = await byId(id);
     if (!after || CLOSED.includes(after.state)) return void console.log(`${id} is ${after?.state ?? "archived"}. Archive: ${outputDir}`);
+    if (!piRunning(after)) return void console.log(`Pi exited; ${id} stays open. ${SELF} attach ${id} resumes the session, ${SELF} stop ${id} archives it.`);
     console.log(`Detached; ${id} keeps running.`);
     await openTab(config, id);
     console.log(`Attach: ${attachCommand(id)}`);
@@ -297,7 +304,11 @@ async function main(command: Command_, values: Values, positionals: string[]) {
   } else if (command === "attach") {
     const agent = await resolveAgent(positionals[0]);
     if (!ATTACHABLE.includes(agent.state)) throw new Error(`agent ${agent.id} is ${agent.state}, so it has no terminal to attach to`);
+    if ((await api(controlApi.agents[":id"].resume.$post({ param: { id: agent.id } }))).resumed)
+      console.log("Pi had exited; restarted it on the same session.");
     await attachHere(agent);
+    if (!piRunning(agent))
+      console.log(`Pi exited; ${agent.id} stays open. ${SELF} attach ${agent.id} resumes the session, ${SELF} stop ${agent.id} archives it.`);
   } else if (command === "stop") {
     const agent = await resolveAgent(positionals[0]);
     await api(controlApi.agents[":id"].close.$post({ param: { id: agent.id } }));

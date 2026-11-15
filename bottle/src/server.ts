@@ -74,6 +74,7 @@ export const startControl = (config: Config, agents: Agents) => {
       validator("json", (body) => NewAgent.parse(body)),
       async (context) => context.json(await agents.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
     )
+    .post("/api/agents/:id/resume", async (context) => context.json({ resumed: await agents.resume(agents.get(context.req.param("id"))) }))
     .post("/api/agents/:id/close", (context) => {
       const agent = agents.get(context.req.param("id"));
       if (closed(agent)) throw new StatusError(409, `agent ${agent.id} is already ${agent.state}`);
