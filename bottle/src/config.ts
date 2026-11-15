@@ -8,6 +8,8 @@ const port = z.number().int().min(1).max(65_535);
 const model = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
+  // Tokens the model accepts, for Pi's context meter and compaction; Pi assumes 128k for a model it does not know.
+  contextWindow: z.number().int().positive().optional(),
   // A short name for -m and templates, unique across all models.
   alias: z
     .string()

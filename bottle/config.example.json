@@ -19,7 +19,8 @@
       {
         "id": "qwen3-coder-30b",
         "label": "Qwen3 Coder 30B",
-        "alias": "qwen"
+        "alias": "qwen",
+        "contextWindow": 262144
       }
     ]
   },

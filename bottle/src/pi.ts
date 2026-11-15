@@ -119,7 +119,7 @@ export const availableModels = (config: Config) => [
   ),
 ];
 
-const modelIds = (models: { id: string }[]) => models.map(({ id }) => ({ id }));
+const modelIds = (models: { id: string; contextWindow?: number }[]) => models.map(({ id, contextWindow }) => ({ id, ...(contextWindow && { contextWindow }) }));
 
 const modelsJson = (config: Config) => ({
   providers: {
@@ -250,7 +250,8 @@ export const writeGuestConfig = (
   copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
   const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config));
-  writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
+  // enabledModels: Pi's startup choice and Ctrl+P cycling offer only the models this bottle configures.
+  writeJson("settings.json", { packages: [], defaultProjectTrust: "never", enabledModels: availableModels(config).map(({ id }) => id) });
   writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(agent, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
