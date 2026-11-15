@@ -389,10 +389,22 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
       await approveHost(speakerUrl, password, id);
       ok("Approved this sandbox host.");
     } else {
-      p.log.info(`Sign in at ${speakerUrl}/admin, then approve the sandbox host there (link: ${speakerUrl}/admin#host-${id})`);
-      await waitFor("Waiting for you to approve the sandbox host", "Sandbox host approved.", "the sandbox host was not approved within ten minutes", () =>
-        hostApproved(loaded),
-      );
+      const link = `${speakerUrl}/admin#host-${id}`;
+      p.log.info(`Sign in at ${speakerUrl}/admin, then approve the sandbox host there (link: ${link})`);
+      if (yes)
+        await waitFor("Waiting for you to approve the sandbox host", "Sandbox host approved.", "the sandbox host was not approved within ten minutes", () =>
+          hostApproved(loaded),
+        );
+      else {
+        // The owner says when it is done; a check that finds no approval asks again.
+        for (;;) {
+          if (!answered(await p.confirm({ message: "Approved it? Press Enter to check", active: "Check", inactive: "Quit", initialValue: true })))
+            fail("the sandbox host is not approved", `approve it at ${link}, then run \`mise run init bottle\` again`);
+          if (await hostApproved(loaded)) break;
+          p.log.warn(`Not approved yet: ${link}`);
+        }
+        ok("Sandbox host approved.");
+      }
     }
   } else p.log.info("Register later with: mise run bottle register");
 
