@@ -398,6 +398,24 @@ test('adding a host to a secret ends the grants already given for it; removing a
   assert.equal((await agent.me()).secrets.GITHUB_TOKEN.state, 'granted')
 })
 
+test('deleting a secret ends its grants and drops pending requests for it', async (t) => {
+  const s = await setup(t)
+  const holder = await s.agent('holder')
+  await holder.ask(['secret:GITHUB_TOKEN'])
+  const waiter = await s.agent('waiter')
+  const filed = await s.call('/_speaker/requests', {
+    method: 'POST',
+    headers: waiter.headers,
+    body: JSON.stringify({ want: ['secret:GITHUB_TOKEN'], reason: 'later' }),
+  })
+  const { id } = (await filed.json()) as { id: string }
+  await s.ownerForm('/secrets/delete', { name: 'GITHUB_TOKEN' })
+  const grants = async () => ((await holder.me()) as unknown as { grants: { item: string }[] }).grants
+  assert.deepEqual(await grants(), [])
+  const outcome = await (await s.call(`/_speaker/requests/${id}`, { headers: waiter.headers })).json()
+  assert.deepEqual([outcome.status, outcome.denied], ['decided', ['secret:GITHUB_TOKEN']])
+})
+
 test('a keyless service forwards calls without any credential', async (t) => {
   const s = await setup(t)
   const agent = await s.agent('reader')
