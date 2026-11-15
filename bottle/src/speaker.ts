@@ -141,9 +141,9 @@ const probeSpeaker = async (config: Config, hostToken: string) => {
       headers: { authorization: `Bearer ${hostToken}` },
       signal: AbortSignal.timeout(5_000),
     });
-    if (response.status === 401 && ((await response.json()) as { error?: string }).error === "approval_required")
+    const body = await response.text();
+    if (response.status === 401 && body.includes('"approval_required"'))
       return { fatal: false, pending: true, message: `speaker is waiting for the owner to approve this sandbox host in /admin` };
-    await response.body?.cancel();
     if (response.status === 401)
       return {
         fatal: true,

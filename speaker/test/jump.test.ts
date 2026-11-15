@@ -372,6 +372,31 @@ test('a folder needs an sshKey, is delivered over SSH, and the sandbox host hear
   assert.deepEqual(await host.overSsh(), ['folder:mixed'])
 })
 
+const grantCount = async (f: Fixture) =>
+  ((await f.ownerGet('/admin/panel/active')).match(/<li id="grant-/g) ?? []).length
+
+test('a share whose path changes loses its folder grants', async (t) => {
+  const f = await fixture(t)
+  assert.equal((await f.enroll(['folder:pics'])).status, 201)
+  await f.approve()
+  assert.equal(await grantCount(f), 1)
+  await f.ownerForm('/ssh/shares/save', [
+    ['name', 'pics'],
+    ['target', 'box'],
+    ['path', join(f.world, 'docs')],
+  ])
+  assert.equal(await grantCount(f), 0)
+})
+
+test('a target removed loses its ssh grants', async (t) => {
+  const f = await fixture(t)
+  assert.equal((await f.enroll(['ssh:box'])).status, 201)
+  await f.approve()
+  assert.equal(await grantCount(f), 1)
+  await f.ownerForm('/ssh/targets/delete', [['alias', 'box']])
+  assert.equal(await grantCount(f), 0)
+})
+
 // Stopping speaker removes its runtime directory. It used to keep speaker.pub when the ssh-agent, killed first,
 // removed its socket while the directory was being deleted, so this repeats start and stop to catch that race.
 test('stop removes the temporary directory of the jump server', async (t) => {

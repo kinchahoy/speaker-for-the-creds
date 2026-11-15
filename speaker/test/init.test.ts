@@ -6,17 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { openStore, WrongPassword } from '../store.ts'
+import { freePort } from './owner.ts'
 
 const password = 'a good owner password'
 const init = join(import.meta.dirname, '..', '..', 'init.ts')
-
-const freePort = () =>
-  new Promise<number>((done) => {
-    const probe = createServer().listen(0, () => {
-      const { port } = probe.address() as { port: number }
-      probe.close(() => done(port))
-    })
-  })
 
 async function scratch(t: TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'speaker-init-'))

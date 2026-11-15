@@ -7,7 +7,6 @@ import { durationNames, durations } from './items.ts'
 import { type ApprovalEvent, type ApprovalState, approvalTable, transition } from './lifecycle.ts'
 
 export type Duration = (typeof durationNames)[number] | 'permanent'
-export const allDurations: readonly Duration[] = [...durationNames, 'permanent']
 export type SubjectType = 'agent' | 'host'
 // What asking for an item leads to: a card for the owner, or an answer at once: open (an open service read), never (the
 // owner's rule), unavailable (denied and logged: it cannot be delivered).
@@ -166,17 +165,17 @@ export function createEngine(env: {
     }
     kindOf(approval).ended(approval)
   }
-  function grant(approval: Approval, duration: Duration, bundle?: string[]) {
+  function grant(approval: Approval, duration: Duration, at: number, bundle?: string[]) {
     const replaced = grants(approval.subject).filter((old) => old.item === approval.item)
     const old = replaced[0]
     // A grant held on its own is not tied to an extension by this one, and keeps the later end.
     const keep = old && !old.with && bundle ? old : undefined
-    const until = duration === 'permanent' ? null : new Date(Date.now() + durations[duration]).toISOString()
+    const until = duration === 'permanent' ? null : new Date(at + durations[duration]).toISOString()
     const later = keep && (keep.expiresAt === null || (until !== null && keep.expiresAt > until))
     Object.assign(approval, {
       expiresAt: later ? keep.expiresAt : until,
       grantedMs: later ? keep.grantedMs : duration === 'permanent' ? undefined : durations[duration],
-      grantedAt: Date.now(),
+      grantedAt: at,
       reach: kindOf(approval).describe(approval.item, approval.subject).reach,
       ...(bundle?.length && !keep ? { with: bundle } : {}),
     })
@@ -287,11 +286,12 @@ export function createEngine(env: {
         const by = request.bundled?.[a.item]
         return by && yes.some((other) => other.item === by) ? by : undefined
       }
-      for (const a of yes.filter((a) => !bringer(a))) grant(a, span)
+      const at = Date.now()
+      for (const a of yes.filter((a) => !bringer(a))) grant(a, span, at)
       for (const a of yes.filter(bringer)) {
         const by = grants(request.subject).find((g) => g.item === bringer(a))
         const before = grants(request.subject).find((g) => g.item === a.item)?.with ?? []
-        grant(a, span, by ? [...new Set([...before, by.id])] : undefined)
+        grant(a, span, at, by ? [...new Set([...before, by.id])] : undefined)
       }
       for (const a of no) {
         strikes.set(strikeKey(a.subject, a.item), [...recentStrikes(strikeKey(a.subject, a.item)), Date.now()])
@@ -406,7 +406,6 @@ export function createEngine(env: {
     held,
     statusOf,
     outcomeOf,
-    pendingOf,
     lockedUntil,
     retryAfter,
     request,
@@ -419,7 +418,6 @@ export function createEngine(env: {
     cards,
     describe: (a: Approval) => kindOf(a).describe(a.item, a.subject),
     whoOf: (a: Approval) => rulesOf(a).who(a.subject),
-    kindOf,
   }
 }
 export type Engine = ReturnType<typeof createEngine>

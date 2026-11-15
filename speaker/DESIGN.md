@@ -75,9 +75,9 @@ Each service has a rule for read and one for write:
 
 ## Lifecycles
 
-**Approval:** everything anyone asks the owner for, of every kind and for an agent or a sandbox host, is one approval with one lifecycle: `pending` → `granted` or `denied`; a pending approval `expired` when nobody decides in time, or `revoked` when what it asks for goes away; a granted one `expired` at its end, or `revoked`. Extend keeps it `granted`. The table is `approvalTable` in `lifecycle.ts`, and every change goes through its `transition()`.
+**Approval:** everything anyone asks the owner for, of every kind and for an agent or a sandbox host, is one approval with one lifecycle: `pending` → `granted` or `denied`, or created already `open` (an open read) or `denied` when the rules answer without the owner (`never`, unavailable, locked after three denials); a pending approval `expired` when nobody decides in time, or `revoked` when what it asks for goes away; a granted one `expired` at its end, or `revoked`. Extend keeps it `granted`. The table is `approvalTable` in `lifecycle.ts`, and every change goes through its `transition()`.
 
-**Request:** one card: `pending` while any of its approvals is, then `decided`, or `expired` if not decided within 2 hours (a sandbox host's registration waits until the owner decides). Items the rules answer without the owner (open reads, `never`, unavailable, locked after three denials) are answered on the request and never become approvals.
+**Request:** one card: `pending` while any of its approvals is, then `decided`, or `expired` if not decided within 2 hours (a sandbox host's registration waits until the owner decides). Items the rules answer without the owner are approvals created in their final state, so one structure holds every outcome; an `open` one is not a grant.
 
 **Reconcile:** after any Setup change (a service, secret, target or share changed or deleted), every pending or granted approval whose item is no longer available ends (`revoked`, logged as `grant_revoked` with why), and so does a grant whose reach grew beyond what the owner approved: what a kind's card says approving opens (a secret's hosts, a service's URL and read paths, a target's account, a share's path) is kept with the grant.
 
@@ -85,9 +85,9 @@ Each service has a rule for read and one for write:
 
 **Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once. The agent stays as a revoked tombstone (with the time) until speaker restarts, so its token keeps answering `denied` instead of `enroll`; an idle agent that is not revoked is removed as above.
 
-**Sandbox host:** registers, the owner approves it, and it stays until removed. Registering is unauthenticated and only adds a pending entry (name, kinds, source address, time). Approving it removes any other host with the same name and the same source address (audited `host_replaced`): that is the same machine registering again, its old tokens are unusable, and its agents end with it. A different name or address is kept. The pending card says what approval will replace, and host cards show address, registration time and status.
+**Sandbox host:** registers, the owner approves it, and it stays until removed. Speaker keeps the host record (id, name, kinds, token hash, address, time) on disk but not its approval: after a restart each known host is a pending card again, and the owner re-approves it after signing in. Meanwhile the host's calls answer `approval_required`, and bottle keeps retrying instead of giving up. Registering is unauthenticated and only adds a pending entry (name, kinds, source address, time). Approving it removes any other host with the same name and the same source address (audited `host_replaced`): that is the same machine registering again, its old tokens are unusable, and its agents end with it. A different name or address is kept. The pending card says what approval will replace, and host cards show address, registration time and status.
 
-**Restart:** speaker starts locked (see Keys). Agents, grants and requests are gone; agents enroll and ask again, and open sessions and mounts end.
+**Restart:** speaker starts locked (see Keys). Agents, grants and requests are gone, and every known sandbox host waits for approval again; agents enroll and ask again, and open sessions and mounts end.
 
 ## Durations
 

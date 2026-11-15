@@ -18,7 +18,7 @@ import { serve } from "../../speaker/node_modules/@hono/node-server/dist/index.m
 import { createApp, readConfig } from "../../speaker/server.ts";
 // After speaker: its proxy module loads the reflect polyfill that x509 needs.
 import * as x509 from "../../speaker/node_modules/@peculiar/x509/build/index.js";
-import { setOwnerPassword } from "../../speaker/test/owner.ts";
+import { freePort as speakerFreePort, ownerPassword, sessionCookie, setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { modelDoor, secretRoute, type Live } from "../src/sandbox.ts";
 import { launchRequest, Template } from "../src/grants.ts";
@@ -291,6 +291,89 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   // Speaker returns: the next snapshot brings the grants back.
   f.servers.push(f.listen(Number(new URL(f.url).port)));
   await until(() => received.at(-1)?.grants.length === 1);
+});
+
+test("after a speaker restart a known host is pending again; bottle keeps retrying and resumes once the owner approves it", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "bottle-restart-"));
+  const speakerPort = await speakerFreePort();
+  let running: { app: Awaited<ReturnType<typeof createApp>>; server: Server; wss: InstanceType<Ws["WebSocketServer"]> } | undefined;
+  const stop = async () => {
+    if (!running) return;
+    for (const client of running.wss.clients) client.terminate();
+    running.app.proxy.closeAllConnections();
+    running.app.proxy.close();
+    await running.app.stop();
+    running.server.closeAllConnections();
+    running.server.close();
+    running = undefined;
+  };
+  const boot = async () => {
+    const app = await createApp(
+      readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", PROXY_PORT: String(await speakerFreePort()), SSH_PORT: String(await speakerFreePort()) }),
+    );
+    const wss = new WebSocketServer({ noServer: true });
+    const server = serve({ fetch: app.fetch, port: speakerPort, hostname: "127.0.0.1", websocket: { server: wss } }) as Server;
+    await once(server, "listening");
+    running = { app, server, wss };
+  };
+  t.after(async () => {
+    await stop();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const url = `http://127.0.0.1:${speakerPort}`;
+  const config = { speaker: { url, proxyPort: 0, sshPort: 0 } } as Config;
+  const ownerPost = (cookie: string, path: string) =>
+    fetch(`${url}/admin${path}`, { method: "POST", headers: { cookie, origin: "http://localhost" }, redirect: "manual" });
+
+  await boot();
+  const cookie = await setOwnerPassword((path, init) => fetch(url + path, init));
+  const token = "host-token";
+  const created = await fetch(`${url}/_speaker/hosts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "bottle", kinds: ["site"], tokenHash: sha(token) }),
+  });
+  const { id } = (await created.json()) as { id: string };
+  assert.equal((await ownerPost(cookie, `/hosts/${id}/approve`)).status, 303);
+
+  const fatal: string[] = [];
+  const snapshots: Snapshot[] = [];
+  // Limits shorter than the whole restart: a pending host must not count toward giving up.
+  watchGrants(
+    t,
+    config,
+    token,
+    (snapshot) => snapshots.push(snapshot),
+    (message) => fatal.push(message),
+    {
+      ...SPEAKER_LIMITS,
+      firstConnectMs: 400,
+      outageMs: 400,
+      retryMs: 50,
+      maxBackoffMs: 100,
+    },
+  );
+  await until(() => snapshots.length > 0);
+
+  await stop();
+  await boot();
+  // Locked, then signed in: the host record survived, its approval did not.
+  const signedIn = await fetch(`${url}/admin/signin`, {
+    method: "POST",
+    headers: { origin: "http://localhost" },
+    body: new URLSearchParams({ password: ownerPassword }),
+    redirect: "manual",
+  });
+  const owner = sessionCookie(signedIn);
+  const pending = snapshots.length;
+  await until(async () => (await (await fetch(`${url}/admin/panel/inbox`, { headers: { cookie: owner } })).text()).includes(`host-${id}`));
+  await sleep(1_000);
+  assert.deepEqual(fatal, [], "a pending host is waited for, not given up on");
+  assert.equal(snapshots.length, pending, "nothing is heard while it is pending");
+
+  assert.equal((await ownerPost(owner, `/hosts/${id}/approve`)).status, 303);
+  await until(() => snapshots.length > pending);
+  assert.deepEqual(fatal, []);
 });
 
 test("a grant counts as decided for the agent only once the sandbox host reports it in force", async (t) => {

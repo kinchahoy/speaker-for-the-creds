@@ -758,13 +758,13 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       },
     },
   })
+  const askHost = (id: string) => engine.request('host', id, [hostItem(id)], { reason: '', duration: 'permanent' })
   const registerHost = (host: Host) => {
     hosts.set(host.id, host)
-    engine.request('host', host.id, [hostItem(host.id)], { reason: '', duration: 'permanent' })
+    askHost(host.id)
     saveHosts()
   }
-  for (const host of hosts.values())
-    engine.request('host', host.id, [hostItem(host.id)], { reason: '', duration: 'permanent' })
+  for (const id of hosts.keys()) askHost(id)
 
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
