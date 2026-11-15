@@ -30,12 +30,12 @@ export type SpeakerFlags = ReturnType<typeof parseArgs<{ options: typeof speaker
 
 const here = import.meta.dirname
 // Successes get their own check mark, so they cannot be mistaken for a question's diamond.
-const ok = (message: string) => p.log.message(message, { symbol: styleText('green', '✓') })
+export const ok = (message: string) => p.log.message(message, { symbol: styleText('green', '✓') })
 export const fail = (what: string, fix: string): never => {
   throw new Error(`${what}. Fix: ${fix}`)
 }
 // Ends the run when the owner presses Ctrl-C at a prompt.
-const answered = <T>(value: T | symbol): Exclude<T, symbol> => {
+export const answered = <T>(value: T | symbol): Exclude<T, symbol> => {
   if (p.isCancel(value)) {
     p.cancel('Cancelled. Nothing more was changed.')
     process.exit(1)
@@ -43,18 +43,18 @@ const answered = <T>(value: T | symbol): Exclude<T, symbol> => {
   return value as Exclude<T, symbol>
 }
 // The flag if given, else the default under --yes, else the prompt.
-const ask = async <T, F extends T | undefined>(
+export const ask = async <T, F extends T | undefined>(
   given: T | undefined,
   yes: boolean,
   fallback: F,
   prompt: () => Promise<NoInfer<T> | symbol>,
 ): Promise<T | F> => given ?? (yes ? fallback : (answered(await prompt()) as T))
 
-const isFree = (port: number) =>
+const isFree = (port: number, host = '0.0.0.0') =>
   new Promise<boolean>((done) => {
     const probe = createServer()
     probe.once('error', () => done(false))
-    probe.listen(port, '0.0.0.0', () => probe.close(() => done(true)))
+    probe.listen(port, host, () => probe.close(() => done(true)))
   })
 
 const lanAddress = () =>
@@ -67,7 +67,7 @@ const lanAddress = () =>
         /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(entry.address),
     )?.address
 
-async function pickPort(
+export async function pickPort(
   given: string | undefined,
   yes: boolean,
   label: string,
@@ -75,6 +75,7 @@ async function pickPort(
   flag: string,
   fallback: number,
   taken: number[],
+  host?: string,
 ) {
   for (let value = given; ; value = undefined) {
     const raw = await ask(value, yes, String(fallback), () =>
@@ -88,7 +89,7 @@ async function pickPort(
     const problem =
       !Number.isInteger(port) || port < 1 || port > 65535
         ? 'is not a port number'
-        : taken.includes(port) || !(await isFree(port))
+        : taken.includes(port) || !(await isFree(port, host))
           ? 'is already in use'
           : undefined
     if (!problem) return port
@@ -97,7 +98,7 @@ async function pickPort(
   }
 }
 
-const readStdin = async () => {
+export const readStdin = async () => {
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   return text.replace(/\r?\n$/, '')

@@ -15,14 +15,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { hostname, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type parseArgs, styleText } from "node:util";
+import { type parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
 import { bottleHome, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
+import { answered, ask, fail, ok, pickPort, readStdin } from "../speaker/init.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
 export const bottleFlags = {
@@ -42,31 +42,10 @@ export const bottleFlags = {
 export type BottleFlags = ReturnType<typeof parseArgs<{ options: typeof bottleFlags }>>["values"];
 
 const here = import.meta.dirname;
-// Successes get their own check mark, so they cannot be mistaken for a question's diamond.
-const ok = (message: string) => p.log.message(message, { symbol: styleText("green", "✓") });
 const MIN_FREE_GIB = 20;
 const WAIT_MS = 10 * 60_000;
 const SMOKE_PROMPT = "write the word hello to /output/hello.txt, then finish";
 
-const fail = (what: string, fix: string): never => {
-  throw new Error(`${what}. Fix: ${fix}`);
-};
-const answered = <T>(value: T | symbol): Exclude<T, symbol> => {
-  if (p.isCancel(value)) {
-    p.cancel("Cancelled. Nothing more was changed.");
-    process.exit(1);
-  }
-  return value as Exclude<T, symbol>;
-};
-/** The flag if given, else the default under --yes, else the prompt. */
-const ask = async <T, F extends T | undefined>(given: T | undefined, yes: boolean, fallback: F, prompt: () => Promise<NoInfer<T> | symbol>): Promise<T | F> =>
-  given ?? (yes ? fallback : (answered(await prompt()) as T));
-const isFree = (port: number, host: string) =>
-  new Promise<boolean>((done) => {
-    const probe = createServer();
-    probe.once("error", () => done(false));
-    probe.listen(port, host, () => probe.close(() => done(true)));
-  });
 const command = (cmd: string, args: string[]) => spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
 const stop = (message: string): never => {
   p.cancel(message);
@@ -127,24 +106,6 @@ const checkHost = (needDocker: boolean) => {
 /** The first existing directory at or above the path: where a new home would be created. */
 const existingAncestor = (path: string): string => (existsSync(path) ? path : existingAncestor(dirname(path)));
 
-async function pickPort(given: string | undefined, yes: boolean, label: string, purpose: string, flag: string, fallback: number, taken: number[]) {
-  for (let value = given; ; value = undefined) {
-    const raw = await ask(value, yes, String(fallback), () =>
-      p.text({ message: `${label} port: ${purpose} (Enter keeps ${fallback})`, placeholder: String(fallback), defaultValue: String(fallback) }),
-    );
-    const port = Number(raw);
-    const problem =
-      !Number.isInteger(port) || port < 1 || port > 65535
-        ? "is not a port number"
-        : taken.includes(port) || !(await isFree(port, "127.0.0.1"))
-          ? "is already in use"
-          : undefined;
-    if (!problem) return port;
-    if (value !== undefined || yes) fail(`${label} port ${raw} ${problem}`, `choose another with --${flag}`);
-    p.log.warn(`Port ${raw} ${problem === "is already in use" ? "is in use" : problem}; choose another.`);
-  }
-}
-
 const loopback = (url: string) => {
   const host = new URL(url).hostname;
   return host === "localhost" || host === "0.0.0.0" || host === "[::1]" || host.startsWith("127.");
@@ -201,12 +162,6 @@ async function waitFor(message: string, done: string, timeout: string, check: ()
     }
   spin.stop(done);
 }
-
-const readStdin = async () => {
-  let text = "";
-  for await (const chunk of process.stdin) text += chunk;
-  return text.replace(/\r?\n$/, "");
-};
 
 /** Signs in to speaker's /admin; returns the session cookie, or undefined when the password was wrong. One try, no retries: sign-in allows 5 failures per 15 minutes. */
 async function signIn(speakerUrl: string, password: string) {
@@ -313,8 +268,17 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
       "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle serve)",
       yes,
     );
-  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle's own API", "control-port", previous?.controlPort ?? 7001, []);
-  const guestPort = await pickPort(flags["guest-port"], yes, "Guest", "VMs reach bottle here", "guest-port", previous?.guestPort ?? 7002, [controlPort]);
+  const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle's own API", "control-port", previous?.controlPort ?? 7001, [], "127.0.0.1");
+  const guestPort = await pickPort(
+    flags["guest-port"],
+    yes,
+    "Guest",
+    "VMs reach bottle here",
+    "guest-port",
+    previous?.guestPort ?? 7002,
+    [controlPort],
+    "127.0.0.1",
+  );
 
   const oldUrl = previous?.speaker?.url;
   const speakerUrl =
