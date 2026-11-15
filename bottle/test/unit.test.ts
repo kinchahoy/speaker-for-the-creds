@@ -281,7 +281,7 @@ test("the shipped extensions declare the sites they contact, and the host report
 
 test("replies tell the agent what to do, per item kind", () => {
   const catalog: CatalogView = {
-    secrets: { GITHUB_READ: { hosts: ["github.com", "api.github.com"], env: "GH_TOKEN", placeholder: "ph-1", environment: { GH_TOKEN: "ph-1" } } },
+    secrets: { GITHUB_READ: { hosts: ["github.com", "api.github.com"], environment: { GH_TOKEN: "ph-1" } } },
     services: { vault: { mcp: true } },
     extensions: { "pi-web-access": { tools: ["web_search", "fetch_content"] } },
   };

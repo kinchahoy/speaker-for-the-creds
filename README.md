@@ -53,7 +53,7 @@ Then:
    - a secret: a name, a value, the hosts it may reach, and a variable name (the agent only sees a placeholder)
    - an SSH target: first put the line Setup shows into that account's `authorized_keys`
    - a share on that target (it arrives over SSH)
-3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
+3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/_speaker/help`. Each request it makes appears as a card in `/admin`. Approve item by item.
 4. To launch a sandboxed agent, run `mise run bottle run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template grants nothing up front, but the agent can still request items mid-run, and each request appears as a card. The agent waits silently until you approve; `run` and `ls` print the `/admin` link when something is pending. Once you approve it, the VM can use it. Revoke stops it within seconds. `run` starts bottle in the background when it is not already running, and bottle stops itself 10 minutes after its last agent closes (`idleStopMinutes` in its config).
 5. To stop, run `mise run bottle stop <id>` for each agent. `run` prints the archive folder, and `ls` lists the last finished agents with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}

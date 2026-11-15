@@ -544,7 +544,7 @@ test('enrollment with Speaker-Wait holds until the owner decides and answers per
   assert.equal(again.status, 200)
   assert.equal(((await again.json()) as { id: string }).id, id)
   assert.equal((await f.call('/notes/things', { headers: bearer('quick-token') })).status, 200)
-  assert.equal((await f.call('/skill.md')).status, 200)
+  assert.equal((await f.call('/_speaker/help')).status, 200)
 })
 
 test('enrollment may carry an empty want, and /catalog then shows where the agent stands', async (t) => {
@@ -741,7 +741,7 @@ test('enrollment refuses the empty-token hash, and 401s say what to do next', as
   const unknown = await f.call('/notes/x', { headers: bearer('nope') })
   assert.equal(unknown.status, 401)
   assert.equal(unknown.headers.get('www-authenticate'), 'Bearer realm="speaker"')
-  assert.equal(unknown.headers.get('link'), '</skill.md>; rel="help"')
+  assert.equal(unknown.headers.get('link'), '</_speaker/help>; rel="help"')
   assert.equal(((await unknown.json()) as { error: string }).error, 'enroll')
 })
 
@@ -885,7 +885,7 @@ test('public discovery answers without a token, uses the caller address, and nam
       root.includes(`${f.url}/_speaker/help`) &&
       !root.includes('$SPEAKER_URL'),
   )
-  assert.ok((await f.call('/skill.md')).headers.get('etag'))
+  assert.ok((await f.call('/_speaker/help')).headers.get('etag'))
   const help = await (await f.call('/_speaker/help')).text()
   assert.ok(help.includes(`${f.url}/_speaker/agents`))
   assert.ok(!help.includes('$SPEAKER_URL') && !help.includes('secretgroup') && !help.includes('notes'))

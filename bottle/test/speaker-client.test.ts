@@ -490,9 +490,9 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
 
   // What the agent is told: the variable to set to a placeholder, and no proxy settings (the sandbox route is built in).
   const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${speakerAgent.agentToken}` } })).json()) as {
-    secrets: Record<string, { placeholder: string; environment: Record<string, string>; hosts: string[] }>;
+    secrets: Record<string, { environment: Record<string, string>; hosts: string[] }>;
   };
-  const { placeholder } = me.secrets.GITHUB_TOKEN;
+  const placeholder = me.secrets.GITHUB_TOKEN.environment.GH_TOKEN;
   assert.match(placeholder, /^speaker-placeholder-[0-9a-f]{48}$/);
   assert.deepEqual(me.secrets.GITHUB_TOKEN.environment, { GH_TOKEN: placeholder });
 

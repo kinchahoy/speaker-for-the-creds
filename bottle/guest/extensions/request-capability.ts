@@ -57,7 +57,7 @@ const call = async (to: { url: string; token: string }, method: "GET" | "POST", 
   return result;
 };
 
-/** The last assistant text, first 400 characters. The owner sees it in the Agents view. */
+/** The last assistant text, first 400 characters. `bottle ls` shows it in the LAST MESSAGE column. */
 const lastMessage = (entries: { type: string; message?: { role?: string; content?: unknown } }[]) => {
   const content = entries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant").at(-1)?.message?.content;
   const text =

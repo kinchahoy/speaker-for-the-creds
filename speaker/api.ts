@@ -41,8 +41,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     fields: ErrorFields,
   ) => {
     c.header('www-authenticate', 'Bearer realm="speaker"')
-    c.header('link', '</skill.md>; rel="help"')
-    return agentError(c, 401, error, message, { ...fields, help: '/skill.md' })
+    c.header('link', '</_speaker/help>; rel="help"')
+    return agentError(c, 401, error, message, { ...fields, help: '/_speaker/help' })
   }
   // Until the owner has set a password and signed in (after every restart too), every agent, sandbox-host and proxy
   // call is refused: the same rule (lockNotice) gates the proxy and the certificate route.
@@ -285,14 +285,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       .get('/_speaker/proxy/ca.pem', locked, async (c) =>
         c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
       )
-      .use('/skill.md', etag())
       .use('/_speaker/help', etag())
-      .get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
       .get('/_speaker/help', (c) => c.text(withAddress(c, core.skill), 200, markdown))
       .get('/', (c) =>
         c.req.header('accept')?.includes('text/html')
           ? c.html(
-              '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
+              '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/_speaker/help">/_speaker/help</a>.</p>',
             )
           : c.text(withAddress(c, core.skill), 200, markdown),
       )

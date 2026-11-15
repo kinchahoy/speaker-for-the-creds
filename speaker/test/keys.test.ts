@@ -123,7 +123,7 @@ test('agents and sandbox hosts get `locked` until the owner signs in', async (t)
     assert.deepEqual(await response.json(), locked, path)
   }
   assert.equal((await restarted.call('/_speaker/health')).status, 200)
-  assert.equal((await restarted.call('/skill.md')).status, 200)
+  assert.equal((await restarted.call('/_speaker/help')).status, 200)
   assert.equal((await restarted.signIn()).status, 303)
   assert.equal((await restarted.enroll('tok')).status, 201)
 })

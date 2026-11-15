@@ -182,7 +182,6 @@ type Me = {
     {
       hosts: string[]
       state: string
-      placeholder?: string
       environment: Record<string, string>
       certificate: string
       git: string
@@ -292,7 +291,7 @@ test('the catalog lists every secret to a direct agent, and an unknown secret is
   await agent.ask(['secret:GITHUB_TOKEN'])
   const after = (await agent.me()).secrets.GITHUB_TOKEN
   assert.equal(after.state, 'granted')
-  assert.match(after.placeholder ?? '', /^speaker-placeholder-/)
+  assert.match(Object.values(after.environment)[0] ?? '', /^speaker-placeholder-/)
 })
 
 test('placeholders become the real secret for covered hosts only, in Bearer and Basic credentials', async (t) => {

@@ -114,11 +114,10 @@ export const hostSchema = z.object({
   name: z.string().trim().min(1).max(100),
   kinds: z.array(z.enum(hostKinds)).max(hostKinds.length),
   tokenHash: hashSchema,
-  // The address it registered from: like an agent token, a host token only works from there. A host saved before
-  // this field matches no address and is told to register again.
-  source: z.string().default(''),
-  // When it registered (ms); 0 for a host saved before this field, shown as "unknown".
-  registeredAt: z.number().default(0),
+  // The address it registered from: like an agent token, a host token only works from there.
+  source: z.string(),
+  // When it registered (ms).
+  registeredAt: z.number(),
 })
 const reasonSchema = z.string().trim().min(1).max(500)
 export const identitySchema = z.object({
@@ -687,7 +686,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
             ? replaces
                 .map(
                   (o) =>
-                    `Approving replaces the ${hostGrant(o.id) ? 'approved' : 'pending'} host ${o.name} registered ${o.registeredAt ? new Date(o.registeredAt).toISOString() : 'at an unknown time'}: it and its agents are removed.`,
+                    `Approving replaces the ${hostGrant(o.id) ? 'approved' : 'pending'} host ${o.name} registered ${new Date(o.registeredAt).toISOString()}: it and its agents are removed.`,
                 )
                 .join(' ')
             : undefined,

@@ -26,20 +26,16 @@ const secretsView = (core: Core, c: Context, agent: Agent) => {
         agent.host
           ? {
               hosts,
-              env,
               state: 'granted',
               until,
-              placeholder,
               environment: { [env]: placeholder },
               ...gitHint(hosts),
               note: "Set the variable on the command that needs it, for example GH_TOKEN=... gh pr list. You need no proxy settings or certificate: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
             }
           : {
               hosts,
-              env,
               state: 'granted',
               until,
-              placeholder,
               environment: {
                 [env]: placeholder,
                 HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,

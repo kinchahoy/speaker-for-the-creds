@@ -136,7 +136,7 @@ Speaker runs an SSH jump server in its container (see The jump server and relay)
 
 ### Errors
 
-Every error is JSON with `error` (a code), `message` (a human sentence), and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; when it sends the agent to the docs it names a section, for example `read "Folders and SSH" in GET /_speaker/help`; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </skill.md>; rel="help"`.
+Every error is JSON with `error` (a code), `message` (a human sentence), and where useful `next` and `tell_user`. `next` is the exact call to make (including re-enrolling, or repeating the call with `Speaker-Wait`) or an instruction to stop; when it sends the agent to the docs it names a section, for example `read "Folders and SSH" in GET /_speaker/help`; `tell_user` is one line with the approval link. 401 responses also carry `WWW-Authenticate: Bearer realm="speaker"` and `Link: </_speaker/help>; rel="help"`.
 
 Error codes: `locked` (speaker has no owner password yet, or waits for the owner to sign in after a restart; it carries `next` and `tell_user`), `no_key` (a service has no key yet), `upstream_unavailable` (the service did not answer), `enroll` (unknown, expired or wrongly placed token: run setup again; the cause is not disclosed), `approval_required`, `register` (a sandbox host token used from another address), `denied` (with `retry_after` only after three denials), `invalid` (malformed input; lists the accepted values), `not_found` (an unknown route, service or agent), `conflict`, `rate_limited`, `internal_error`. The shape and the codes are defined once, as `errorBody` and `ErrorCode` in `items.ts`; bottle answers its own errors with the same function.
 
@@ -216,7 +216,7 @@ A sandbox host registers with a name and the item kinds it can enforce; the owne
 
 ## Discovery and instructions
 
-- `GET /`, `GET /skill.md` and `GET /_speaker/help` serve one document, `skill/SKILL.md`. Its top fits one screen (what speaker is, the call form, how to wait, follow `next`, where things are); sections follow for Set up (sh and PowerShell), What you can ask for, Asking, Folders and SSH, Secrets, Remote MCP servers and Errors. Sandboxed agents get their guidance from the sandbox host's tool instead, which the document points to in one line. Browsers get a three-line page at `/`.
+- `GET /` and `GET /_speaker/help` serve one document, `skill/SKILL.md`. Its top fits one screen (what speaker is, the call form, how to wait, follow `next`, where things are); sections follow for Set up (sh and PowerShell), What you can ask for, Asking, Folders and SSH, Secrets, Remote MCP servers and Errors. Sandboxed agents get their guidance from the sandbox host's tool instead, which the document points to in one line. Browsers get a three-line page at `/`.
 - `GET /_speaker/help/<service>`: that service's notes plus the caller's current state.
 
 ### What an agent can see
@@ -244,7 +244,7 @@ What the table means in practice:
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `GET /`, `GET /skill.md` | anyone | core instructions |
+| `GET /` | anyone | core instructions |
 | `GET /_speaker/help[/<service>]` | anyone (service state needs a token) | full instructions, service notes |
 | `POST /_speaker/agents` | anyone, rate limited | enroll a direct agent with its first request |
 | `GET /_speaker/catalog` | agent | everything the caller may ask for and where it stands |

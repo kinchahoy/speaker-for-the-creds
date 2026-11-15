@@ -295,8 +295,8 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16)
 const local = (ms: number, countdown = false) =>
   html`<time datetime="${new Date(ms).toISOString()}" data-local ${raw(countdown ? 'data-left' : '')}>${time(ms)} UTC</time>`
-const registered = (h: { source: string; registeredAt?: number }) =>
-  html`from ${h.source || 'unknown address'} · registered ${h.registeredAt ? local(h.registeredAt) : 'at an unknown time'}`
+const registered = (h: { source: string; registeredAt: number }) =>
+  html`from ${h.source} · registered ${local(h.registeredAt)}`
 const empty = (text: string) => html`<p><small>${text}</small></p>`
 
 // A live panel: htmx asks again every 5 seconds with the hash of what it shows; an unchanged panel answers 204.
@@ -328,7 +328,7 @@ export function inbox({ agents, cards }: View, groups: Record<string, Group>) {
     html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" checked>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark>${i.warning}</mark>` : ''}</span></label>`
   const meta = ({ who, type, subject }: View['cards'][number]) =>
     type === 'host'
-      ? html`<small class="card-meta" id="host-${subject}">${registered({ source: who.source, registeredAt: who.at })}</small>`
+      ? html`<small class="card-meta" id="host-${subject}">${registered({ source: who.source, registeredAt: who.at as number })}</small>`
       : who.says !== undefined
         ? html`<small class="card-meta">says it is ${who.says}${who.via ? ` · via ${who.via}` : ''} · from ${who.source} · key <code>${who.key}</code>${twin(byId.get(subject))}</small>`
         : ''

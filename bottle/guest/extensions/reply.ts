@@ -3,7 +3,7 @@
 /** The part of GET /_speaker/catalog the reply reads. */
 export type CatalogView = {
   text?: string;
-  secrets?: Record<string, { hosts: string[]; env?: string; placeholder?: string; environment?: Record<string, string>; git?: string }>;
+  secrets?: Record<string, { hosts: string[]; environment?: Record<string, string>; git?: string }>;
   services?: Record<string, { mcp?: boolean }>;
   ssh?: { item: string; commands: string[] }[];
   grants?: { item: string; applying?: boolean }[];
@@ -69,8 +69,8 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
   if (item.startsWith("secret:")) {
     const secret = catalog.secrets?.[item.slice(7)];
     if (!secret) throw new Error(`speaker's catalog does not show ${item} as granted`);
-    const [name, value] = Object.entries(secret.environment ?? {})[0] ?? [secret.env, secret.placeholder];
-    if (!name || !value) throw new Error(`speaker's catalog gives no variable or placeholder for ${item}`);
+    const [name, value] = Object.entries(secret.environment ?? {})[0] ?? [];
+    if (!name || !value) throw new Error(`speaker's catalog gives no variable for ${item}`);
     return (
       `${head}. Put ${name}=${value} in front of the one command that needs it, for example: ${name}=${value} <command>. ` +
       `That value is a stand-in: speaker swaps in the real token when the request leaves, and only for ${secret.hosts.join(" and ")}. ` +
