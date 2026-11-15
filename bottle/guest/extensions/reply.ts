@@ -80,7 +80,7 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
   if (item.startsWith("folder:")) {
     const [, share, mode] = item.split(":");
     return mode === "rw"
-      ? `Granted: folder:${share}, read-write${until(expiresAt)}. Its files are in /input/${share}. You can write there.`
+      ? `Granted: folder:${share}, read-write${until(expiresAt)}. Its files are in /space/${share}. You can write there.`
       : `Granted: folder:${share}, read-only${until(expiresAt)}. Its files are in /input/${share}. You cannot write there; put results in /output.`;
   }
   if (item.startsWith("ssh:")) {

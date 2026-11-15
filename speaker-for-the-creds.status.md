@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-15T11:30
+updated: 2026-11-15T21:10
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,25 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-15 21:10 · paused
+
+**Next**
+- Owner: on the new server, create speaker share `bottle-agent-space` (Setup: a target for the server itself plus the share). sealed and builder ask for `folder:bottle-agent-space:rw` at launch; trusted also needs secret `GITHUB_READ` and the obsidian/karakeep services.
+- Owner: re-point bottle at the new speaker (`mise run init bottle`), `bottle register`, approve the host. Fresh server lacks openrouter/anthropic/openai services (old volume): add them or wipe the volume.
+- Owner: link the Herdr mod (`ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`), set URLs in the inbox's Settings, optionally `"global": {"alt-s": "speaker.open"}` in keys.json. Then try Start (template x model), Stop, waiting-agent highlight, Recently finished.
+- When the Qwen server (192.168.0.83:8080) is up: replace the placeholder model id `qwen3.8-27b` in ~/.bottle/config.json with the id from `/v1/models`.
+
+**Open**
+- Nothing in the Herdr mod was clicked live (Start via `hc run --bg --rm`, `tab.new` for archives, highlight). The mod passes `herdr-app check`.
+- Qwen consulting DeepSeek via the subagent extension: not started; the model door serves one model per VM today.
+- Herdr's built-in agents sidebar needs OSC 7501 status from `bottle attach`; the payload format is undocumented, parked.
+
+**Settled**
+- Three templates: sealed (agent space, no network, default qwen), builder (space plus public network, default deepseek, 72 h, 1500 requests), trusted (builder plus GITHUB_READ, obsidian.read, karakeep.read up front). Writes, SSH and notes otherwise are always mid-run cards; no ceilings. Template `attended` removed.
+- Model aliases (`-m qwen`); a down local model server fails `run` at once. `bottle templates [--json]` works without the service.
+- Read-write shares mount at `/space/<share>`, read-only at `/input/<share>`.
+- `/api/state` carries `outputDir` and `finished` (from archive folders, shared with `ls`). Herdr mod settings live in Herdr `shared("speaker.settings")`; config.json is gone.
 
 ## 2026-11-15 11:30 · paused
 

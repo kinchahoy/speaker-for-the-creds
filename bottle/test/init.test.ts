@@ -181,7 +181,7 @@ test("bottle run names the archive folder, and ls lists finished agents with the
 
   const started = await cli("run", "x"); // no terminal, so detached
   assert.match(started, new RegExp(`Archive: ${join(outputRoot, "stamp--new--new1")}`));
-  assert.match(started, /Attach: bottle attach new1/);
+  assert.match(started, /Attach: .*bottle attach new1/);
   const listing = await cli("ls");
   assert.match(listing, new RegExp(`archived\\s+${folder}`));
   assert.doesNotMatch(listing, /def456/);

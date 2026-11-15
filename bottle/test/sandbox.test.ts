@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { Client, type Dispatcher } from "undici";
-import { egressDecision, egressProxy, folderSync, listen, modelDoor, secretRoute, serveEgress, speakerDoor, type Live } from "../src/sandbox.ts";
+import { egressDecision, egressProxy, folderPath, folderSync, listen, modelDoor, secretRoute, serveEgress, speakerDoor, type Live } from "../src/sandbox.ts";
 import type { Config } from "../src/config.ts";
 
 const live = (extra: Partial<Live> = {}): Live => ({
@@ -150,8 +150,8 @@ describe("folders over SSH", () => {
         if (fail) throw new Error("no key yet");
         table.set(share, writable);
       },
-      unmount: async (share: string) => {
-        calls.push(`unmount ${share}`);
+      unmount: async (share: string, writable: boolean) => {
+        calls.push(`unmount ${share} ${folderPath(share, writable)}`);
         table.delete(share);
       },
     };
@@ -171,8 +171,12 @@ describe("folders over SSH", () => {
     await sync();
     view.shares.set("docs", { writable: true, expiresAt: new Date(Date.now() - 1).toISOString() });
     await sync();
-    assert.deepEqual(guest.calls, ["mount docs ro", "unmount docs", "mount docs rw", "mount docs rw", "unmount docs"]);
+    assert.deepEqual(guest.calls, ["mount docs ro", "unmount docs /input/docs", "mount docs rw", "mount docs rw", "unmount docs /space/docs"]);
     assert.equal(guest.table.size, 0);
+  });
+
+  test("read-only shares mount under /input, read-write ones under /space", () => {
+    assert.deepEqual([folderPath("docs", false), folderPath("docs", true)], ["/input/docs", "/space/docs"]);
   });
 
   test("notes a failed mount once and retries it", async () => {

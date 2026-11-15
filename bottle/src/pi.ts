@@ -107,11 +107,13 @@ const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 export const availableModels = (config: Config) => [
   ...config.localModel.models.map((model) => ({
     id: `local/${model.id}`,
+    alias: model.alias,
     label: `${model.label} (host-local)`,
   })),
   ...config.hostedProviders.flatMap((provider) =>
     provider.models.map((model) => ({
       id: `${provider.id}/${model.id}`,
+      alias: model.alias,
       label: `${model.label} (${provider.id})`,
     })),
   ),
@@ -157,7 +159,7 @@ export const systemNote = (agent: { name: string; prompt?: string; attended: boo
     "",
     "You run inside a disposable micro-VM.",
     "",
-    "- `/input` holds host folders the owner granted you. Each is read-only unless its grant says `:rw`.",
+    "- `/space/<share>` holds read-write shared folders that outlive this agent (other agents may read them later). `/input/<share>` holds read-only folders the owner granted you.",
     "- `/work` is your scratch space. It holds this session. The owner destroys it when the task closes.",
     "- `/output` is permanent. Write everything the owner should keep there.",
     "- Work directly on the owner's goal. Keep updates concise.",

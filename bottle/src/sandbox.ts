@@ -27,7 +27,7 @@ export type Live = {
   hosts: (Timed & { host: string })[];
   /** Granted `secret:` items and the hosts speaker bound them to. Requests to these hosts go through speaker's proxy. */
   secretHosts: (Timed & { name: string; hosts: string[] })[];
-  /** Folder grants by share, mounted under /input over SSH through speaker. */
+  /** Folder grants by share, mounted over SSH (read-only under /input, read-write under /space) through speaker. */
   shares: Map<string, Timed & { writable: boolean }>;
   events: { at: string; text: string }[];
   /** Spend cap: model requests allowed so far, the owner's limit, and whether the refusal was recorded. */
@@ -310,13 +310,15 @@ export const speakerDoor =
  * mount whose grant ended (or whose session speaker ended) is removed or made again. The guest's own mount table is the
  * state. A failed mount is noted once and retried (speaker may not have installed the key yet).
  */
+export const folderPath = (share: string, writable: boolean) => `/${writable ? "space" : "input"}/${share}`;
+
 export const folderSync = (
   live: Live,
   guest: {
     /** Folders mounted now, each with whether it is read-write. */
     mounted: () => Promise<Map<string, boolean>>;
     mount: (share: string, writable: boolean) => Promise<void>;
-    unmount: (share: string) => Promise<void>;
+    unmount: (share: string, writable: boolean) => Promise<void>;
   },
   retryMs = 3_000,
 ) => {
@@ -330,9 +332,9 @@ export const folderSync = (
     for (const [share, writable] of mounted)
       if (wanted.get(share) !== writable) {
         mounted.delete(share);
-        await guest.unmount(share).then(
-          () => note(live, `unmounted /input/${share}`),
-          (error: Error) => note(live, `could not unmount /input/${share}: ${error.message}`),
+        await guest.unmount(share, writable).then(
+          () => note(live, `unmounted ${folderPath(share, writable)}`),
+          (error: Error) => note(live, `could not unmount ${folderPath(share, writable)}: ${error.message}`),
         );
       }
     for (const [share, writable] of wanted) {
@@ -341,7 +343,7 @@ export const folderSync = (
         await guest.mount(share, writable);
         used = true;
         failing.delete(share);
-        note(live, `mounted /input/${share} ${writable ? "read-write" : "read-only"} over SSH`);
+        note(live, `mounted ${folderPath(share, writable)} ${writable ? "read-write" : "read-only"} over SSH`);
       } catch (error) {
         if (!failing.has(share)) note(live, `could not mount folder ${share}: ${(error as Error).message}`);
         failing.set(share, Date.now() + retryMs);
@@ -355,7 +357,7 @@ const Catalog = z.object({
   ssh: z.array(z.object({ item: z.string(), commands: z.array(z.string()), knownHosts: z.object({ line: z.string() }) })),
 });
 
-/** The guest side of `folderSync`: mounts, unmounts and lists `/input/<share>` with `sshfs` over the SSH door. */
+/** The guest side of `folderSync`: mounts, unmounts and lists `/input/<share>` (read-only) and `/space/<share>` (read-write) with `sshfs` over the SSH door. */
 const guestFolders = (vm: MicroVm, config: Config, agentToken: string) => {
   const run = async (command: string) => {
     const result = await vm.shell(command);
@@ -373,12 +375,15 @@ const guestFolders = (vm: MicroVm, config: Config, agentToken: string) => {
       const sshfs = command
         .replace("<known_hosts>", () => GUEST_SSH.knownHosts)
         .replace("<key>", () => GUEST_SSH.key)
-        .replace("<mountpoint>", () => `/input/${share}`)
+        .replace("<mountpoint>", () => folderPath(share, writable))
         .replace("sshfs ", `sshfs -F ${GUEST_SSH.config}${writable ? "" : " -o ro"} `);
-      await run(`mkdir -p /input/${share} && echo '${grant.knownHosts.line}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
+      await run(`mkdir -p ${folderPath(share, writable)} && echo '${grant.knownHosts.line}' > ${GUEST_SSH.knownHosts} && ${sshfs}`);
     },
     // speaker ending a session takes its mount with it, so there may be nothing left to unmount.
-    unmount: (share: string) => run(`if grep -q ' /input/${share} ' /proc/mounts; then fusermount3 -uz /input/${share}; fi`),
+    unmount: (share: string, writable: boolean) => {
+      const path = folderPath(share, writable);
+      return run(`if grep -q ' ${path} ' /proc/mounts; then fusermount3 -uz ${path}; fi`);
+    },
     mounted: async () => {
       const table = await vm.shell("grep ' fuse.sshfs ' /proc/mounts || true");
       return new Map(
@@ -387,7 +392,8 @@ const guestFolders = (vm: MicroVm, config: Config, agentToken: string) => {
           .split("\n")
           .flatMap((line) => {
             const [, path, , options] = line.split(" ");
-            return path?.startsWith("/input/") ? [[path.slice("/input/".length), options!.split(",").includes("rw")] as const] : [];
+            const share = path?.match(/^\/(?:input|space)\/(.+)$/)?.[1];
+            return share ? [[share, options!.split(",").includes("rw")] as const] : [];
           }),
       );
     },
@@ -405,7 +411,7 @@ export const listen = async (path: string, handler: RequestListener, fail: Reply
 
 /**
  * Starts one VM for an agent: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
- * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
+ * model-request cap), folders from `live.shares` mounted under /input or /space and following later changes, `paths` mounted at
  * /work, /output and /etc/bottle, and model calls appended to `paths.modelCalls`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
 export async function boot(

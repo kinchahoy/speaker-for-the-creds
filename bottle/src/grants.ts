@@ -15,7 +15,7 @@ const Limits = z
   .strict();
 
 /**
- * A launch template is the runtime profile speaker does not decide (VM limits, attended mode) plus what the agent starts
+ * A launch template is the runtime profile speaker does not decide (VM limits) plus what the agent starts
  * with: a `want` list of items and groups, named by its `label` and asked for over `duration`. Speaker shows that as the
  * agent's first request; the agent starts at once and works on whatever needs no new access while the owner decides.
  */
@@ -25,8 +25,8 @@ export const Template = z
     /** What the agent is, as the owner would say it: the label on the agent's request card. */
     label: z.string().min(1).max(120),
     limits: Limits,
-    /** Forces attended (true) or unattended (false) launches; unset, the launch decides. */
-    attended: z.boolean().optional(),
+    /** The default model (an id or alias) when the launch names none. */
+    model: z.string().min(1).optional(),
     /** Items and groups the agent asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
     want: z.array(z.string().trim().min(1)).max(50).default([]),
     /** How long the first request asks for. */
@@ -62,17 +62,6 @@ export class StatusError extends Error {
 export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
   const want = [...new Set([...template.want, ...extra])];
   return want.length ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration } : undefined;
-};
-
-/**
- * Attended means the owner is at the terminal to answer questions. A launch prompt implies the owner walked away;
- * no prompt implies the owner will attach and type. A template's `attended` overrides that default, and a launch
- * that contradicts it fails rather than silently losing the owner's choice.
- */
-export const attendedFor = (template: Template, input: { prompt?: string; attended?: boolean }) => {
-  if (template.attended !== undefined && input.attended !== undefined && input.attended !== template.attended)
-    throw new StatusError(400, `template ${template.id} is always ${template.attended ? "attended" : "unattended"}`);
-  return template.attended ?? input.attended ?? true;
 };
 
 export const loadTemplates = (path: string) => {

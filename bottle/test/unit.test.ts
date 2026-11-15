@@ -6,8 +6,8 @@ import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
-import { inForce } from "../src/agents.ts";
+import { launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
+import { inForce, resolveModel } from "../src/agents.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
 import {
   alreadyPendingText,
@@ -137,7 +137,7 @@ test("templates load from one file and reject duplicate identities", () => {
   roots.push(join(path, ".."));
   const templates = JSON.parse(readFileSync(new URL("../templates.json", import.meta.url), "utf8"));
   writeFileSync(path, JSON.stringify(templates));
-  assert.deepEqual([...loadTemplates(path).keys()], ["developer", "github-read", "loop", "offline", "packages", "research"]);
+  assert.deepEqual([...loadTemplates(path).keys()], ["sealed", "builder", "trusted"]);
   writeFileSync(path, JSON.stringify([templates[0], templates[0]]));
   assert.throws(() => loadTemplates(path), /repeat an id/);
   writeFileSync(path, JSON.stringify([{ ...templates[0], duration: "1h" }]));
@@ -164,22 +164,6 @@ test("guest configuration mounts no skills, sends no extension config for an MCP
   assert.deepEqual(readdirSync(join(directory, "agent-files")), []);
   assert.ok(args.includes("builtin:mcp"));
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
-});
-
-test("attended by default, follows the launch flag, and a template can force it", () => {
-  const free = Template.parse({
-    id: "free",
-    label: "Free",
-    limits: { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 },
-  });
-  assert.equal(attendedFor(free, {}), true);
-  assert.equal(attendedFor(free, { prompt: "do it" }), true);
-  assert.equal(attendedFor(free, { prompt: "do it", attended: true }), true);
-  assert.equal(attendedFor(free, { attended: false }), false);
-  const forced = { ...free, id: "forced", attended: false };
-  assert.equal(attendedFor(forced, {}), false);
-  assert.equal(attendedFor(forced, { attended: false }), false);
-  assert.throws(() => attendedFor(forced, { attended: true }), /always unattended/);
 });
 
 test("attended mode loads ask-user-question; ext: grants load catalog extensions and their tools", () => {
@@ -237,8 +221,43 @@ test("a template's want, label and duration become the agent's first request", (
   assert.throws(() => Template.parse({ id: "old", label: "Old", limits, bundle: "developer" }), /bundle/);
 
   const shipped = loadTemplates(new URL("../templates.json", import.meta.url).pathname);
-  assert.deepEqual(shipped.get("developer")?.want, ["group:developer"]);
-  assert.deepEqual(shipped.get("offline")?.want, []);
+  assert.deepEqual(
+    [...shipped.values()].map((entry) => [entry.id, entry.model]),
+    [
+      ["sealed", "qwen"],
+      ["builder", "deepseek"],
+      ["trusted", "deepseek"],
+    ],
+  );
+  assert.ok(shipped.get("trusted")!.want.includes("secret:GITHUB_READ"));
+  assert.ok(shipped.get("sealed")!.want.every((item) => !item.startsWith("group:") && !item.startsWith("site:")));
+});
+
+test("a model is chosen by id or alias; aliases must be unique; unknown names list the choices", () => {
+  const raw = JSON.parse(readFileSync(writeConfig(), "utf8"));
+  raw.localModel.models = [{ id: "qwen", label: "Qwen", alias: "q" }];
+  raw.hostedProviders = [
+    {
+      id: "or",
+      service: "or",
+      models: [
+        { id: "x/y", label: "XY", alias: "xy" },
+        { id: "z", label: "Z" },
+      ],
+    },
+  ];
+  const path = join(roots.at(-1)!, "alias.json");
+  writeFileSync(path, JSON.stringify(raw));
+  const config = loadConfig(path);
+  assert.equal(resolveModel(config), "local/qwen");
+  assert.deepEqual(
+    ["q", "local/qwen", "xy", "or/x/y", "or/z"].map((name) => resolveModel(config, name)),
+    ["local/qwen", "local/qwen", "or/x/y", "or/x/y", "or/z"],
+  );
+  assert.throws(() => resolveModel(config, "nope"), /use one of: q \(local\/qwen\), xy \(or\/x\/y\), or\/z/);
+  raw.hostedProviders[0].models[0].alias = "q";
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => loadConfig(path), /aliases must be unique/);
 });
 
 test("grants count as in force when installed, MCP and extension ones once Pi runs them, expired ones never", () => {

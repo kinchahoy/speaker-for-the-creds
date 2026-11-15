@@ -5,7 +5,15 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 const port = z.number().int().min(1).max(65_535);
-const model = z.object({ id: z.string().min(1), label: z.string().min(1) });
+const model = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  // A short name for -m and templates, unique across all models.
+  alias: z
+    .string()
+    .regex(/^[a-z0-9-]+$/, "a model alias uses lowercase letters, digits, and dashes")
+    .optional(),
+});
 
 const HostedProviderSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "a provider id uses lowercase letters, digits, and dashes"),
@@ -73,6 +81,13 @@ export const localModelProblem = (upstream: string) => {
     : "must be one loopback, RFC1918, or Tailscale IPv4 host:port endpoint (no http://, no path)";
 };
 
+/** Whether the local model server answers its model list within 2 s; it is the owner's own machine and not always up. */
+export const localModelUp = (upstream: string) =>
+  fetch(`http://${upstream}/v1/models`, { signal: AbortSignal.timeout(2_000) }).then(
+    (response) => response.ok,
+    () => false,
+  );
+
 export const validateConfig = (data: unknown): Config => {
   const config = ConfigFile.parse(data);
   // Loopback, RFC1918, and the Tailscale CGNAT range are the only addresses this service binds.
@@ -94,6 +109,8 @@ export const validateConfig = (data: unknown): Config => {
     throw new Error("localModel needs both an upstream and its models, or neither (hosted models only)");
   if (!config.localModel.models.length && !config.hostedProviders.length) throw new Error("configure a local model or a hosted provider");
   if (new Set(config.localModel.models.map((entry) => entry.id)).size !== config.localModel.models.length) throw new Error("localModel repeats a model id");
+  const aliases = [...config.localModel.models, ...config.hostedProviders.flatMap((provider) => provider.models)].flatMap((entry) => entry.alias ?? []);
+  if (new Set(aliases).size !== aliases.length) throw new Error("model aliases must be unique");
   assertDirectory("configRoot", config.configRoot);
   assertDirectory("stateRoot", config.stateRoot);
   assertDirectory("outputRoot", config.outputRoot);

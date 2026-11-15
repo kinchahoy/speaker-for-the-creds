@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFile, spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { hc as honoClient } from "hono/client";
@@ -8,7 +8,10 @@ import { Command, InvalidArgumentError, Option } from "commander";
 import { attach } from "./sandbox.ts";
 import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
-import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
+import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, localModelUp, type Config } from "./config.ts";
+import { loadTemplates } from "./grants.ts";
+import { availableModels } from "./pi.ts";
+import { finishedAgents } from "./agents.ts";
 
 /** The owner's terminal client: `bottle run | ls | attach | stop | down | serve | build | register`. */
 type Agent = {
@@ -26,7 +29,6 @@ type Agent = {
 
 // mise names the task it runs; installed on PATH, the command is plain `bottle`.
 const SELF = process.env.MISE_TASK_NAME === undefined ? "bottle" : "mise run bottle";
-const FINISHED_SHOWN = 5;
 const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
 
@@ -46,8 +48,8 @@ const runScript = (name: Script, args: string[]) => {
   child.on("exit", (code) => process.exit(code ?? 1));
 };
 
-type Values = { name?: string; template?: string; model?: string; hours?: number; detach?: boolean; attended?: boolean; unattended?: boolean };
-type Command_ = "register" | "run" | "ls" | "attach" | "stop" | "down";
+type Values = { json?: boolean; name?: string; template?: string; model?: string; hours?: number; detach?: boolean; attended?: boolean; unattended?: boolean };
+type Command_ = "templates" | "register" | "run" | "ls" | "attach" | "stop" | "down";
 
 const home = bottleHome();
 const logFile = join(home, "bottle.log");
@@ -187,12 +189,40 @@ async function main(command: Command_, values: Values, positionals: string[]) {
 
   if (command === "down") {
     await stopBottle();
+  } else if (command === "templates") {
+    const templates = [...loadTemplates(`${config.configRoot}/templates.json`).values()].map(({ id, label, model }) => ({
+      id,
+      label,
+      ...(model && { model }),
+    }));
+    const models = await Promise.all(
+      availableModels(config).map(async ({ id, alias, label }) => {
+        const local = id.startsWith("local/");
+        return { id, ...(alias && { alias }), label, local, up: local ? await localModelUp(config.localModel.upstream!) : true };
+      }),
+    );
+    if (values.json) return void console.log(JSON.stringify({ templates, models }));
+    const table = (rows: string[][]) => {
+      const widths = rows[0]!.map((_, column) => Math.max(...rows.map((row) => row[column]!.length)));
+      return rows
+        .map((row) =>
+          row
+            .map((cell, column) => cell.padEnd(widths[column]!))
+            .join("  ")
+            .trimEnd(),
+        )
+        .join("\n");
+    };
+    console.log(table([["TEMPLATE", "MODEL", "LABEL"], ...templates.map((entry) => [entry.id, entry.model ?? "-", entry.label])]));
+    console.log(
+      `\n${table([["ALIAS", "MODEL", "LABEL", "STATUS"], ...models.map((entry) => [entry.alias ?? "-", entry.id, entry.label, entry.local ? (entry.up ? "up" : "down") : ""])])}`,
+    );
   } else if (command === "register") {
     const name = values.name ?? hostname();
     const id = await registerHost(config, configPath, name);
     console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then launch an agent with \`${SELF} run\`.`);
   } else if (command === "run") {
-    const { template = "offline", name, model, hours } = values;
+    const { template = "builder", name, model, hours } = values;
     const prompt = positionals[0];
     // Attached unless asked otherwise or there is no terminal to attach; an agent nobody watches is unattended.
     const detach = values.detach || !(process.stdin.isTTY && process.stdout.isTTY);
@@ -250,19 +280,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
           console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it at ${config.speaker.url}/admin`);
       });
     }
-    // Finished agents leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.
-    const finished = readdirSync(config.outputRoot)
-      .sort()
-      .reverse()
-      .flatMap((folder) => {
-        try {
-          const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "agent.json"), "utf8")) as { state: string };
-          return [`${state.padEnd(15)}${join(config.outputRoot, folder)}`];
-        } catch {
-          return []; // a live agent's folder has no agent.json yet
-        }
-      })
-      .slice(0, FINISHED_SHOWN);
+    const finished = finishedAgents(config.outputRoot).map(({ state, outputDir }) => `${state.padEnd(15)}${outputDir}`);
     if (finished.length > 0) console.log(`\nLast finished agents (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
     const agent = await resolveAgent(positionals[0]);
@@ -283,8 +301,8 @@ program
   .description("Start an agent and attach to its Pi terminal (Ctrl-\\ detaches); with a prompt it runs once and archives when Pi writes /output/DONE")
   .argument("[prompt]", "what the agent should do; none opens Pi for you to type")
   .option("-d, --detach", "do not attach: print the attach command and return (the agent is unattended)")
-  .option("-t, --template <name>", "template; offline asks speaker for nothing at launch", "offline")
-  .option("-m, --model <id>", "model")
+  .option("-t, --template <name>", "template (see `templates`): sealed, builder, or trusted", "builder")
+  .option("-m, --model <id|alias>", "model id or alias; default: the template's model")
   .option("--name <name>", "agent name")
   .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
     const hours = Number(text);
@@ -294,6 +312,11 @@ program
   .addOption(new Option("--attended", "Pi may ask questions even when detached").conflicts("unattended"))
   .option("--unattended", "Pi records assumptions instead of asking, even when attached")
   .action((prompt: string | undefined, values: Values) => main("run", values, prompt ? [prompt] : []));
+program
+  .command("templates")
+  .description("List the launch templates and the models (with aliases); works without bottle running")
+  .option("--json", "print JSON")
+  .action((values: Values) => main("templates", values, []));
 program
   .command("ls")
   .description("List live agents, and the last finished ones")

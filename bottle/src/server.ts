@@ -10,7 +10,7 @@ import { errorBody } from "../../speaker/items.ts";
 import { codes, loadTemplates, StatusError } from "./grants.ts";
 import { loadCatalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
-import { closed, Agents, type Agent } from "./agents.ts";
+import { closed, finishedAgents, Agents, type Agent } from "./agents.ts";
 
 type Env = { Variables: { agent: Agent } };
 
@@ -56,6 +56,7 @@ export const startControl = (config: Config, agents: Agents) => {
       state: agent.state,
       attended: agent.attended,
       model: agent.model,
+      outputDir: agent.outputDir,
       startedAt: agent.startedAt,
       sessionId: agent.guest.sessionId,
       speakerAgentId: agent.speakerAgentId,
@@ -65,7 +66,7 @@ export const startControl = (config: Config, agents: Agents) => {
     }));
 
   const routes = app
-    .get("/api/state", (context) => context.json({ agents: listAgents() }))
+    .get("/api/state", (context) => context.json({ agents: listAgents(), finished: finishedAgents(config.outputRoot) }))
     .post(
       "/api/agents",
       validator("json", (body) => NewAgent.parse(body)),

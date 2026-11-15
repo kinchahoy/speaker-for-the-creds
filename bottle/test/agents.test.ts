@@ -60,6 +60,10 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   });
   await ownerPost(`/hosts/${((await registered.json()) as { id: string }).id}/approve`);
 
+  // The local model's /v1/models answer, which create checks before it launches on a local model.
+  const modelServer = createServer((_req, res) => res.end("{}"));
+  modelServer.listen(0, "127.0.0.1");
+  await once(modelServer, "listening");
   const config = {
     ...dirs,
     bindHost: "127.0.0.1",
@@ -69,13 +73,17 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     idleStopMinutes: 10,
     guestImage: "test",
     speaker: { url, proxyPort: 1, sshPort: 2 },
-    localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] },
+    localModel: {
+      guestHost: "model.internal",
+      upstream: `127.0.0.1:${(modelServer.address() as AddressInfo).port}`,
+      models: [{ id: "m", label: "M", alias: "m-alias" }],
+    },
     hostedProviders: [],
     herdr: false,
   } satisfies Config;
   const templates = new Map(
     [
-      { id: "offline", label: "Work offline", limits },
+      { id: "offline", label: "Work offline", limits, model: "m-alias" },
       { id: "web", label: "Read example.com", limits, want: ["site:example.com"], duration: "1h" },
     ].map((entry) => [entry.id, Template.parse(entry)]),
   );
@@ -86,7 +94,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   let piUp = false;
   pi.settleMs = 50;
   // The real model door over a stub upstream, wired as boot wires it; a test asks it for model calls.
-  const stubs: Server[] = [];
+  const stubs: Server[] = [modelServer];
   let askModel = async () => {};
   const boot: Boot = async (_config, live, _limits, paths, _env, speaker) => {
     const upstream = createServer((req, res) => void req.resume().on("end", () => res.writeHead(200).end("data: {}\n\n")));

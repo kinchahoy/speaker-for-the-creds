@@ -3,11 +3,12 @@ import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdir
 import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
+import { join } from "node:path";
 import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
-import type { Config } from "./config.ts";
+import { localModelUp, type Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
-import { attendedFor, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
+import { launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 
@@ -43,6 +44,22 @@ const agentTable: Table<AgentState, AgentEvent> = {
   "failed-archive": {},
 };
 export const closed = (agent: Pick<Agent, "state">) => ["closing", "archived", "failed-archive"].includes(agent.state);
+
+/** The newest finished agents, read from their archive folders (<time>--<name>--<id>): each one's final agent.json plus its folder. */
+export const finishedAgents = (outputRoot: string, count = 5) =>
+  readdirSync(outputRoot)
+    .sort()
+    .reverse()
+    .flatMap((folder) => {
+      const outputDir = join(outputRoot, folder);
+      try {
+        const { id, name, state, model, closedAt } = JSON.parse(readFileSync(join(outputDir, "_control", "agent.json"), "utf8")) as Record<string, string>;
+        return [{ id, name, state, model, closedAt, outputDir }];
+      } catch {
+        return []; // a live agent's folder has no agent.json yet
+      }
+    })
+    .slice(0, count);
 /** Pi never ran in these states, so there is no session to quit or export. */
 const neverRan = (agent: Pick<Agent, "state">) => agent.state === "start-failed" || agent.state === "awaiting-grant";
 
@@ -144,6 +161,19 @@ const upstream = <T>(call: Promise<T>) =>
     throw new StatusError(502, error.message);
   });
 
+/** A model id or alias (default: the first configured model) as its full id; unknown names fail with the choices. */
+export const resolveModel = (config: Config, wanted?: string) => {
+  const models = availableModels(config);
+  if (wanted === undefined) return models[0]!.id;
+  const found = models.find((entry) => entry.id === wanted || entry.alias === wanted);
+  if (!found)
+    throw new StatusError(
+      400,
+      `model ${wanted} is not configured; use one of: ${models.map((entry) => (entry.alias ? `${entry.alias} (${entry.id})` : entry.id)).join(", ")}`,
+    );
+  return found.id;
+};
+
 export class Agents {
   readonly byId = new Map<string, Agent>();
   readonly byGuestToken = new Map<string, Agent>();
@@ -206,11 +236,11 @@ export class Agents {
       throw new StatusError(409, `already running ${this.config.maxAgents} agents`);
     const template = this.templates.get(input.template);
     if (!template) throw new StatusError(400, `no template ${input.template}`);
-    const attended = attendedFor(template, input);
+    const attended = input.attended ?? true;
     const name = input.name ?? template.id;
-    const models = availableModels(this.config).map((entry) => entry.id);
-    const model = input.model ?? models[0]!;
-    if (!models.includes(model)) throw new StatusError(400, `model ${model} is not configured; use one of: ${models.join(", ")}`);
+    const model = resolveModel(this.config, input.model ?? template.model);
+    if (model.startsWith("local/") && !(await localModelUp(this.config.localModel.upstream!)))
+      throw new StatusError(400, `the local model server ${this.config.localModel.upstream} is not answering; start it or pick another model with -m`);
     const hours = input.hours ?? template.limits.maxRuntimeHours;
     if (hours > template.limits.maxRuntimeHours)
       throw new StatusError(400, `template ${template.id} limits an agent to ${template.limits.maxRuntimeHours} hours`);

@@ -428,7 +428,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     const created = await fetch(`${control}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT, attended: false }),
+      body: JSON.stringify({ template: "sealed", model: `local/${model}`, name: "smoke-test", prompt: SMOKE_PROMPT, attended: false }),
     });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
     if (!id) fail(`the smoke-test agent did not start: ${error ?? created.status}`, `read ${logFile}`);

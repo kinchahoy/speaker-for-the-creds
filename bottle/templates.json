@@ -1,7 +1,8 @@
 [
   {
-    "id": "developer",
-    "label": "Develop with packages, GitHub and library docs",
+    "id": "sealed",
+    "label": "Sealed: the shared agent space, no network",
+    "model": "qwen",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -9,51 +10,47 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "want": ["group:developer"],
+    "want": ["folder:bottle-agent-space:rw", "ext:subagent", "ext:pi-cc-monitor", "ext:pi-cc-loop"],
     "duration": "1d"
   },
   {
-    "id": "github-read",
-    "label": "Read GitHub repositories",
+    "id": "builder",
+    "label": "Builder: agent space, packages, public GitHub, docs and web search",
+    "model": "deepseek",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
       "rootfsGiB": 8,
       "workGiB": 20,
-      "maxRuntimeHours": 24
+      "maxRuntimeHours": 72,
+      "maxModelRequests": 1500
     },
-    "want": ["group:github-read"],
+    "want": [
+      "folder:bottle-agent-space:rw",
+      "ext:subagent",
+      "ext:pi-cc-monitor",
+      "ext:pi-cc-loop",
+      "site:pypi.org",
+      "site:files.pythonhosted.org",
+      "site:registry.npmjs.org",
+      "site:github.com",
+      "site:codeload.github.com",
+      "site:raw.githubusercontent.com",
+      "site:release-assets.githubusercontent.com",
+      "site:objects.githubusercontent.com",
+      "context7.read",
+      "ext:pi-web-access",
+      "site:mcp.exa.ai",
+      "site:*.wikipedia.org",
+      "site:arxiv.org",
+      "site:export.arxiv.org"
+    ],
     "duration": "1d"
   },
   {
-    "id": "loop",
-    "label": "Scheduled loop with wake-ups and monitors",
-    "limits": {
-      "cpus": 2,
-      "memoryMiB": 2048,
-      "rootfsGiB": 8,
-      "workGiB": 20,
-      "maxRuntimeHours": 24,
-      "maxModelRequests": 300
-    },
-    "attended": false,
-    "want": ["group:loop"],
-    "duration": "1d"
-  },
-  {
-    "id": "offline",
-    "label": "Offline document analysis",
-    "limits": {
-      "cpus": 2,
-      "memoryMiB": 2048,
-      "rootfsGiB": 8,
-      "workGiB": 20,
-      "maxRuntimeHours": 24
-    }
-  },
-  {
-    "id": "packages",
-    "label": "Install PyPI and npm packages",
+    "id": "trusted",
+    "label": "Trusted: builder plus private GitHub and notes (read)",
+    "model": "deepseek",
     "limits": {
       "cpus": 2,
       "memoryMiB": 2048,
@@ -61,20 +58,29 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "want": ["group:packages"],
-    "duration": "1d"
-  },
-  {
-    "id": "research",
-    "label": "Public web research",
-    "limits": {
-      "cpus": 2,
-      "memoryMiB": 2048,
-      "rootfsGiB": 8,
-      "workGiB": 20,
-      "maxRuntimeHours": 24
-    },
-    "want": ["group:research"],
+    "want": [
+      "folder:bottle-agent-space:rw",
+      "ext:subagent",
+      "ext:pi-cc-monitor",
+      "ext:pi-cc-loop",
+      "site:pypi.org",
+      "site:files.pythonhosted.org",
+      "site:registry.npmjs.org",
+      "site:github.com",
+      "site:codeload.github.com",
+      "site:raw.githubusercontent.com",
+      "site:release-assets.githubusercontent.com",
+      "site:objects.githubusercontent.com",
+      "context7.read",
+      "ext:pi-web-access",
+      "site:mcp.exa.ai",
+      "site:*.wikipedia.org",
+      "site:arxiv.org",
+      "site:export.arxiv.org",
+      "secret:GITHUB_READ",
+      "obsidian.read",
+      "karakeep.read"
+    ],
     "duration": "1d"
   }
 ]

@@ -53,7 +53,8 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Both are required: until you register, `init bottle` writes placeholders from `config.example.json`, so set them by hand if you skip registering.
 - `localModel.upstream`: optional; leave it and `localModel.models` out (init: answer `none`) to use hosted models only. One loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
-- `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
+- `localModel.models`: the served model IDs. Name one with `--model local/<id>`, or give it an `alias`. Local inference is baseline access, independent of speaker grants.
+- Any model entry may carry an `alias` (lowercase letters, digits, dashes; unique across all models). `-m` and a template's `model` accept the full id or the alias. `bottle templates` lists both. A local model is checked at launch: if the local server does not answer `/v1/models` within 2 seconds the launch fails and names the server.
 - `hostedProviders`: each `{ "id", "service", "models", "api" }` names the speaker service that holds a hosted provider's key (see Hosted model providers). `api` is `openai-completions` (the default) or `anthropic-messages`. Name a model with `--model <id>/<model>`. Init writes the starters: `openrouter`, `anthropic` (Claude) and `openai`.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
 
@@ -82,9 +83,9 @@ Launch and inspect an agent:
 {.ai}
 
 ```sh
-bottle run "Write a greeting to /output/greeting.txt"   # attaches to Pi's terminal; template defaults to offline
+bottle run "Write a greeting to /output/greeting.txt"   # attaches to Pi's terminal; template defaults to builder
 bottle run -d "Write a greeting to /output/greeting.txt"  # detached: prints the attach command and returns
-bottle run -t research -m openrouter/<model>              # no prompt: Pi opens and waits for you to type
+bottle run -t sealed -m deepseek                               # no prompt: Pi opens and waits for you to type
 bottle ls               # live agents, then the last few finished ones with their archive folders
 bottle attach [<id>]    # id, unique id prefix, or name; no id attaches the only open agent
 bottle stop [<id>]
@@ -216,8 +217,8 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle 
 - Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
 - Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
   - Each agent gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle adds it to the agent's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
-  - While a folder grant is active, bottle (not Pi) mounts `/input/<share>` in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle unmounts the share.
-  - A folder grant exposes the whole configured share at `/input/<share>`, read-only unless the item ends in `:rw`.
+  - While a folder grant is active, bottle (not Pi) mounts `/input/<share>` (read-write grants: `/space/<share>`) in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle unmounts the share.
+  - A folder grant exposes the whole configured share: read-only at `/input/<share>`, or at `/space/<share>` when the item ends in `:rw`. `/space` shares outlive the agent, so later agents may read them.
   - `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
 - Storage: microsandbox keeps images, VM disks, and its sockets in `~/.bottle/microsandbox`. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder).
 
@@ -227,13 +228,23 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle 
 
 <sub>AI-written</sub>
 
-`templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `attended`, which fixes the launch mode. `want` lists items and groups (`group:developer`, `site:pypi.org`, `notes.read`). `label` and `duration` are the agent's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the agent's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing (the `offline` preset). The file ships the developer, github-read, loop, offline, packages, and research presets. Duplicate IDs fail validation.
+`templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `model`, the template's default model (an id or alias). `want` lists items (`site:pypi.org`, `ext:subagent`, `notes.read`) and may list `group:` items when speaker has a `groups.json`. `label` and `duration` are the agent's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the agent's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing. Duplicate IDs fail validation.
+
+_AI-drafted_ The file ships three risk tiers, each a superset of the one before. Writes (GitHub write, `ssh:`, `.full` services) are in no template; the agent asks mid-run.
+
+| Template | Default model | Adds |
+| --- | --- | --- |
+| `sealed` | `qwen` | The shared agent space (`folder:bottle-agent-space:rw`, at `/space/bottle-agent-space`) and the `subagent`, `pi-cc-monitor`, `pi-cc-loop` extensions. No network. |
+| `builder` | `deepseek` | Package registries, public GitHub, `context7.read`, web search, Wikipedia and arXiv. Up to 72 hours and 1500 model requests. |
+| `trusted` | `deepseek` | `secret:GITHUB_READ` for private GitHub, plus `obsidian.read` and `karakeep.read`. |
+
+`bottle run` defaults to `builder`. Model resolution is `-m`, then the template's `model`, then the first configured model. `bottle templates [--json]` prints the templates and the models with their aliases, and shows whether the local model server answers; it reads the files directly and does not need bottle running.
 {.ai}
 
 A template is the runtime profile bottle owns (VM size, deadline, model-request cap, attended mode) plus what the agent starts with. A group is defined in speaker and names items you approve together. To change what agents start with, edit a template's `want` or the group in speaker. To change how big or how long an agent is, edit the template's limits.
 {.ai}
 
-An agent with a local model starts Pi at once and does not wait for its first request. An agent launched with a prompt that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended agent may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
+An agent with a local model starts Pi at once and does not wait for its first request. An agent launched with a prompt that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended agent may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended launches.
 {.ai}
 
 - Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the agent." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model's grant arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
@@ -352,7 +363,7 @@ Placeholder substitution keeps the real value off the guest and off bottle. It d
 
 <sub>AI-written</sub>
 
-bottle mounts `/input` for granted shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
+bottle mounts `/input` for read-only shares, `/space` for read-write shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
 {.ai}
 
 At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds agent metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `model-calls.jsonl`.
