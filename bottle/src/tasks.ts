@@ -208,8 +208,8 @@ export class Tasks {
     if (!template) throw new StatusError(400, `no template ${input.template}`);
     const attended = attendedFor(template, input);
     const name = input.name ?? template.id;
-    const model = input.model ?? `local/${this.config.localModel.models[0]!.id}`;
     const models = availableModels(this.config).map((entry) => entry.id);
+    const model = input.model ?? models[0]!;
     if (!models.includes(model)) throw new StatusError(400, `model ${model} is not configured; use one of: ${models.join(", ")}`);
     const hours = input.hours ?? template.limits.maxRuntimeHours;
     if (hours > template.limits.maxRuntimeHours)

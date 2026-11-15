@@ -21,7 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { bottleHome, configPathFromEnv, loadConfig, microsandboxHome, validateConfig } from "./src/config.ts";
+import { bottleHome, configPathFromEnv, loadConfig, localModelProblem, microsandboxHome, validateConfig } from "./src/config.ts";
 import { answered, ask, fail, ok, pickPort, readStdin } from "../speaker/init.ts";
 import { hostApproved, registerHost } from "./src/speaker.ts";
 
@@ -77,6 +77,7 @@ type Previous = {
   guestImage?: string;
   speaker?: { url?: string };
   localModel?: { upstream?: string; models?: { id: string }[] };
+  hostedProviders?: unknown[];
 };
 const readPrevious = (path: string): Previous | undefined => {
   if (!existsSync(path)) return undefined;
@@ -301,17 +302,27 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   if (!healthy) fail(`speaker did not answer at ${speakerUrl}`, "start speaker (mise run speaker, or mise run init speaker), or correct the URL");
   ok(`Speaker answers at ${speakerUrl}.`);
 
-  const oldEndpoint = previous?.localModel?.upstream;
+  // "none" declines a local model: the agents then think only with hosted models (OpenRouter, Claude, OpenAI), whose
+  // keys the owner enters on their speaker services.
+  const oldEndpoint = previous ? (previous.localModel?.upstream ?? "none") : undefined;
   const endpoint =
-    (await ask(flags["model-endpoint"], yes, oldEndpoint, () =>
-      p.text({
-        message: `Model server the agents think with: host:port of an OpenAI-compatible server (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`,
-        placeholder: oldEndpoint,
-        defaultValue: oldEndpoint,
-        validate: (v) => (v?.trim() || oldEndpoint ? undefined : "Enter the model server's host:port."),
-      }),
-    )) ?? fail("--yes needs the model server", "pass --model-endpoint host:port");
-  const model = await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
+    (
+      await ask(flags["model-endpoint"], yes, oldEndpoint, () =>
+        p.text({
+          message: `Local model server: host:port of an OpenAI-compatible server on this network, or none for hosted models only (${oldEndpoint ? `Enter keeps ${oldEndpoint}` : "for example 192.168.1.20:8080"})`,
+          placeholder: oldEndpoint ?? "none",
+          defaultValue: oldEndpoint,
+          validate: (v) => {
+            const value = v?.trim() || oldEndpoint;
+            if (!value) return "Enter the model server's host:port, or none.";
+            return value === "none" ? undefined : localModelProblem(value);
+          },
+        }),
+      )
+    )?.trim() ?? fail("--yes needs the model server", "pass --model-endpoint host:port, or --model-endpoint none");
+  const endpointProblem = endpoint === "none" ? undefined : localModelProblem(endpoint);
+  if (endpointProblem) fail(`the model server ${endpoint} ${endpointProblem}`, "pass --model-endpoint host:port, or none");
+  const model = endpoint === "none" ? undefined : await pickModel(endpoint, flags.model, yes, previous?.localModel?.models?.[0]?.id);
 
   const oldImage = previous?.guestImage ?? "bottle-guest";
   const image = await ask(flags.image, yes, oldImage, () =>
@@ -328,9 +339,13 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     configRoot,
     stateRoot,
     outputRoot,
-    hostedProviders: [],
   };
-  config.localModel = { ...config.localModel, upstream: endpoint, models: [{ id: model, label: model }] };
+  // The starter hosted providers (OpenRouter, Claude, OpenAI) work once their keys are on the speaker services; an
+  // existing config keeps its own list.
+  if (previous?.hostedProviders) config.hostedProviders = previous.hostedProviders;
+  config.localModel = model
+    ? { ...config.localModel, upstream: endpoint, models: [{ id: model, label: model }] }
+    : { guestHost: config.localModel.guestHost, models: [] };
   try {
     validateConfig(config);
   } catch (error) {
@@ -385,8 +400,13 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     spawnSync(join(here, "node_modules/.bin/msb"), ["image", "inspect", image], { env: { ...env, MSB_HOME: msbHome }, stdio: "ignore" }).status === 0;
   if (!flags["skip-smoke"] && !imageLoaded)
     p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run bottle build ${image}`);
+  if (!model && !flags["skip-smoke"])
+    p.log.info(
+      'Skipping the smoke test: hosted models need a key in speaker first. Enter one on its service in Setup, then run: mise run bottle run --model openrouter/<model> --prompt "..."',
+    );
   const smoke =
     !flags["skip-smoke"] &&
+    model !== undefined &&
     !flags["skip-register"] &&
     imageLoaded &&
     (yes || answered(await p.confirm({ message: "Start bottle and run one small test task to check it all works?", initialValue: true })));

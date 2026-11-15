@@ -12,6 +12,8 @@ const HostedProviderSchema = z.object({
   // The speaker service that holds the provider's key; the model door sends its calls to $SPEAKER_URL/<service>/.
   service: z.string().regex(/^[a-zA-Z0-9_-]+$/, "a service id uses letters, digits, dashes, and underscores"),
   models: z.array(model).min(1),
+  // How Pi talks to it: OpenAI's chat completions (OpenRouter, OpenAI) or Anthropic's messages API (Claude).
+  api: z.enum(["openai-completions", "anthropic-messages"]).default("openai-completions"),
 });
 
 const ConfigFile = z
@@ -27,10 +29,12 @@ const ConfigFile = z
     configRoot: z.string(),
     stateRoot: z.string(),
     outputRoot: z.string(),
+    // The guest's model endpoint (guestHost) always exists for hosted providers; the local model server behind it is
+    // optional: no upstream means hosted models only.
     localModel: z.object({
       guestHost: z.hostname().refine((value) => value === value.toLowerCase(), "a guest model host must be lowercase"),
-      upstream: z.string().min(1),
-      models: z.array(model).min(1),
+      upstream: z.string().min(1).optional(),
+      models: z.array(model).default([]),
     }),
     hostedProviders: z.array(HostedProviderSchema),
     // Each task opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
@@ -56,6 +60,17 @@ const assertDirectory = (label: string, path: string) => {
   if (!statSync(path, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${label} must name an existing directory: ${path}`);
 };
 
+/** Why a local model server address is not usable, or undefined when it is: one loopback, RFC1918, or Tailscale IPv4 host:port. */
+export const localModelProblem = (upstream: string) => {
+  const [host, port] = upstream.split(":");
+  return /^[^:]+:\d{1,5}$/.test(upstream) &&
+    +port! >= 1 &&
+    +port! <= 65_535 &&
+    (host === "localhost" || (isIPv4(host!) && (lan.check(host!) || tailscale.check(host!))))
+    ? undefined
+    : "must be one loopback, RFC1918, or Tailscale IPv4 host:port endpoint (no http://, no path)";
+};
+
 export const validateConfig = (data: unknown): Config => {
   const config = ConfigFile.parse(data);
   // Loopback, RFC1918, and the Tailscale CGNAT range are the only addresses this service binds.
@@ -68,14 +83,14 @@ export const validateConfig = (data: unknown): Config => {
     throw new Error("hosted provider ids must be unique");
   for (const provider of config.hostedProviders)
     if (new Set(provider.models.map((entry) => entry.id)).size !== provider.models.length) throw new Error(`hosted provider ${provider.id} repeats a model id`);
-  const [upstreamHost, upstreamPort] = config.localModel.upstream.split(":");
-  if (
-    !/^[^:]+:\d{1,5}$/.test(config.localModel.upstream) ||
-    +upstreamPort < 1 ||
-    +upstreamPort > 65_535 ||
-    !(upstreamHost === "localhost" || (isIPv4(upstreamHost) && (lan.check(upstreamHost) || tailscale.check(upstreamHost))))
-  )
-    throw new Error("localModel.upstream must be one loopback, RFC1918, or Tailscale IPv4 host:port endpoint");
+  const upstream = config.localModel.upstream;
+  if (upstream !== undefined) {
+    const problem = localModelProblem(upstream);
+    if (problem) throw new Error(`localModel.upstream ${problem}`);
+  }
+  if ((upstream === undefined) !== (config.localModel.models.length === 0))
+    throw new Error("localModel needs both an upstream and its models, or neither (hosted models only)");
+  if (!config.localModel.models.length && !config.hostedProviders.length) throw new Error("configure a local model or a hosted provider");
   if (new Set(config.localModel.models.map((entry) => entry.id)).size !== config.localModel.models.length) throw new Error("localModel repeats a model id");
   assertDirectory("configRoot", config.configRoot);
   assertDirectory("stateRoot", config.stateRoot);

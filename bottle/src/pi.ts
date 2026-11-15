@@ -121,13 +121,15 @@ const modelIds = (models: { id: string }[]) => models.map(({ id }) => ({ id }));
 
 const modelsJson = (config: Config) => ({
   providers: {
-    local: {
-      baseUrl: `http://${config.localModel.guestHost}/v1`,
-      api: "openai-completions",
-      apiKey: "local",
-      compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
-      models: modelIds(config.localModel.models),
-    },
+    ...(config.localModel.upstream && {
+      local: {
+        baseUrl: `http://${config.localModel.guestHost}/v1`,
+        api: "openai-completions",
+        apiKey: "local",
+        compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
+        models: modelIds(config.localModel.models),
+      },
+    }),
     ...Object.fromEntries(
       config.hostedProviders.map((provider) => [
         provider.id,
@@ -135,7 +137,7 @@ const modelsJson = (config: Config) => ({
           // The guest's model endpoint sends /hosted/<id>/... to the provider's speaker service, with the task's own
           // agent token in place of this key; speaker adds the real one.
           baseUrl: `http://${config.localModel.guestHost}/hosted/${provider.id}`,
-          api: "openai-completions",
+          api: provider.api,
           apiKey: "speaker-service",
           models: modelIds(provider.models),
         },

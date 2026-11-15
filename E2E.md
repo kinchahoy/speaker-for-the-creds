@@ -20,12 +20,12 @@ A guide for a subagent that checks speaker, bottle and Herdr once against real e
 ## Setup (owner and subagent, once)
 
 1. The subagent runs `mise run install`, `mise run check` and `mise run test`. Stop if any of them fails.
-2. The owner runs `! mise run init`. It needs a real terminal; it sets the owner password, builds the guest image (more than 10 minutes the first time), registers bottle with speaker, and runs a smoke task. Give it the model server's `host:port` when asked.
+2. The owner runs `! mise run init`. It needs a real terminal; it sets the owner password, builds the guest image (more than 10 minutes the first time), registers bottle with speaker, and runs a smoke task. Give it the local model server's `host:port` when asked, or `none` for hosted models only (then init skips the smoke task).
 3. In `/admin` → Setup, the owner:
    - enters the OpenRouter API key on the **openrouter** service (the only place the key goes; Pi's hosted model uses the same service);
    - adds a target `local`: host `127.0.0.1`, the owner's own account, after adding Setup's `authorized_keys` line to that account (`sshd` runs on this machine);
    - adds a share `e2e` on target `local`, with path `~/e2e-share` written out in full. Create that folder first, with a file `hello.txt` in it.
-4. The subagent copies the `openrouter` entry (`{ "id": "openrouter", "service": "openrouter", "models": [...] }`) from `bottle/config.example.json` into `hostedProviders` in `~/.bottle/config.json`, keeping one cheap model id the owner names, then restarts bottle.
+4. Init already wrote the `openrouter` entry into `hostedProviders` in `~/.bottle/config.json`. The subagent sets its models to one cheap model id the owner names, then restarts bottle.
 {.ai}
 
 ## Checks

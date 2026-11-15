@@ -20,7 +20,7 @@ const HELP = {
   --control-port N      control port: bottle's own API (7001)
   --guest-port N        guest port: VMs reach bottle here (7002)
   --speaker-url URL     speaker's URL as the VMs see it, for example http://192.168.1.10:3000
-  --model-endpoint H:P  the model server, an OpenAI-compatible host:port
+  --model-endpoint H:P  the local model server, an OpenAI-compatible host:port (none: hosted models only)
   --model ID            the model to use (needed when the server lists several)
   --image TAG           guest image tag (bottle-guest)
   --password-stdin      read speaker's owner password from standard input

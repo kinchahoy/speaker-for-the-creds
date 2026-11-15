@@ -52,9 +52,9 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `bindHost`: an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts any peer that can reach it, so keep this listener private.
 - `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Both are required: until you register, `init bottle` writes placeholders from `config.example.json`, so set them by hand if you skip registering.
-- `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
+- `localModel.upstream`: optional; leave it and `localModel.models` out (init: answer `none`) to use hosted models only. One loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
-- `hostedProviders`: each `{ "id", "service", "models" }` names the speaker service that holds a hosted provider's key (see Hosted model providers). Name a model with `--model <id>/<model>`.
+- `hostedProviders`: each `{ "id", "service", "models", "api" }` names the speaker service that holds a hosted provider's key (see Hosted model providers). `api` is `openai-completions` (the default) or `anthropic-messages`. Name a model with `--model <id>/<model>`. Init writes the starters: `openrouter`, `anthropic` (Claude) and `openai`.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
 
 <!-- author: ai -->
@@ -274,7 +274,7 @@ The grant snapshot for a secret carries the secret's hosts, not its value. bottl
 
 ### Hosted model providers
 
-A hosted provider is a speaker service, such as the starter `openrouter` service; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `--model <id>/<model>`. The task adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the task's agent token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
+A hosted provider is a speaker service, such as the starter `openrouter`, `anthropic` and `openai` services; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `--model <id>/<model>`. The task adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the task's agent token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
 {.ai}
 
 <!-- author: ai -->

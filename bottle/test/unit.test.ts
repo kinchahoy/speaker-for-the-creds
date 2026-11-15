@@ -333,13 +333,26 @@ test("request_capability answers at once and delivers the decision as one [speak
   );
 });
 
-test("a hosted model in models.json points at the model door and holds no key", () => {
-  const base = loadConfig(writeConfig());
-  const config = { ...base, hostedProviders: [{ id: "openrouter", service: "openrouter", models: [{ id: "m", label: "M" }] }] };
-  const directory = join(base.configRoot, "hosted");
-  writeGuestConfig(directory, config, { mcps: {}, extensions: {} }, { name: "t", model: "openrouter/m", attended: false }, [], [], []);
-  const { baseUrl, apiKey } = JSON.parse(readFileSync(join(directory, "models.json"), "utf8")).providers.openrouter;
-  assert.deepEqual([baseUrl, apiKey], [`http://${base.localModel.guestHost}/hosted/openrouter`, "speaker-service"]);
+test("a hosted model in models.json points at the model door and holds no key; without a local model there is no local provider", () => {
+  const path = writeConfig();
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  raw.localModel = { guestHost: "model.internal" };
+  writeFileSync(path, JSON.stringify(raw));
+  assert.throws(() => loadConfig(path), /a local model or a hosted provider/);
+  raw.hostedProviders = [
+    { id: "openrouter", service: "openrouter", models: [{ id: "m", label: "M" }] },
+    { id: "anthropic", service: "anthropic", api: "anthropic-messages", models: [{ id: "c", label: "C" }] },
+  ];
+  writeFileSync(path, JSON.stringify(raw));
+  const config = loadConfig(path);
+  const directory = join(config.configRoot, "hosted");
+  writeGuestConfig(directory, config, { mcps: {}, extensions: {} }, { name: "t", model: "anthropic/c", attended: false }, [], [], []);
+  const { providers } = JSON.parse(readFileSync(join(directory, "models.json"), "utf8"));
+  assert.deepEqual(Object.keys(providers), ["openrouter", "anthropic"]);
+  assert.deepEqual(
+    [providers.openrouter.baseUrl, providers.openrouter.api, providers.anthropic.api, providers.anthropic.apiKey],
+    [`http://model.internal/hosted/openrouter`, "openai-completions", "anthropic-messages", "speaker-service"],
+  );
 });
 
 test("the change message lists what loaded, what did not and what was removed", () => {

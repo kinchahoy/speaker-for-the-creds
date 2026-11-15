@@ -273,6 +273,7 @@ export const modelDoor =
   async (req, res) => {
     const path = req.url ?? "/";
     const provider = config.hostedProviders.find((entry) => path.startsWith(`/hosted/${entry.id}/`));
+    if (!provider && !config.localModel.upstream) return void modelReply(res, 404, "this bottle has no local model; use a hosted one");
     const target = provider
       ? new URL(`/${provider.service}${path.slice(`/hosted/${provider.id}`.length)}`, speaker.url)
       : new URL(path, `http://${config.localModel.upstream}`);

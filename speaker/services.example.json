@@ -37,6 +37,27 @@
     "read": "ask",
     "write": "ask"
   },
+  "anthropic": {
+    "baseUrl": "https://api.anthropic.com",
+    "notes": "# Anthropic (Claude)\n\nClaude's Messages API under `/anthropic/`.\n\n- `GET /anthropic/v1/models` lists models (needs `anthropic.read`).\n- `POST /anthropic/v1/messages` with `{\"model\":\"<id>\",\"max_tokens\":1024,\"messages\":[...]}` and an `anthropic-version: 2023-06-01` header runs a model and spends credit (needs `anthropic.full`).\n",
+    "auth": {
+      "type": "header",
+      "secret": "anthropic",
+      "headerName": "x-api-key"
+    },
+    "read": "ask",
+    "write": "ask"
+  },
+  "openai": {
+    "baseUrl": "https://api.openai.com/v1",
+    "notes": "# OpenAI\n\nOpenAI's API under `/openai/`.\n\n- `GET /openai/models` lists models (needs `openai.read`).\n- `POST /openai/chat/completions` with `{\"model\":\"<id>\",\"messages\":[...]}` runs a model and spends credit (needs `openai.full`).\n",
+    "auth": {
+      "type": "bearer",
+      "secret": "openai"
+    },
+    "read": "ask",
+    "write": "ask"
+  },
   "context7": {
     "baseUrl": "https://mcp.context7.com/mcp",
     "notes": "# Context7\n\nRemote MCP server for library docs (tools `resolve-library-id`, `query-docs`), reached through speaker at `/context7` (Streamable HTTP, JSON-RPC over POST). Listing and read-only tools need `context7.read`.\n",
