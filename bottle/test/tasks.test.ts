@@ -71,6 +71,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     speaker: { url, proxyPort: 1, sshPort: 2 },
     localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] },
     hostedProviders: [],
+    herdr: false,
   } satisfies Config;
   const templates = new Map(
     [

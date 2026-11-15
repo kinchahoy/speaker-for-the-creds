@@ -34,6 +34,8 @@ const ConfigFile = z
       models: z.array(model).min(1),
     }),
     hostedProviders: z.array(HostedProviderSchema),
+    // Each task opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
+    herdr: z.boolean().optional(),
   })
   .strict();
 

@@ -133,6 +133,19 @@ A task is attended (you are at its terminal) or unattended (nobody is). Without 
 An attended task loads the ask-user-question extension (the `ask_user_question` tool) whatever its template says, because the extension adds presence, not access. An unattended task does not load it, and its system prompt says nobody is watching. The agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which you answer in speaker. Mode does not change archival: a task with a prompt archives when Pi writes `/output/DONE`, and every task archives at its deadline.
 {.ai}
 
+### In the Herdr app
+
+When `hc` (herdr-core) is on the bottle host's `PATH`, each task opens as a tab in a **bottle** space in the Herdr app on that machine, however it was started: bottle runs `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. The tab closes when the task ends. `"herdr": false` in `config.json` turns this off; `"herdr": true` makes a missing `hc` a task note instead of silence. Herdr names an unnamed space after its first terminal's folder (`outputRoot`), so rename the space to "bottle" once. For another machine, add it from the Mac with `hc machine add <ssh target>`.
+
+To start a sandboxed Pi from Herdr's + menu, add a program to `~/.config/herdr-app/programs.json` (it needs `bottle` on `PATH`, see Build and run):
+
+```json
+{ "programs": { "bottle": { "name": "Pi (sandbox)", "run": ["bottle", "run"] } } }
+```
+
+`herdr/mods/speaker` in this repository is a Herdr mod that toasts each new speaker card and opens it in the browser when clicked. It reads speaker's ntfy topic, so speaker needs `NTFY_URL` and `NTFY_TOPIC`. Link it in with `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`, copy its `config.example.json` to `config.json` with the same server and topic (and a read token if the topic needs one), and check it with `herdr-app check ~/.config/herdr-app/mods/speaker`. It docks as a one-line bar at the bottom that shows the newest card.
+{.ai}
+
 ### Guest image
 
 `guest/Dockerfile` builds a Debian slim image in five layers:
