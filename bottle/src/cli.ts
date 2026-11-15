@@ -11,7 +11,7 @@ import { registerHost } from "./speaker.ts";
 import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
 /** The owner's terminal client: `bottle serve | down | build | register | run | ls | attach | stop`. */
-type Task = {
+type Agent = {
   id: string;
   name: string;
   state: string;
@@ -82,7 +82,7 @@ const startBottle = async (control: string) => {
     }
 };
 
-/** Stops the bottle that start.sh recorded; its shutdown archives open tasks first. */
+/** Stops the bottle that start.sh recorded; its shutdown archives open agents first. */
 const stopBottle = async () => {
   const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : undefined;
   const alive = () => {
@@ -94,7 +94,7 @@ const stopBottle = async () => {
   };
   if (!pid || !alive()) return void console.log("bottle was not running");
   process.kill(pid, "SIGTERM");
-  console.log(`Stopping bottle (pid ${pid}); open tasks are archived first`);
+  console.log(`Stopping bottle (pid ${pid}); open agents are archived first`);
   while (alive()) await sleep(500);
   console.log("bottle stopped");
 };
@@ -137,17 +137,17 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     return payload as Awaited<ReturnType<R["json"]>>;
   };
 
-  const tasks = async (): Promise<Task[]> => (await api(controlApi.state.$get())).tasks;
+  const agents = async (): Promise<Agent[]> => (await api(controlApi.state.$get())).agents;
 
   /** Exact id or name first, then unique id or name prefix. */
-  const resolveTask = async (wanted: string): Promise<Task> => {
-    if (!wanted.trim()) throw new Error(`${command} expects a task id. See \`${SELF} ls\``);
-    const all = await tasks();
-    const exact = all.filter((task) => task.id === wanted || task.name === wanted);
-    const matches = exact.length > 0 ? exact : all.filter((task) => task.id.startsWith(wanted) || task.name.startsWith(wanted));
+  const resolveAgent = async (wanted: string): Promise<Agent> => {
+    if (!wanted.trim()) throw new Error(`${command} expects an agent id. See \`${SELF} ls\``);
+    const all = await agents();
+    const exact = all.filter((agent) => agent.id === wanted || agent.name === wanted);
+    const matches = exact.length > 0 ? exact : all.filter((agent) => agent.id.startsWith(wanted) || agent.name.startsWith(wanted));
     if (matches.length === 1) return matches[0]!;
-    if (matches.length === 0) throw new Error(`no task matches "${wanted}". See \`${SELF} ls\``);
-    throw new Error(`"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}). Use a longer id`);
+    if (matches.length === 0) throw new Error(`no agent matches "${wanted}". See \`${SELF} ls\``);
+    throw new Error(`"${wanted}" matches ${matches.length} agents (${matches.map((agent) => agent.id).join(", ")}). Use a longer id`);
   };
 
   if (command === "down") {
@@ -155,32 +155,32 @@ async function main(command: Command_, values: Values, positionals: string[]) {
   } else if (command === "register") {
     const name = values.name ?? hostname();
     const id = await registerHost(config, configPath, name);
-    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then launch a task with \`${SELF} run\`.`);
+    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then launch an agent with \`${SELF} run\`.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     const attended = values.attended ? true : values.unattended ? false : undefined;
     console.log(`Connecting to bottle at ${control} (speaker ${config.speaker.url})`);
     if (!(await isUp(control))) await startBottle(control);
-    const { id, outputDir } = await api(controlApi.tasks.$post({ json: { name, template, model, prompt, attended, hours } }));
+    const { id, outputDir } = await api(controlApi.agents.$post({ json: { name, template, model, prompt, attended, hours } }));
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
     console.log(
-      `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
+      `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the agent asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
     );
   } else if (command === "ls") {
     const up = await isUp(control);
-    const list = up ? await tasks() : [];
-    if (list.length === 0) console.log(`${up ? "No live tasks" : "bottle is not running, so no live tasks"}. Start one with: ${SELF} run --prompt "..."`);
+    const list = up ? await agents() : [];
+    if (list.length === 0) console.log(`${up ? "No live agents" : "bottle is not running, so no live agents"}. Start one with: ${SELF} run --prompt "..."`);
     const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
-    const rows = list.map((task) => [
-      task.id,
-      task.done ? "done" : task.state,
-      task.attended === undefined ? "-" : task.attended ? "attended" : "unattended",
-      String(task.pendingRequests.length),
-      task.startedAt ? age(task.startedAt) : "-",
-      task.model ?? "-",
-      task.name,
-      truncate(task.summary ?? "", 60),
+    const rows = list.map((agent) => [
+      agent.id,
+      agent.done ? "done" : agent.state,
+      agent.attended === undefined ? "-" : agent.attended ? "attended" : "unattended",
+      String(agent.pendingRequests.length),
+      agent.startedAt ? age(agent.startedAt) : "-",
+      agent.model ?? "-",
+      agent.name,
+      truncate(agent.summary ?? "", 60),
     ]);
     if (list.length > 0) {
       const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
@@ -190,32 +190,32 @@ async function main(command: Command_, values: Values, positionals: string[]) {
           .join("  ")
           .trimEnd();
       console.log(line(header));
-      list.forEach((task, index) => {
+      list.forEach((agent, index) => {
         console.log(line(rows[index]!));
-        for (const request of task.pendingRequests)
+        for (const request of agent.pendingRequests)
           console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it at ${config.speaker.url}/admin`);
       });
     }
-    // Finished tasks leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.
+    // Finished agents leave the live list; their archive folders name them (<time>--<name>--<id>) and hold the final state.
     const finished = readdirSync(config.outputRoot)
       .sort()
       .reverse()
       .flatMap((folder) => {
         try {
-          const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "task.json"), "utf8")) as { state: string };
+          const { state } = JSON.parse(readFileSync(join(config.outputRoot, folder, "_control", "agent.json"), "utf8")) as { state: string };
           return [`${state.padEnd(15)}${join(config.outputRoot, folder)}`];
         } catch {
-          return []; // a live task's folder has no task.json yet
+          return []; // a live agent's folder has no agent.json yet
         }
       })
       .slice(0, FINISHED_SHOWN);
-    if (finished.length > 0) console.log(`\nLast finished tasks (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
+    if (finished.length > 0) console.log(`\nLast finished agents (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
-    const task = await resolveTask(positionals[0]!);
-    if (!["starting", "idle", "busy", "reconfiguring"].includes(task.state))
-      throw new Error(`task ${task.id} is ${task.state}, so it has no terminal to attach to`);
-    console.error(`Attaching to ${task.name} (${task.id}). Ctrl-\\ detaches, and Pi keeps running.`);
-    const terminal = attach(task.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    const agent = await resolveAgent(positionals[0]!);
+    if (!["starting", "idle", "busy", "reconfiguring"].includes(agent.state))
+      throw new Error(`agent ${agent.id} is ${agent.state}, so it has no terminal to attach to`);
+    console.error(`Attaching to ${agent.name} (${agent.id}). Ctrl-\\ detaches, and Pi keeps running.`);
+    const terminal = attach(agent.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
     const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => {
       console.error(`error: cannot start the terminal: ${error.message}`);
@@ -223,9 +223,9 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     });
     child.on("exit", (code) => process.exit(code ?? 1));
   } else if (command === "stop") {
-    const task = await resolveTask(positionals[0]!);
-    await api(controlApi.tasks[":id"].close.$post({ param: { id: task.id } }));
-    console.log(`Closing ${task.id} (${task.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
+    const agent = await resolveAgent(positionals[0]!);
+    await api(controlApi.agents[":id"].close.$post({ param: { id: agent.id } }));
+    console.log(`Closing ${agent.id} (${agent.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
   }
 }
 
@@ -234,9 +234,9 @@ const program = new Command(SELF)
   .exitOverride((error) => process.exit(error.exitCode === 1 ? 2 : error.exitCode)); // usage errors exit 2
 program
   .command("run")
-  .description("Start a task")
+  .description("Start an agent")
   .option("--template <name>", "template; offline asks speaker for nothing at launch", "offline")
-  .option("--name <name>", "task name")
+  .option("--name <name>", "agent name")
   .option("--model <id>", "model")
   .option("--prompt <text>", "run once and archive when Pi writes /output/DONE (implies --unattended)")
   .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
@@ -244,23 +244,23 @@ program
     if (!Number.isFinite(hours) || hours <= 0) throw new InvalidArgumentError("a positive number of hours");
     return hours;
   })
-  .addOption(new Option("--attended", "expect the owner at the task's terminal, where Pi may ask questions").conflicts("unattended"))
+  .addOption(new Option("--attended", "expect the owner at the agent's terminal, where Pi may ask questions").conflicts("unattended"))
   .option("--unattended", "tell Pi nobody is watching, so it records assumptions instead of asking")
   .action((values: Values) => main("run", values, []));
 program
   .command("ls")
-  .description("List live tasks, and the last finished ones")
+  .description("List live agents, and the last finished ones")
   .action(() => main("ls", {}, []));
 program
   .command("attach")
-  .description("Open a task's Pi terminal; Ctrl-\\ detaches and leaves Pi running")
+  .description("Open an agent's Pi terminal; Ctrl-\\ detaches and leaves Pi running")
   .argument("<id|name>")
-  .action((task: string) => main("attach", {}, [task]));
+  .action((agent: string) => main("attach", {}, [agent]));
 program
   .command("stop")
-  .description("Close a task and archive its artifacts and transcript")
+  .description("Close an agent and archive its artifacts and transcript")
   .argument("<id|name>")
-  .action((task: string) => main("stop", {}, [task]));
+  .action((agent: string) => main("stop", {}, [agent]));
 program
   .command("register")
   .description("Register this host as a speaker sandbox host")
@@ -274,7 +274,7 @@ program
   .action((args: string[]) => runScript("serve", args));
 program
   .command("down")
-  .description("Stop bottle; its open tasks are archived first")
+  .description("Stop bottle; its open agents are archived first")
   .action(() => main("down", {}, []));
 program
   .command("build")

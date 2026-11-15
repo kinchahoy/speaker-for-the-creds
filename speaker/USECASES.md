@@ -12,7 +12,7 @@ There are two kinds of agent, and they need different things.
 
 - **Sandboxed agents** (Pi inside a bottle VM) start with nothing. Besides the three things above, they need websites, injected secrets, MCP servers, extensions and folder mounts.
 
-Eight scenarios cover real use: four for direct agents, four for sandboxed agents. A ninth, about where speaker runs, matters to the owner only. Several things were left out on purpose: a direct agent asking for websites (never needed), a sandboxed agent using a homelab service or SSH (the same as scenarios 1 to 3, with the differences noted under "Sandboxed agents"), and unattended or scheduled tasks (every task starts with an owner tap, by design).
+Eight scenarios cover real use: four for direct agents, four for sandboxed agents. A ninth, about where speaker runs, matters to the owner only. Several things were left out on purpose: a direct agent asking for websites (never needed), a sandboxed agent using a homelab service or SSH (the same as scenarios 1 to 3, with the differences noted under "Sandboxed agents"), and unattended or scheduled agents (every agent starts with an owner tap, by design).
 
 "Weak agent" below means a small model that follows steps literally, copies commands exactly, and does not improvise around errors.
 
@@ -56,18 +56,18 @@ Variation: if the owner marked a service's reads open (for example "are the ligh
 
 A sandboxed agent that needs a homelab service, SSH or a folder uses the same flows as scenarios 1 to 3, with three differences. It does no setup, because the sandbox host creates its agent and hands it a token. Its source address is the sandbox host's, and its token is bound to that address. And its network route to speaker (HTTP and the SSH port) must work from inside the VM.
 
-### 5. Start a task from a template
+### 5. Start an agent from a template
 
 **Who and where.** The owner starts "Research and summarise X" from a bottle template. Pi runs in a new micro-VM on the sandbox host.
 
-**What the owner wants.** One card that shows the task, its label and what it starts with, one tap, and a VM that is ready.
+**What the owner wants.** One card that shows the agent, its label and what it starts with, one tap, and a VM that is ready.
 
 **Flow.**
-1. The owner starts the task. The sandbox host creates a sandboxed agent for it with the template's label, the agent string `Opus 5.5 · Pi on bottle`, and the template's `want` list (for example `group:research`, `mcp:search`, `folder:notes`), and receives the agent's token.
-2. Speaker files the first request. The card shows the label, the agent string, the source address (the sandbox host's), the sandbox host and task id (speaker's own knowledge), and the items.
+1. The owner starts the agent. The sandbox host creates a sandboxed agent for it with the template's label, the agent string `Opus 5.5 · Pi on bottle`, and the template's `want` list (for example `group:research`, `mcp:search`, `folder:notes`), and receives the agent's token.
+2. Speaker files the first request. The card shows the label, the agent string, the source address (the sandbox host's), the sandbox host and agent id (speaker's own knowledge), and the items.
 3. The owner approves on the phone. Speaker sends each grant over the sandbox host's WebSocket; the host applies them inside the VM and reports which grants are in force.
 4. Pi works with what was granted. If the owner is slow, Pi's calls wait as `Speaker-Wait` allows, then answer with what to do next.
-5. When the task ends, the sandbox host deletes the agent (`DELETE /_speaker/hosts/agents/<id>`), and every grant ends.
+5. When the agent ends, the sandbox host deletes the agent (`DELETE /_speaker/hosts/agents/<id>`), and every grant ends.
 
 ### 6. The task needs something new mid-way (websites, tools)
 

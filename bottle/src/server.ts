@@ -10,11 +10,11 @@ import { errorBody } from "../../speaker/items.ts";
 import { codes, loadTemplates, StatusError } from "./grants.ts";
 import { loadCatalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
-import { closed, Tasks, type Task } from "./tasks.ts";
+import { closed, Agents, type Agent } from "./agents.ts";
 
-type Env = { Variables: { task: Task } };
+type Env = { Variables: { agent: Agent } };
 
-const NewTask = z
+const NewAgent = z
   .object({
     name: z.string().min(1).max(80).optional(),
     template: z.string(),
@@ -23,7 +23,7 @@ const NewTask = z
     prompt: z.string().trim().min(1).max(20_000).optional(),
     /** Whether the owner is at the terminal to answer questions; defaults to attended without a prompt. */
     attended: z.boolean().optional(),
-    /** Calendar hours until the service archives the task; the template's maxRuntimeHours caps it. */
+    /** Calendar hours until the service archives the agent; the template's maxRuntimeHours caps it. */
     hours: z.number().positive().optional(),
   })
   .strict();
@@ -39,7 +39,7 @@ export const failure: ErrorHandler = (error, context) => {
 };
 
 /** The owner's CLI drives this API. Browsers carry an Origin header, so any request with one is refused. */
-export const startControl = (config: Config, tasks: Tasks) => {
+export const startControl = (config: Config, agents: Agents) => {
   const expectedHost = `${config.bindHost}:${config.controlPort}`;
   const app = new Hono();
 
@@ -49,33 +49,33 @@ export const startControl = (config: Config, tasks: Tasks) => {
     await next();
   });
 
-  const listTasks = () =>
-    tasks.list().map((task) => ({
-      id: task.id,
-      name: task.name,
-      state: task.state,
-      attended: task.attended,
-      model: task.model,
-      startedAt: task.startedAt,
-      sessionId: task.guest.sessionId,
-      agentId: task.agentId,
-      pendingRequests: tasks.pendingRequests(task),
-      done: tasks.done(task),
-      summary: task.lastMessage,
+  const listAgents = () =>
+    agents.list().map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      state: agent.state,
+      attended: agent.attended,
+      model: agent.model,
+      startedAt: agent.startedAt,
+      sessionId: agent.guest.sessionId,
+      speakerAgentId: agent.speakerAgentId,
+      pendingRequests: agents.pendingRequests(agent),
+      done: agents.done(agent),
+      summary: agent.lastMessage,
     }));
 
   const routes = app
-    .get("/api/state", (context) => context.json({ tasks: listTasks() }))
+    .get("/api/state", (context) => context.json({ agents: listAgents() }))
     .post(
-      "/api/tasks",
-      validator("json", (body) => NewTask.parse(body)),
-      async (context) => context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
+      "/api/agents",
+      validator("json", (body) => NewAgent.parse(body)),
+      async (context) => context.json(await agents.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
     )
-    .post("/api/tasks/:id/close", (context) => {
-      const task = tasks.get(context.req.param("id"));
-      if (closed(task)) throw new StatusError(409, `task ${task.id} is already ${task.state}`);
-      tasks.close(task).catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`)); // the state records it
-      return context.json({ closing: task.id }, 202);
+    .post("/api/agents/:id/close", (context) => {
+      const agent = agents.get(context.req.param("id"));
+      if (closed(agent)) throw new StatusError(409, `agent ${agent.id} is already ${agent.state}`);
+      agents.close(agent).catch((error: Error) => console.error(`archive of ${agent.id} failed: ${error.message}`)); // the state records it
+      return context.json({ closing: agent.id }, 202);
     })
     .onError(failure);
   serve({ fetch: app.fetch, hostname: config.bindHost, port: config.controlPort });
@@ -84,16 +84,16 @@ export const startControl = (config: Config, tasks: Tasks) => {
 };
 export type ControlApi = ReturnType<typeof startControl>;
 
-/** The mapped guest endpoint only accepts a task token and only reports status. */
-export const startGuestListener = (config: Config, tasks: Tasks) => {
+/** The mapped guest endpoint only accepts an agent token and only reports status. */
+export const startGuestListener = (config: Config, agents: Agents) => {
   const app = new Hono<Env>();
 
   app.use(
     bearerAuth<Env>({
       verifyToken: (token, context) => {
-        const task = tasks.byGuestToken.get(token);
-        if (task) context.set("task", task);
-        return task !== undefined;
+        const agent = agents.byGuestToken.get(token);
+        if (agent) context.set("agent", agent);
+        return agent !== undefined;
       },
     }),
   );
@@ -107,11 +107,11 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
         .parse(body),
     ),
     (context) => {
-      const task = context.get("task");
+      const agent = context.get("agent");
       const { busy, summary } = context.req.valid("json");
-      tasks.report(task, busy);
-      if (summary) task.lastMessage = summary;
-      return context.json({ state: task.state });
+      agents.report(agent, busy);
+      if (summary) agent.lastMessage = summary;
+      return context.json({ state: agent.state });
     },
   );
 
@@ -121,15 +121,15 @@ export const startGuestListener = (config: Config, tasks: Tasks) => {
   return server;
 };
 
-/** Starts the trusted service: catalog, launch templates, task manager, and both listeners. */
+/** Starts the trusted service: catalog, launch templates, agent manager, and both listeners. */
 export const startService = (config: Config) => {
   const catalog = loadCatalog(config);
   const templates = loadTemplates(`${config.configRoot}/templates.json`);
-  const tasks = new Tasks(config, templates, catalog, readHostToken(config));
-  startControl(config, tasks);
-  startGuestListener(config, tasks);
+  const agents = new Agents(config, templates, catalog, readHostToken(config));
+  startControl(config, agents);
+  startGuestListener(config, agents);
   console.log(`templates ${[...templates.keys()].join(" ")}`);
-  return { tasks };
+  return { agents };
 };
 
 if (import.meta.main) {
@@ -137,11 +137,11 @@ if (import.meta.main) {
   const config = loadConfig(configPath);
   const staleSessions = await reconcile();
   if (staleSessions) console.log(`removed ${staleSessions} microsandbox VMs a crashed service left behind`);
-  const { tasks } = startService(config);
+  const { agents } = startService(config);
 
   process.on("SIGHUP", () => {
     try {
-      tasks.reloadCatalog(loadCatalog(config));
+      agents.reloadCatalog(loadCatalog(config));
       console.log("catalog reloaded");
     } catch (error) {
       console.error(`catalog not reloaded, the previous one stays: ${(error as Error).message}`);
@@ -152,9 +152,9 @@ if (import.meta.main) {
   if (process.env.BOTTLE_AUTOSTART) {
     let idleSince = Date.now();
     setInterval(() => {
-      if (tasks.list().some((task) => !closed(task))) idleSince = Date.now();
+      if (agents.list().some((agent) => !closed(agent))) idleSince = Date.now();
       else if (Date.now() - idleSince >= config.idleStopMinutes * 60_000) {
-        console.log(`no open tasks for ${config.idleStopMinutes} minutes; stopping`);
+        console.log(`no open agents for ${config.idleStopMinutes} minutes; stopping`);
         process.kill(process.pid, "SIGTERM");
       }
     }, 30_000).unref();
@@ -165,7 +165,7 @@ if (import.meta.main) {
     process.on(signal, async () => {
       if (shuttingDown) return;
       shuttingDown = true;
-      for (const task of tasks.list()) await tasks.close(task).catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`));
+      for (const agent of agents.list()) await agents.close(agent).catch((error: Error) => console.error(`archive of ${agent.id} failed: ${error.message}`));
       process.exit(process.exitCode ?? 0);
     });
 }

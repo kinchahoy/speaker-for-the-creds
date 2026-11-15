@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-**Decision.** bottle runs each task in a [microsandbox](https://github.com/superradcompany/microsandbox) VM (libkrun, from the `microsandbox` npm package) with no network device. The guest's only doors are vsock ports bridged to host unix sockets owned by bottle: an allow-list egress proxy that chains secret hosts to speaker's proxy, a model gateway that records and counts model requests, the speaker door, and a status channel. Folders arrive over `sshfs` through speaker's jump server.
+**Decision.** bottle runs each agent in a [microsandbox](https://github.com/superradcompany/microsandbox) VM (libkrun, from the `microsandbox` npm package) with no network device. The guest's only doors are vsock ports bridged to host unix sockets owned by bottle: an allow-list egress proxy that chains secret hosts to speaker's proxy, a model gateway that records and counts model requests, the speaker door, and a status channel. Folders arrive over `sshfs` through speaker's jump server.
 {.ai}
 
 **What was compared (2026-11-11).** The previous runtime, Gondolin (as is, or with its patches upstreamed); a bottle-owned gateway on Firecracker, Cloud Hypervisor, libkrun directly, or microsandbox as the launcher; and the sandbox products microsandbox (as a full sandbox), smolvm, BoxLite, Matchlock, OpenShell, e2b infra, Arrakis, Apple Containerization, and gVisor / Kata / jai. No project replaces the whole sandbox layer, because none sends chosen hosts to speaker's proxy without holding the secret itself.

@@ -1,4 +1,4 @@
-// One microsandbox VM per task. The guest has no network device: five vsock doors (egress proxy, model endpoint,
+// One microsandbox VM per agent. The guest has no network device: five vsock doors (egress proxy, model endpoint,
 // speaker's agent API, the control API, and ssh to speaker's jump server) are its only way out, each served here on a
 // unix socket and decided by the live grant view.
 import { execFile } from "node:child_process";
@@ -37,7 +37,7 @@ export type Live = {
 };
 
 export type Guest = {
-  /** The task's throwaway SSH public key; it goes to speaker with the task's requests. */
+  /** The agent's throwaway SSH public key; it goes to speaker with the agent's requests. */
   sshKey?: string;
   /** The microsandbox name; `attach` turns it into the owner's terminal command. */
   sessionId: string;
@@ -197,7 +197,7 @@ const serveSsh = async (path: string, host: string, port: number) => {
   return Object.assign(server, { closeAllConnections: () => sockets.forEach((socket) => socket.destroy()) });
 };
 
-/** A throwaway SSH key for one task: the private half goes into the VM, the public half to speaker as the agent's `sshKey`. */
+/** A throwaway SSH key for one agent: the private half goes into the VM, the public half to speaker as the agent's `sshKey`. */
 const newSshKey = async (dir: string) => {
   const file = `${dir}/ssh_key`;
   await promisify(execFile)("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "", "-f", file]);
@@ -224,7 +224,7 @@ const forward = async (
 ) => {
   const started = Date.now();
   const sent = await buffer(req);
-  // `json` is merged into a JSON request body (the task's SSH key into its requests to speaker).
+  // `json` is merged into a JSON request body (the agent's SSH key into its requests to speaker).
   const body = options.json ? Buffer.from(JSON.stringify({ ...JSON.parse(sent.toString()), ...options.json })) : sent;
   const { host: _host, connection: _connection, "content-length": _length, ...headers } = req.headers;
   const method = req.method ?? "GET";
@@ -264,8 +264,8 @@ const forward = async (
 };
 
 /**
- * The model endpoint: the local model, or `/hosted/<provider>/<path>` sent to speaker's `<service>/<path>` as the task's
- * agent (speaker checks the service grant and adds the provider's key). Each request counts against the task's cap; a
+ * The model endpoint: the local model, or `/hosted/<provider>/<path>` sent to speaker's `<service>/<path>` as the agent's
+ * agent (speaker checks the service grant and adds the provider's key). Each request counts against the agent's cap; a
  * refused one gets a 429 that says so.
  */
 export const modelDoor =
@@ -289,7 +289,7 @@ export const modelDoor =
   };
 
 /**
- * Speaker's agent API for the guest, with the task's real agent token added here. The task's SSH public key rides along on
+ * Speaker's agent API for the guest, with the agent's real agent token added here. The agent's SSH public key rides along on
  * its requests, so a `folder:` grant is deliverable over SSH.
  */
 export const speakerDoor =
@@ -404,7 +404,7 @@ export const listen = async (path: string, handler: RequestListener, fail: Reply
 };
 
 /**
- * Starts one VM for a task: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
+ * Starts one VM for an agent: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
  * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
  * /work, /output and /etc/bottle, and model calls appended to `paths.modelCalls`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
@@ -444,7 +444,7 @@ export async function boot(
     await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, config.speaker.sshPort),
   ];
   let folders: NodeJS.Timeout | undefined;
-  // Revoking or expiring a grant closes the task's open connections to that host within a second.
+  // Revoking or expiring a grant closes the agent's open connections to that host within a second.
   const sweeper = setInterval(egress.sweep, 1_000);
   let sandbox: MicroVm | undefined;
   // Stops the VM, removes it, and stops the doors, whatever step fails first; also the way a failed boot cleans up.

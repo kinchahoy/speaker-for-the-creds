@@ -32,10 +32,10 @@ const Snapshot = z.object({
 export type Snapshot = {
   grants: Grant[];
   requests: z.infer<typeof Snapshot>["requests"];
-  /** The secrets a task may ask for; unchanged by a dropped connection. */
+  /** The secrets an agent may ask for; unchanged by a dropped connection. */
   secrets?: SecretInfo[];
 };
-const Agent = z.object({ id: z.string(), token: z.string() }).transform(({ id, token }) => ({ id, agentToken: token }));
+const SpeakerAgent = z.object({ id: z.string(), token: z.string() }).transform(({ id, token }) => ({ id, agentToken: token }));
 export type RequestBody = { agentId: string; want: string[]; reason: string; duration: (typeof durationNames)[number]; sshKey?: string };
 
 /** `bottle register` writes the sandbox host token that speaker's owner approved. */
@@ -91,7 +91,7 @@ export const speakerClient = (config: Config, hostToken: string) => {
   };
   return {
     createAgent: async (label: string, agent: string) =>
-      Agent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout))),
+      SpeakerAgent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout))),
     deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout)),
     request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout))),
   };
@@ -107,7 +107,7 @@ export const speakerCa = async (config: Config) => {
 
 /**
  * The route for requests to a secret's hosts: speaker's HTTPS proxy, which swaps the agent's placeholder for the real
- * value. bottle authenticates as the task's agent (its token is bound to this host's address) and trusts speaker's
+ * value. bottle authenticates as the agent (its token is bound to this host's address) and trusts speaker's
  * proxy certificate authority (`ca`, from speakerCa) for the tunnel only; the secret itself never reaches bottle.
  */
 export const speakerProxy = (config: Config, agentToken: string, ca: string) => {

@@ -16,7 +16,7 @@ import {
 } from "./reply.ts";
 
 const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TOKEN! };
-// SPEAKER_TOKEN is a placeholder; the host's speaker door adds the task's agent token (and the task's SSH public key,
+// SPEAKER_TOKEN is a placeholder; the host's speaker door adds the agent's token (and the agent's SSH public key,
 // which the host provisions, to every request body).
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
 const PROMPT = "/etc/bottle/prompt.md";
@@ -57,7 +57,7 @@ const call = async (to: { url: string; token: string }, method: "GET" | "POST", 
   return result;
 };
 
-/** The last assistant text, first 400 characters. The owner sees it in the Tasks view. */
+/** The last assistant text, first 400 characters. The owner sees it in the Agents view. */
 const lastMessage = (entries: { type: string; message?: { role?: string; content?: unknown } }[]) => {
   const content = entries.filter((entry) => entry.type === "message" && entry.message?.role === "assistant").at(-1)?.message?.content;
   const text =
@@ -73,7 +73,7 @@ const lastMessage = (entries: { type: string; message?: { role?: string; content
 };
 
 /**
- * Reports progress to bottle and asks speaker for items on the task's behalf. The owner
+ * Reports progress to bottle and asks speaker for items on the agent's behalf. The owner
  * approves each request in speaker; nothing here grants access.
  */
 export default async function (pi: ExtensionAPI) {

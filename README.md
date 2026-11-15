@@ -35,7 +35,7 @@ mise install
 mise run init
 ```
 
-`init` installs both packages, then asks the questions needed to set up speaker and then bottle. It offers to start each and to run a smoke-test task. The owner password is asked once: after speaker starts, `init` signs in with it, and bottle's step reuses it to unlock speaker and approve the new sandbox host. Each question says what it is for and what Enter keeps.
+`init` installs both packages, then asks the questions needed to set up speaker and then bottle. It offers to start each and to run a smoke-test agent. The owner password is asked once: after speaker starts, `init` signs in with it, and bottle's step reuses it to unlock speaker and approve the new sandbox host. Each question says what it is for and what Enter keeps.
 {.ai}
 
 `init` needs a real terminal. For scripts, pass `--yes` and flags instead. `mise run init -- --help` lists them (the `--` stops mise from taking `--help` itself), and so do `mise run init speaker -- --help` and `mise run init bottle -- --help`. Each package README shows an example.
@@ -54,8 +54,8 @@ Then:
    - an SSH target: first put the line Setup shows into that account's `authorized_keys`
    - a share on that target (it arrives over SSH)
 3. To connect a direct agent, give it `SPEAKER_URL` and tell it to read `$SPEAKER_URL/skill.md`. Each request it makes appears as a card in `/admin`. Approve item by item.
-4. To launch a sandboxed task, run `mise run bottle run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template grants nothing up front, but the agent can still request items mid-task, and each request appears as a card. The task waits silently until you approve; `run` and `ls` print the `/admin` link when something is pending. Once you approve it, the VM can use it. Revoke stops it within seconds. `run` starts bottle in the background when it is not already running, and bottle stops itself 10 minutes after its last task closes (`idleStopMinutes` in its config).
-5. To stop, run `mise run bottle stop <id>` for each task. `run` prints the archive folder, and `ls` lists the last finished tasks with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
+4. To launch a sandboxed agent, run `mise run bottle run --template offline --prompt "..."`. Add `--attended`, or omit `--prompt`, to work at its terminal. Each `site:`, `secret:`, or `folder:` item shows up as a card in `/admin`. The `offline` template grants nothing up front, but the agent can still request items mid-run, and each request appears as a card. The agent waits silently until you approve; `run` and `ls` print the `/admin` link when something is pending. Once you approve it, the VM can use it. Revoke stops it within seconds. `run` starts bottle in the background when it is not already running, and bottle stops itself 10 minutes after its last agent closes (`idleStopMinutes` in its config).
+5. To stop, run `mise run bottle stop <id>` for each agent. `run` prints the archive folder, and `ls` lists the last finished agents with theirs. The archive lands in the output directory, and the agent disappears from speaker. Then stop bottle and speaker with Ctrl-C, or with the `kill` commands `init` printed. Stop speaker last, because a speaker restart drops every grant.
 {.ai}
 
 If speaker's address changes later, run `mise run init bottle` again; it keeps your other answers.
@@ -90,13 +90,13 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | `mise run format` | Format both packages |
 | `mise run speaker` | Run speaker with live reload |
 | `mise run bottle serve` | Run the bottle service in the foreground |
-| `mise run bottle down` | Stop bottle now; its open tasks are archived first |
+| `mise run bottle down` | Stop bottle now; its open agents are archived first |
 | `mise run bottle:logs` | Follow bottle's log |
 | `mise run bottle register` | Register the sandbox host again; approve it in speaker |
-| `mise run bottle run --template offline` | Launch a sandbox task |
-| `mise run bottle ls` | List tasks |
+| `mise run bottle run --template offline` | Launch a sandbox agent |
+| `mise run bottle ls` | List agents |
 | `mise run bottle attach <id>` | Join Pi in a running guest |
-| `mise run bottle stop <id>` | Stop and archive a task |
+| `mise run bottle stop <id>` | Stop and archive an agent |
 | `mise run bottle build bottle-guest` | Build the guest image and load it into microsandbox |
 | `mise run speaker:up` | Build and run speaker in its hardened container |
 

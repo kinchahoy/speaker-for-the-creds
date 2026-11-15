@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/root/.cache/mise \
 
 # 5. Agent: Pi and its extensions in one pnpm project (pi-package.json; their install scripts stay unrun), so the extensions share a single Pi instead of
 # each installing their own as a peer dependency. Every dependency that declares a `pi` extension is linked automatically: the
-# ALWAYS_ON ones into /opt/pi-extensions (pi-launch loads them in every task), the rest into /opt/pi-plugins, the paths
+# ALWAYS_ON ones into /opt/pi-extensions (pi-launch loads them in every agent), the rest into /opt/pi-plugins, the paths
 # catalog.json names. /opt/pi-plugins.manifest lists what is linked there; `bottle build` copies it to the host, and
 # bottle checks every catalog guestPath against it.
 ARG ALWAYS_ON="pi-loop-police pi-token-speed"

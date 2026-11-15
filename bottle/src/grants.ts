@@ -9,25 +9,25 @@ const Limits = z
     rootfsGiB: z.number().int().min(1),
     workGiB: z.number().int().min(1),
     maxRuntimeHours: z.number().positive(),
-    /** Spend cap: model requests per task. */
+    /** Spend cap: model requests per agent. */
     maxModelRequests: z.number().int().positive().optional(),
   })
   .strict();
 
 /**
- * A launch template is the runtime profile speaker does not decide (VM limits, attended mode) plus what the task starts
+ * A launch template is the runtime profile speaker does not decide (VM limits, attended mode) plus what the agent starts
  * with: a `want` list of items and groups, named by its `label` and asked for over `duration`. Speaker shows that as the
- * task's first request; the task starts at once and works on whatever needs no new access while the owner decides.
+ * agent's first request; the agent starts at once and works on whatever needs no new access while the owner decides.
  */
 export const Template = z
   .object({
     id: z.string().regex(/^[a-z0-9-]+$/),
-    /** What the task is, as the owner would say it: the label on the task's request card. */
+    /** What the agent is, as the owner would say it: the label on the agent's request card. */
     label: z.string().min(1).max(120),
     limits: Limits,
     /** Forces attended (true) or unattended (false) launches; unset, the launch decides. */
     attended: z.boolean().optional(),
-    /** Items and groups the task asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
+    /** Items and groups the agent asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
     want: z.array(z.string().trim().min(1)).max(50).default([]),
     /** How long the first request asks for. */
     duration: z.enum(durationNames).default("2h"),
@@ -47,7 +47,7 @@ export const codes = {
   502: "upstream_unavailable",
 } as const satisfies Record<number, ErrorCode>;
 
-/** A failure with the HTTP status the control API answers it with: 400 bad input, 404 unknown task, 409 wrong state, 502 speaker failed. */
+/** A failure with the HTTP status the control API answers it with: 400 bad input, 404 unknown agent, 409 wrong state, 502 speaker failed. */
 export class StatusError extends Error {
   readonly status: 400 | 404 | 409 | 502;
   readonly next?: string;
@@ -58,7 +58,7 @@ export class StatusError extends Error {
   }
 }
 
-/** The task's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
+/** The agent's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
 export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
   const want = [...new Set([...template.want, ...extra])];
   return want.length ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration } : undefined;

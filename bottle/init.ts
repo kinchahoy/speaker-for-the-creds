@@ -1,5 +1,5 @@
 // `mise run init bottle`: checks the host, asks how bottle reaches speaker and the model, writes
-// ~/.bottle/config.json, builds the guest image, registers with speaker and runs a smoke-test task. Every question has a flag.
+// ~/.bottle/config.json, builds the guest image, registers with speaker and runs a smoke-test agent. Every question has a flag.
 import { spawn, spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -228,7 +228,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   p.log.message(
     [
       "bottle runs coding agents in disposable VMs. Agents never hold a secret or reach the network on their own:",
-      "each access (a secret, a website, a folder) is granted per task by speaker-for-the-creds, which you approve.",
+      "each access (a secret, a website, a folder) is granted per agent by speaker-for-the-creds, which you approve.",
       `This setup checks this machine, connects to speaker and your model server, and builds the VM image. Everything goes in ${home}.`,
     ].join("\n"),
   );
@@ -409,7 +409,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     model !== undefined &&
     !flags["skip-register"] &&
     imageLoaded &&
-    (yes || answered(await p.confirm({ message: "Start bottle and run one small test task to check it all works?", initialValue: true })));
+    (yes || answered(await p.confirm({ message: "Start bottle and run one small test agent to check it all works?", initialValue: true })));
   if (smoke) {
     const logFile = join(home, "bottle.log");
     const server = startDetached(logFile, { ...env, BOTTLE_AUTOSTART: "1" });
@@ -424,32 +424,32 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
             () => false,
           ),
     );
-    p.log.info(`bottle runs in the background (pid ${server.pid}) and stops 10 minutes after its last task. Stop it now with: mise run bottle down`);
-    const created = await fetch(`${control}/api/tasks`, {
+    p.log.info(`bottle runs in the background (pid ${server.pid}) and stops 10 minutes after its last agent. Stop it now with: mise run bottle down`);
+    const created = await fetch(`${control}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT }),
     });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
-    if (!id) fail(`the smoke-test task did not start: ${error ?? created.status}`, `read ${logFile}`);
+    if (!id) fail(`the smoke-test agent did not start: ${error ?? created.status}`, `read ${logFile}`);
     await waitFor(
-      `Smoke-test task ${id} is running ("${SMOKE_PROMPT}")`,
-      `Task ${id} archived.`,
-      `task ${id} did not finish. See: mise run bottle ls`,
+      `Smoke-test agent ${id} is running ("${SMOKE_PROMPT}")`,
+      `Agent ${id} archived.`,
+      `agent ${id} did not finish. See: mise run bottle ls`,
       async () => {
-        const { tasks } = (await (await fetch(`${control}/api/state`)).json()) as { tasks: { id: string; state: string }[] };
-        const task = tasks.find((entry) => entry.id === id);
-        if (task?.state === "failed" || task?.state === "failed-archive")
-          fail(`the smoke-test task ${task.state}`, `read ${logFile} and the archive under ${outputRoot}`);
-        return task === undefined;
+        const { agents } = (await (await fetch(`${control}/api/state`)).json()) as { agents: { id: string; state: string }[] };
+        const agent = agents.find((entry) => entry.id === id);
+        if (agent?.state === "failed" || agent?.state === "failed-archive")
+          fail(`the smoke-test agent ${agent.state}`, `read ${logFile} and the archive under ${outputRoot}`);
+        return agent === undefined;
       },
     );
-    const archive = readdirSync(outputRoot).find((name) => name.endsWith(`--${id}`)) ?? fail(`task ${id} left no archive`, `look in ${outputRoot}`);
+    const archive = readdirSync(outputRoot).find((name) => name.endsWith(`--${id}`)) ?? fail(`agent ${id} left no archive`, `look in ${outputRoot}`);
     const result = join(outputRoot, archive, "artifacts", "hello.txt");
-    if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
+    if (!existsSync(result)) fail(`the agent archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
   } else p.log.info("bottle starts on demand with mise run bottle run (or run mise run bottle serve in the foreground)");
   p.outro(
-    `bottle is set up. Launch work with (bottle starts on demand, and stops 10 minutes after its last task; stop it now with \`mise run bottle down\`): mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
+    `bottle is set up. Launch work with (bottle starts on demand, and stops 10 minutes after its last agent; stop it now with \`mise run bottle down\`): mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
   );
 }

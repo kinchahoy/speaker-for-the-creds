@@ -42,7 +42,7 @@ export const Catalog = z
           /** Guidance appended to the system prompt while the extension is loaded. */
           note: z.string().min(1).optional(),
           /**
-           * Config files for the extension, written only into tasks that load it. A key is a file name under the guest's
+           * Config files for the extension, written only into agents that load it. A key is a file name under the guest's
            * ~/.pi/agent; a string value is written as is, anything else as JSON.
            */
           files: z
@@ -72,7 +72,7 @@ export const Catalog = z
 
 export type Catalog = z.infer<typeof Catalog>;
 
-/** `bottle build` writes this list of the guest image's linked plugins next to the task state. */
+/** `bottle build` writes this list of the guest image's linked plugins next to the agent state. */
 const manifestPath = (config: Config) => `${config.stateRoot}/guest-plugins.txt`;
 
 /** Reads and validates `<configRoot>/catalog.json`; every extension's guestPath must exist in the guest image, per the build's manifest. */
@@ -93,7 +93,7 @@ export const loadCatalog = (config: Config): Catalog => {
   return catalog;
 };
 
-const SESSION = "/work/.pi-session/task.jsonl";
+const SESSION = "/work/.pi-session/agent.jsonl";
 /** Commands the guest image provides. */
 export const CLI_TOOLS = `
   rg ctags jq sqlite3 git gh curl wget tree file shellcheck uv gcc make node pnpm cmake pandoc
@@ -103,7 +103,7 @@ export const CLI_TOOLS = `
   .split(/\s+/);
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 
-/** Hosted providers listed in models.json work once the task holds their speaker service (`<service>.full`). */
+/** Hosted providers listed in models.json work once the agent holds their speaker service (`<service>.full`). */
 export const availableModels = (config: Config) => [
   ...config.localModel.models.map((model) => ({
     id: `local/${model.id}`,
@@ -134,7 +134,7 @@ const modelsJson = (config: Config) => ({
       config.hostedProviders.map((provider) => [
         provider.id,
         {
-          // The guest's model endpoint sends /hosted/<id>/... to the provider's speaker service, with the task's own
+          // The guest's model endpoint sends /hosted/<id>/... to the provider's speaker service, with the agent's own
           // agent token in place of this key; speaker adds the real one.
           baseUrl: `http://${config.localModel.guestHost}/hosted/${provider.id}`,
           api: provider.api,
@@ -146,14 +146,14 @@ const modelsJson = (config: Config) => ({
   },
 });
 
-export const systemNote = (task: { name: string; prompt?: string; attended: boolean }, grants: Grant[], catalog: Catalog, extIds: string[]) => {
+export const systemNote = (agent: { name: string; prompt?: string; attended: boolean }, grants: Grant[], catalog: Catalog, extIds: string[]) => {
   const rows = unexpired(grants).map((grant) => `${grant.item} (${grant.expiresAt ? `expires ${grant.expiresAt}` : "permanent"})`);
   const notes = extIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
     return note ? ["", `## Extension ${id}`, "", note] : [];
   });
   return [
-    `# Task: ${task.name}`,
+    `# Task: ${agent.name}`,
     "",
     "You run inside a disposable micro-VM.",
     "",
@@ -186,8 +186,8 @@ export const systemNote = (task: { name: string; prompt?: string; attended: bool
     "A denied HTTP request returns 403. The owner can change grants while you run, so trust the result of the request over this list.",
     "The owner decides in a separate trusted surface. Nothing you print to this terminal grants anything.",
     ...notes,
-    ...(task.attended ? attendedNote : unattendedNote),
-    ...(task.prompt ? ["", "## Owner prompt", "", task.prompt] : []),
+    ...(agent.attended ? attendedNote : unattendedNote),
+    ...(agent.prompt ? ["", "## Owner prompt", "", agent.prompt] : []),
   ].join("\n");
 };
 
@@ -199,7 +199,7 @@ const attendedNote = [
   "The owner is watching this terminal. When only the owner can make a decision that blocks you, ask with `ask_user_question`. Otherwise, keep working without asking.",
 ];
 
-/** Unattended: nobody answers, so the agent works through the task and records its assumptions instead of asking. */
+/** Unattended: nobody answers, so the agent keeps working and records its assumptions instead of asking. */
 const unattendedNote = [
   "",
   "## Unattended task",
@@ -229,7 +229,7 @@ export const writeGuestConfig = (
   directory: string,
   config: Config,
   catalog: Catalog,
-  task: { name: string; model: string; prompt?: string; attended: boolean },
+  agent: { name: string; model: string; prompt?: string; attended: boolean },
   grants: Grant[],
   mcpIds: string[],
   extIds: string[],
@@ -237,20 +237,20 @@ export const writeGuestConfig = (
   mkdirSync(`${directory}/extensions`, { recursive: true });
   rmSync(`${directory}/agent-files`, { recursive: true, force: true });
   mkdirSync(`${directory}/agent-files`);
-  if (task.prompt) writeFileSync(`${directory}/prompt.md`, task.prompt);
+  if (agent.prompt) writeFileSync(`${directory}/prompt.md`, agent.prompt);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/request-capability.ts`, `${directory}/extensions/request-capability.ts`);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
   const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, grants, catalog, extIds));
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(agent, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
-  const [provider, ...model] = task.model.split("/");
+  const [provider, ...model] = agent.model.split("/");
   // `--tools` filters MCP tools only when it names them, so each granted tool is listed by its Pi name.
   const mcpTools = mcpIds.flatMap((id) => piToolNames(`mcp:${id}`, { mcp: catalog.mcps }));
   const extensions: { guestPath: string; tools: string[]; files?: Record<string, unknown> }[] = [
-    ...(task.attended ? [ASK_USER_EXTENSION] : []),
+    ...(agent.attended ? [ASK_USER_EXTENSION] : []),
     ...extIds.map((id) => {
       const entry = catalog.extensions[id];
       if (!entry) throw new Error(`unknown extension ${id}`);
@@ -328,7 +328,7 @@ export const pi = {
     await checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch"));
     await settled("Pi start", guest);
   },
-  /** Restarting re-reads the regenerated args, and Pi resumes the same task-local session file. */
+  /** Restarting re-reads the regenerated args, and Pi resumes the same agent-local session file. */
   restart: async (guest: Guest) => {
     await checked("Pi restart", guest.exec(`pkill -x pi; while ${alive}; do sleep 0.1; done; dtach -n /run/pi.dtach /usr/local/bin/pi-launch`));
     await settled("Pi restart", guest);

@@ -7,7 +7,7 @@ import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
 import { attendedFor, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
-import { inForce } from "../src/tasks.ts";
+import { inForce } from "../src/agents.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
 import {
   alreadyPendingText,
@@ -40,7 +40,7 @@ const writeConfig = (bindHost = "127.0.0.1", controlPort = 7001) => {
         controlPort,
         guestPort: 7002,
         speaker: { url: "http://127.0.0.1:7000", proxyPort: 7003, sshPort: 7004 },
-        maxTasks: 1,
+        maxAgents: 1,
         guestImage: "bottle-guest",
         configRoot: join(root, "config"),
         stateRoot: join(root, "state"),
@@ -146,7 +146,7 @@ test("templates load from one file and reject duplicate identities", () => {
   assert.throws(() => loadTemplates(path));
 });
 
-test("guest configuration mounts no skills, sends no extension config for an MCP-only task, and loads the curated MCP tools", () => {
+test("guest configuration mounts no skills, sends no extension config for an MCP-only agent, and loads the curated MCP tools", () => {
   const config = loadConfig(writeConfig());
   // An MCP server that runs inside the VM; remote ones are speaker services and not catalog entries.
   const catalog = Catalog.parse({
@@ -208,7 +208,7 @@ test("attended mode loads ask-user-question; ext: grants load catalog extensions
   assert.deepEqual(webSearch.fetchRouting, { providers: ["http"], allowRemoteHostedProviders: false });
   assert.equal(webSearch.ssrf.trustEnvProxy, true);
   assert.equal(webSearch.allowBrowserCookies, false);
-  // Config files follow the extension: a task without it gets none.
+  // Config files follow the extension: an agent without it gets none.
   assert.equal(existsSync(join(write(false, ["pi-cc-loop"]).directory, "agent-files/web-search.json")), false);
 
   const loop = write(false, ["pi-cc-loop", "pi-cc-monitor"]);
@@ -219,7 +219,7 @@ test("attended mode loads ask-user-question; ext: grants load catalog extensions
 
 const limits = { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 };
 
-test("a template's want, label and duration become the task's first request", () => {
+test("a template's want, label and duration become the agent's first request", () => {
   const dev = Template.parse({ id: "dev", label: "Develop things", limits, want: ["group:developer", "site:pypi.org"], duration: "1d" });
   assert.deepEqual(launchRequest(dev, "agent-1"), {
     agentId: "agent-1",
@@ -381,7 +381,7 @@ test("grantChange diffs the loadout and names tools as Pi registers them", () =>
   });
 });
 
-test("catalog extensions carry config files that only a task loading the extension receives", () => {
+test("catalog extensions carry config files that only an agent loading the extension receives", () => {
   const config = loadConfig(writeConfig());
   const entry = { label: "Notes", guestPath: "/opt/pi-plugins/notes", description: "Notes", tools: ["note"], sites: [] };
   const catalog = Catalog.parse({

@@ -2,7 +2,7 @@
   "bindHost": "100.64.0.10",
   "controlPort": 7001,
   "guestPort": 7002,
-  "maxTasks": 3,
+  "maxAgents": 3,
   "guestImage": "bottle-guest",
   "speaker": {
     "url": "http://100.64.0.10:7000",

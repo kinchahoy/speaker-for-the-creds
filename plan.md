@@ -6,10 +6,10 @@
 
 ## Intent
 
-Who is who in this document: **the owner** is the human who runs this project and makes every decision. **The main session** is the coding agent carrying out the plan; **subagents** are cheaper agents it hands mechanical edits to. "The agent", "Pi" or "a task" elsewhere means an AI agent that speaker and bottle serve, not the one doing this work.
+Who is who in this document: **the owner** is the human who runs this project and makes every decision. **The main session** is the coding agent carrying out the plan; **subagents** are cheaper agents it hands mechanical edits to. "The agent", "Pi" or "an agent" elsewhere means an AI agent that speaker and bottle serve, not the one doing this work.
 
 1. **Make the project smaller before making it bigger.** Fewest lines of custom code is a high priority: remove (with approval) what nothing uses, keep an eye out for dead code, and let well-kept libraries do what custom code does today. The owner is open to tweaking or simplifying features if that helps reduce custom code, but some expensive features are cool and worth it; those stay.
-2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle task shows up as an agent in the Herdr app that the owner can talk to, and Herdr tells the owner when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
+2. **Then make Herdr a place to work with it, at the smallest cost.** Each bottle agent shows up as an agent in the Herdr app that the owner can talk to, and Herdr tells the owner when a card is waiting. The web `/admin` stays the one complete UI; approving inside Herdr is a later, small step, not a second frontend.
 3. **Keep it easy for others to deploy.** One laptop or several boxes, minimal setup on remote machines, latest dependencies by default with a tested lockfile available.
 4. **Don't weaken security boundaries without specifically checking.** Any cut or library swap that touches grants, token binding, secret handling, audit logging or share containment is raised with the owner first.
 
@@ -25,7 +25,7 @@ Who is who in this document: **the owner** is the human who runs this project an
 
 | Change | Where | Lines |
 | --- | --- | --- |
-| **Launch hook.** When a task starts, bottle runs `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. Herdr shows a **bottle** space on that machine with one tab per task, however the task was started. On by default when `hc` is on `PATH`, off otherwise; `"herdr": false` in `config.json` turns it off. | `bottle/src/tasks.ts`, `config.ts` | ~15 |
+| **Launch hook.** When an agent starts, bottle runs `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. Herdr shows a **bottle** space on that machine with one tab per agent, however the agent was started. On by default when `hc` is on `PATH`, off otherwise; `"herdr": false` in `config.json` turns it off. | `bottle/src/agents.ts`, `config.ts` | ~15 |
 | **Status: nothing added.** Whatever Pi itself reports reaches Herdr through dtach and the attach terminal. A pending speaker request does not show as blocked; the toast below covers it. | none | 0 |
 | **Notify mod.** Listens to the ntfy topic, shows a Herdr toast per new card, click opens `/admin` in the browser. Needs ntfy configured. | `herdr/mods/speaker/` | ~40 |
 | **"Pi (sandbox)" in Herdr's + menu.** A `programs.json` entry that runs `bottle run`. Config, documented in the README. | docs | 0 |
@@ -33,7 +33,7 @@ Who is who in this document: **the owner** is the human who runs this project an
 Spikes first, because these are unverified:
 
 - Pi's status reports reach Herdr through dtach and `msb exec -t`. If Pi reports nothing, the fallback is a guest extension of about 20 lines.
-- A labelled `hc run` on a remote machine appears as a tab, and the tab closes when the task archives.
+- A labelled `hc run` on a remote machine appears as a tab, and the tab closes when the agent archives.
 - A mod can hold an ntfy subscription (or poll it) with `fetch`.
 - Terminal resize through dtach.
 
@@ -75,7 +75,7 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 1a | **Speaker low-risk cuts**: the `core` unpacking blocks in `api.ts` and `admin.ts`, old-host defaults, unused `version` field | cheap subagent A (speaker files only) | `tsc`, lint, speaker tests |
 | 1b | **Bottle low-risk cuts**: Herdr TUI integration in `cli.ts`, `shareRoots`, the reload route, the duplicate check in `start.sh`, the CLI error prettifier; matching README lines | cheap subagent B (bottle files only), in parallel with A | `tsc`, lint, bottle tests |
 | 1c | **One copy of the init helpers** | cheap subagent C, after A and B (it touches both packages and their init tests) | both test suites |
-| 2a | **Slim trace**: replace the trace export with one JSON line per model call (see below) | cheap subagent, bottle files | bottle tests; a task archive holds `model-calls.jsonl` |
+| 2a | **Slim trace**: replace the trace export with one JSON line per model call (see below) | cheap subagent, bottle files | bottle tests; an agent archive holds `model-calls.jsonl` |
 | 2b | **Cut VM-mount folder delivery** from speaker; `DESIGN.md` updated in the same commit | cheap subagent, speaker files, in parallel with 2a | speaker tests |
 | 2c | **In-VM MCP servers stay**: add a test that an approved `mcp:<id>` puts the server into Pi's MCP config and a revoke removes it (no VM needed), and a short README example of a catalog entry | cheap subagent, after 2a | the new test passes |
 | 2d | **Cut `bottle doctor`** | cheap subagent, bottle files, after 2a | bottle tests; README no longer names it |
@@ -84,7 +84,7 @@ Not started; this is the drafted sequence. Work happens on `main`, in one workin
 | 3a | **One pnpm workspace, latest by default**: a root `pnpm-workspace.yaml` with each shared dependency declared once, one lockfile, one set of mise tasks; floating specs; `install` takes latest and `install:locked` uses the lockfile; `speaker/Dockerfile` reworked for the workspace, floating by default with a locked build on request | main session | `mise run install`, check, tests, and a container build both ways |
 | 3b | **Library changes** (findings below): `commander` for bottle's CLI and the root `init.ts`, Hono's proxy helper, Node's key handling, one commit each. The MCP client is step 2e. | cheap subagents | tests pass unchanged; the CLI checked by hand |
 | 3c | **Hono's typed client**: both servers' routes become one chained definition that exports its type; bottle's calls to speaker and the bottle CLI's calls to its control API use the typed client | subagent on a mid-tier model, after 3b | `tsc` catches a wrong path or body; both test suites |
-| 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real task shows as a tab; a card toasts |
+| 4 | **Herdr chunk 1**: spikes, launch hook, notify mod | main session | a real agent shows as a tab; a card toasts |
 | 5 | **Herdr chunk 2**, if wanted | main session | approve a card from Herdr |
 
 Rules for the subagents: each gets an exact file list and the audit's line ranges, removes only what is listed, never edits a test to make it pass (a failing test is reported back), and does not commit. A and B run together because their files do not overlap; nothing else runs in parallel in the one tree.
@@ -168,7 +168,7 @@ Checked and rejected, so they are not looked at again:
 - **Merging speaker's secrets proxy with bottle's `proxy-chain`**: they do different jobs.
 - Removing `hono-rate-limiter` or `write-file-atomic`, and about ten small utilities: each under 5 net lines.
 
-**Hosted model providers, in plain words.** By default the Pi inside a VM talks to the owner's own model server. This feature lets a task use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the task's first card asks for it, Pi starts once the owner approves, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
+**Hosted model providers, in plain words.** By default the Pi inside a VM talks to the owner's own model server. This feature lets an agent use a cloud model instead (`--model <provider>/<model>`). The provider's API key is a speaker secret; the agent's first card asks for it, Pi starts once the owner approves, and the VM only ever sees a placeholder that speaker's proxy swaps for the real key. Cutting it leaves local models only.
 
 **The speaker link, in plain words.** bottle holds one WebSocket to speaker to receive grants. Around it are four behaviours: it reconnects with a growing delay; on a failed connect it asks speaker whether its token is still accepted, and stops at once with a "register again" message if not; it shuts bottle down if speaker was never reached within 30 seconds of startup or has been gone for 5 minutes; and it drops every grant after 30 seconds of silence. The cut would keep only the last one and retry forever. The token check and the give-up limits are the fast-fail path, which is why they are kept.
 
@@ -185,7 +185,7 @@ Checked and rejected, so they are not looked at again:
 
 ### In-VM MCP and VM-mount delivery, in plain words
 
-- **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. A task asks for `mcp:<id>`; when the owner approves, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
+- **In-VM MCP servers (`mcp:<id>`).** A catalog entry names an MCP server program already inside the guest image. An agent asks for `mcp:<id>`; when the owner approves, bottle writes it into Pi's MCP config and restarts Pi at its next idle moment, and Pi gains that server's tools. Revoking removes them. The shipped catalog has no entries, so nothing uses this today. Remote MCP servers are unaffected: they are speaker services.
 - **VM-mount folder delivery.** Speaker can deliver a `folder:` grant two ways. Over SSH, the sandbox mounts the share with `sshfs` through speaker's jump server, which is what happens today. As a VM mount, a sandbox host that has the folder on its own disk would map it straight into the VM, which is much faster for `grep -r`, `find` and `git status`. bottle always tells speaker it cannot mount, so speaker's VM-mount branch never runs. Cutting it removes the unused branch and closes the door on the fast path until it is rebuilt.
 
 ### Not recommended (weakens a security boundary)

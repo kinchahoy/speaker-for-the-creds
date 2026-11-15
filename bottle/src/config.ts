@@ -21,7 +21,7 @@ const ConfigFile = z
     bindHost: z.string(),
     controlPort: port,
     guestPort: port,
-    maxTasks: z.number().int().min(1).max(3),
+    maxAgents: z.number().int().min(1).max(3),
     guestImage: z.string().min(1),
     // proxyPort is speaker's PROXY_PORT: where requests to a granted secret's hosts go so speaker can insert the secret.
     // sshPort is speaker's SSH_PORT: where the guest reaches the jump server for `folder:` grants.
@@ -37,9 +37,9 @@ const ConfigFile = z
       models: z.array(model).default([]),
     }),
     hostedProviders: z.array(HostedProviderSchema),
-    // Each task opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
+    // Each agent opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
     herdr: z.boolean().optional(),
-    // A bottle that `run` started stops itself once no task has been open for this long; `serve` never does.
+    // A bottle that `run` started stops itself once no agent has been open for this long; `serve` never does.
     idleStopMinutes: z.number().positive().default(10),
   })
   .strict();

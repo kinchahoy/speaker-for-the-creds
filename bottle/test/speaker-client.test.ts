@@ -133,7 +133,7 @@ async function fixture(t: TestContext, { groups = {} }: { groups?: object } = {}
   };
   const panel = async (name: string) => (await fetch(`${url}/admin/panel/${name}`, { headers: owner })).text();
   const live = async () => ({ grants: await panel("active"), approvals: await panel("inbox") });
-  /** An approved sandbox host, its client, and one task agent. */
+  /** An approved sandbox host, its client, and one agent. */
   const host = async (kinds: string[]) => {
     const token = "host-token";
     const created = await fetch(`${url}/_speaker/hosts`, {
@@ -213,7 +213,7 @@ test("watchGrants receives granted items and reports applied ids to speaker", as
   await until(active);
 });
 
-test("a template's want becomes the task's first request, labelled and timed as the template says", async (t) => {
+test("a template's want becomes the agent's first request, labelled and timed as the template says", async (t) => {
   const f = await fixture(t, { groups: { pack: { description: "Package registries", items: ["site:pypi.org", "site:registry.npmjs.org"] } } });
   const { speaker } = await f.host(["site"]);
   const template = Template.parse({
@@ -223,8 +223,8 @@ test("a template's want becomes the task's first request, labelled and timed as 
     want: ["group:pack", "site:example.com"],
     duration: "1d",
   });
-  const agent = await speaker.createAgent(template.label, "Test LLM · Pi on test");
-  const first = launchRequest(template, agent.id);
+  const speakerAgent = await speaker.createAgent(template.label, "Test LLM · Pi on test");
+  const first = launchRequest(template, speakerAgent.id);
   assert.ok(first);
   const sent = await speaker.request(first);
   assert.equal(sent.status, "pending");
@@ -268,8 +268,8 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
     (message) => assert.fail(message),
     { ...SPEAKER_LIMITS, dropMs, retryMs: 100 },
   );
-  const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
-  const request = await speaker.request({ agentId: agent.id, want: ["site:example.com"], reason: "docs", duration: "30m" });
+  const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
+  const request = await speaker.request({ agentId: speakerAgent.id, want: ["site:example.com"], reason: "docs", duration: "30m" });
   await f.approve(request.id, ["site:example.com"]);
   await until(() => received.some((s) => s.grants.length === 1));
 
@@ -403,15 +403,15 @@ test("a grant counts as decided for the agent only once the sandbox host reports
     SPEAKER_LIMITS,
     catalog,
   );
-  const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
+  const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
       method: "POST",
-      headers: { authorization: `Bearer ${agent.agentToken}`, "content-type": "application/json", "speaker-wait": "10" },
+      headers: { authorization: `Bearer ${speakerAgent.agentToken}`, "content-type": "application/json", "speaker-wait": "10" },
       body: JSON.stringify({ want, reason: "docs", duration: "30m" }),
     }).then((response) => response.json() as Promise<{ status: string; granted: string[]; applying?: string[]; next?: string }>);
   const me = async () =>
-    (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as {
+    (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${speakerAgent.agentToken}` } })).json()) as {
       grants: { item: string; applying?: boolean }[];
     };
 
@@ -478,18 +478,18 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
     (snapshot) => snapshots.push(snapshot),
     (message) => assert.fail(message),
   );
-  const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
-  const request = await speaker.request({ agentId: agent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
+  const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
+  const request = await speaker.request({ agentId: speakerAgent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
   await f.approve(request.id, ["secret:GITHUB_TOKEN"]);
   await until(() => snapshots.some((s) => s.grants.length === 1));
   const { grants, secrets } = snapshots.findLast((s) => s.grants.length)!;
   wire.push(JSON.stringify(snapshots));
-  // The grant carries the hosts the owner bound the secret to; the snapshot also lists what a task may ask for.
+  // The grant carries the hosts the owner bound the secret to; the snapshot also lists what an agent may ask for.
   assert.deepEqual([grants[0].item, grants[0].hosts], ["secret:GITHUB_TOKEN", ["localhost"]]);
   assert.deepEqual(secrets, [{ name: "GITHUB_TOKEN", hosts: ["localhost"], env: "GH_TOKEN" }]);
 
   // What the agent is told: the variable to set to a placeholder, and no proxy settings (the sandbox route is built in).
-  const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as {
+  const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${speakerAgent.agentToken}` } })).json()) as {
     secrets: Record<string, { placeholder: string; environment: Record<string, string>; hosts: string[] }>;
   };
   const { placeholder } = me.secrets.GITHUB_TOKEN;
@@ -499,7 +499,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   // The sandbox's route for the secret's hosts: speaker's proxy.
   const live = { secretHosts: [{ name: "GITHUB_TOKEN", hosts: grants[0].hosts!, expiresAt: grants[0].expiresAt }], events: [] };
   const ca = await speakerCa(f.config);
-  const route = secretRoute(live, speakerProxy(f.config, agent.agentToken, ca));
+  const route = secretRoute(live, speakerProxy(f.config, speakerAgent.agentToken, ca));
   t.after(() => route.close());
   assert.equal(await route.allow("localhost"), true);
   assert.equal(await route.allow("example.org"), undefined);
@@ -516,7 +516,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.deepEqual(seen, [{ url: "/repos/o/r/pulls", authorization: `token ${realToken}` }]);
 
   // The real value is nowhere in bottle: not in its config, its process environment, what speaker sent it, the
-  // task's live view, or the guest configuration it wrote.
+  // agent's live view, or the guest configuration it wrote.
   const guest = await mkdtemp(join(tmpdir(), "bottle-guest-"));
   t.after(() => rm(guest, { recursive: true, force: true }));
   writeGuestConfig(
@@ -551,7 +551,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.equal(seen.length, 1);
 });
 
-test("a hosted model call through the model door reaches the provider's speaker service as the task's agent", async (t) => {
+test("a hosted model call through the model door reaches the provider's speaker service as the agent", async (t) => {
   const f = await fixture(t);
   const seen: { url?: string; authorization?: string }[] = [];
   const provider = createHttpServer((req, res) => {
@@ -572,7 +572,7 @@ test("a hosted model call through the model door reaches the provider's speaker 
     write: "ask",
   });
   const { speaker } = await f.host(["secret"]);
-  const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
+  const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
 
   const config = {
     ...f.config,
@@ -581,10 +581,10 @@ test("a hosted model call through the model door reaches the provider's speaker 
   } as unknown as Config;
   const live: Live = { hosts: [], secretHosts: [], shares: new Map(), events: [], modelRequests: 0, modelCapNoted: false };
   const modelCalls = join(await mkdtemp(join(tmpdir(), "bottle-model-")), "model-calls.jsonl");
-  const door = createHttpServer(modelDoor(config, live, { url: f.url, agentToken: agent.agentToken }, modelCalls)).listen(0, "127.0.0.1");
+  const door = createHttpServer(modelDoor(config, live, { url: f.url, agentToken: speakerAgent.agentToken }, modelCalls)).listen(0, "127.0.0.1");
   await once(door, "listening");
   t.after(() => door.close());
-  // Pi sends its dummy key; the door replaces it with the task's agent token, and speaker with the provider's key.
+  // Pi sends its dummy key; the door replaces it with the agent's token, and speaker with the provider's key.
   const ask = () =>
     fetch(`http://127.0.0.1:${port(door)}/hosted/hosted/chat/completions`, {
       method: "POST",
@@ -601,7 +601,7 @@ test("a hosted model call through the model door reaches the provider's speaker 
   climbed.resume();
   assert.equal(climbed.statusCode, 400);
 
-  const request = await speaker.request({ agentId: agent.id, want: ["llm.full"], reason: "run the task's model", duration: "30m" });
+  const request = await speaker.request({ agentId: speakerAgent.id, want: ["llm.full"], reason: "run the agent's model", duration: "30m" });
   await f.approve(request.id, ["llm.full"]);
   const reply = await ask();
   assert.deepEqual([reply.status, await reply.text()], [200, '{"choices":[]}']);

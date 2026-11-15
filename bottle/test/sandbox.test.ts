@@ -189,7 +189,7 @@ describe("folders over SSH", () => {
     );
   });
 
-  test("the guest's requests to speaker carry the task's SSH key, and nothing else is touched", async () => {
+  test("the guest's requests to speaker carry the agent's SSH key, and nothing else is touched", async () => {
     const seen: { method?: string; url?: string; body: string }[] = [];
     const speaker = createServer((req, res) => {
       let body = "";

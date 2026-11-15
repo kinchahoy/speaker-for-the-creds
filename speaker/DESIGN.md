@@ -35,10 +35,10 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 | Name | What it is |
 | --- | --- |
 | **Owner** | The person who runs speaker and decides every request. |
-| **Agent** | Anything holding a speaker token that asks for access: Claude Code on a workstation, or Pi inside one sandbox task. |
+| **Agent** | Anything holding a speaker token that asks for access: Claude Code on a workstation, or Pi inside one sandbox. |
 | **Direct agent** | An agent that enrolled itself. |
-| **Sandboxed agent** | An agent created by a sandbox host for one task. It may also ask for items only a sandbox host can enforce. |
-| **Sandbox host** | A trusted service (bottle) the owner registers once. It starts sandboxes, creates one agent per task, and enforces that task's sandbox grants inside the VM. |
+| **Sandboxed agent** | An agent created by a sandbox host for one run. It may also ask for items only a sandbox host can enforce. |
+| **Sandbox host** | A trusted service (bottle) the owner registers once. It starts sandboxes, creates one agent per run, and enforces that run's sandbox grants inside the VM. |
 | **Service** | An HTTP API or remote MCP server that agents reach through speaker, usually with a key speaker holds (Obsidian, Karakeep, Home Assistant). |
 | **Target** | A host speaker can open SSH sessions to, as one limited account on that host. |
 | **Share** | A named folder on a target (or on a sandbox host) that agents can be given, read-only or read-write. |
@@ -83,7 +83,7 @@ Each service has a rule for read and one for write:
 
 **Grant:** a grant exists only while it is in force. It ends (and is logged as `grant_expired`) at its end time, or (logged as `grant_revoked`) when the owner revokes it; either way it is gone from speaker's list. The owner can extend an active grant by one more span of its original length. A later approval of the same item for the same agent replaces the earlier grant. Ending a grant immediately ends any session or mount it allowed.
 
-**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its task ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once. The agent stays as a revoked tombstone (with the time) until speaker restarts, so its token keeps answering `denied` instead of `enroll`; an idle agent that is not revoked is removed as above.
+**Agent:** an agent exists from enrollment. It can do nothing except read open services until the owner grants it something. Denying items denies only those items. An agent stays valid while it has an active grant or has made a call in the last 7 days. A sandboxed agent ends when its run ends. If a direct agent's address changes (a laptop on another network), its token stops working and it simply enrolls and asks again. **Revoke agent** ends its token and all its grants at once. The agent stays as a revoked tombstone (with the time) until speaker restarts, so its token keeps answering `denied` instead of `enroll`; an idle agent that is not revoked is removed as above.
 
 **Sandbox host:** registers, the owner approves it, and it stays until removed. Speaker keeps the host record (id, name, kinds, token hash, address, time) on disk but not its approval: after a restart each known host is a pending card again, and the owner re-approves it after signing in. Meanwhile the host's calls answer `approval_required`. bottle counts that as an outage: approved within its outage limit (5 minutes after speaker was reached, 30 seconds at its own startup) it resumes; otherwise it stops and says to approve the host. Registering is unauthenticated and only adds a pending entry (name, kinds, source address, time). Approving it removes any other host with the same name and the same source address (audited `host_replaced`): that is the same machine registering again, its old tokens are unusable, and its agents end with it. A different name or address is kept. The pending card says what approval will replace, and host cards show address, registration time and status.
 
@@ -212,7 +212,7 @@ The pages use Open Props tokens (`/admin/assets/open-props.css`), a small inline
 
 ## Sandbox hosts
 
-A sandbox host registers with a name and the item kinds it can enforce; the owner approves it once. For each task it creates a sandboxed agent, with the same identity fields a direct agent sends (`label` from the task prompt or template, `agent` as `<model> · Pi on <sandbox host>`, and a `reason` on its first request), and receives that agent's token. Speaker adds the sandbox host and task id, which it knows from the host's authenticated channel, and binds the token to the sandbox host's address, so a token leaked from a VM works nowhere else. It holds a WebSocket to speaker, receives every grant and revocation for its agents as they happen, applies them inside the VM, and reports which grants are in force. If that connection is lost for 30 seconds, the sandbox host drops its agents' grants until it reconnects. A task template names what the task starts with as a `want` list and a `label`; that becomes the task's first request.
+A sandbox host registers with a name and the item kinds it can enforce; the owner approves it once. For each run it creates a sandboxed agent, with the same identity fields a direct agent sends (`label` from the task prompt or template, `agent` as `<model> · Pi on <sandbox host>`, and a `reason` on its first request), and receives that agent's token. Speaker adds the sandbox host and run id, which it knows from the host's authenticated channel, and binds the token to the sandbox host's address, so a token leaked from a VM works nowhere else. It holds a WebSocket to speaker, receives every grant and revocation for its agents as they happen, applies them inside the VM, and reports which grants are in force. If that connection is lost for 30 seconds, the sandbox host drops its agents' grants until it reconnects. A task template names what the task starts with as a `want` list and a `label`; that becomes the task's first request.
 
 ## Discovery and instructions
 
@@ -255,7 +255,7 @@ What the table means in practice:
 | `POST /_speaker/hosts` | anyone, rate limited | register a sandbox host; the reply carries speaker's `PROXY_PORT` and `SSH_PORT` |
 | `GET /_speaker/hosts/ws` | sandbox host | live grants for its agents; the host reports its catalog |
 | `GET /_speaker/hosts/self` | sandbox host | `{ id, name, status: "approved" }`; a pending or unknown host token gets the usual `401` (`approval_required`, `enroll` or `register`), an agent token `403` `denied` |
-| `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a task's agent |
+| `POST /_speaker/hosts/agents`, `DELETE /_speaker/hosts/agents/<id>` | sandbox host | create and end a sandboxed agent |
 | `GET /_speaker/health` | anyone | liveness |
 | `/admin/...` | owner | HTML forms, session cookie |
 | `/admin/api/...` | owner | JSON, bearer token only (see Security model) |
@@ -315,15 +315,15 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 **Sandboxes**
 
 - A sandbox host authenticates with the token it received at registration; agents it creates need no card of their own.
-- At task start the sandbox host gives the VM speaker's address, the agent's token (as a placeholder), and the skill. Speaker is always reachable from the VM. The template's `want`, `label` and `duration` become the task's first request; the task starts at once and Pi works on whatever needs no new access while it waits.
-- The sandbox host tells each task, in its instructions, the names of the `mcp:` and `ext:` entries in its catalog and the secrets it can use. Groups appear in `/catalog`.
-- The sandbox host sends speaker its catalog of `mcp:` and `ext:` entries over its WebSocket. Speaker lists them, with every secret and group, in `/catalog`, and the `request_capability` tool shows that text to the task.
+- At agent start the sandbox host gives the VM speaker's address, the agent's token (as a placeholder), and the skill. Speaker is always reachable from the VM. The template's `want`, `label` and `duration` become the agent's first request; the agent starts at once and Pi works on whatever needs no new access while it waits.
+- The sandbox host tells each agent, in its instructions, the names of the `mcp:` and `ext:` entries in its catalog and the secrets it can use. Groups appear in `/catalog`.
+- The sandbox host sends speaker its catalog of `mcp:` and `ext:` entries over its WebSocket. Speaker lists them, with every secret and group, in `/catalog`, and the `request_capability` tool shows that text to the agent.
 - A grant for a sandbox-only item counts as decided for the agent once the sandbox host reports it in force.
 - After an `mcp:` or `ext:` grant, Pi reloads at its next idle moment and gains the new tools.
 - An extension's sites live and end with it. A site that came only because a request named `ext:<id>` (not asked for in that request) records the ext grant it belongs to; revoking, expiring or ending the agent of that ext grant ends the site grant too, through the same path (audit and push to the sandbox host). A site asked for explicitly, or already held on its own, stays. A site shared by two extensions ends with the last of them. Extending the ext grant extends its bundled sites. Cards and the Active list show the relationship.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host mounts its agents' folders itself with `sshfs`: speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
-- After a speaker restart, the agent tokens of running tasks are unknown and their grants are gone. Those tasks lose speaker access until they are relaunched (the sandbox host does not re-create their agents).
+- After a speaker restart, the agent tokens of running agents are unknown and their grants are gone. Those agents lose speaker access until they are relaunched (the sandbox host does not re-create their agents).
 
 **Deployment**
 
@@ -376,7 +376,7 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 - value: a GitHub fine-grained token limited to the repositories and permissions tasks should have;
 - allowed hosts `api.github.com` and `github.com`.
 
-**At task start.** Nothing is set in the VM: speaker issues the placeholder (`speaker-placeholder-<random, per agent>`) only when the grant exists. The agent reads it from `/catalog` and sets `GH_TOKEN` on the command that needs it, running `gh auth setup-git` once so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
+**At agent start.** Nothing is set in the VM: speaker issues the placeholder (`speaker-placeholder-<random, per agent>`) only when the grant exists. The agent reads it from `/catalog` and sets `GH_TOKEN` on the command that needs it, running `gh auth setup-git` once so `git` gets its credentials from `gh`. The placeholder is not a GitHub token and is worthless anywhere else.
 
 **The agent asks.** Pi requests `secret:GITHUB_TOKEN` with a reason, for example "open a pull request for the fix". The owner's card shows the secret, its allowed hosts, and the write tint. Granting it also allows the sandbox to reach those two hosts; no separate `site:` items are needed. Speaker tells the sandbox host over its WebSocket that the agent holds `secret:GITHUB_TOKEN` for `api.github.com` and `github.com`, until the grant's end. The value is not sent.
 

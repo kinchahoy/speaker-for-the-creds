@@ -150,8 +150,8 @@ test("init bottle stops when --password-stdin carries the wrong password", { ski
   assert.equal(speaker.unlocked(), false);
 });
 
-// The CLI reads the control API of a bottle that is not running: a fake that serves no live tasks.
-test("bottle run names the archive folder, and ls lists finished tasks with their archive folders", { skip: !kvm || !lan }, async (t) => {
+// The CLI reads the control API of a bottle that is not running: a fake that serves no live agents.
+test("bottle run names the archive folder, and ls lists finished agents with their archive folders", { skip: !kvm || !lan }, async (t) => {
   const dir = scratch(t);
   const speaker = await listen(t, "0.0.0.0", (_request, response) => response.end('{"ok":true}'));
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
@@ -164,11 +164,11 @@ test("bottle run names the archive folder, and ls lists finished tasks with thei
   const { outputRoot } = loadConfig(configPath);
   const folder = join(outputRoot, "2026-01-01_0000--demo--abc123");
   mkdirSync(join(folder, "_control"), { recursive: true });
-  writeFileSync(join(folder, "_control", "task.json"), JSON.stringify({ id: "abc123", state: "archived" }));
-  mkdirSync(join(outputRoot, "2026-01-02_0000--live--def456"), { recursive: true }); // a live task has no task.json yet
+  writeFileSync(join(folder, "_control", "agent.json"), JSON.stringify({ id: "abc123", state: "archived" }));
+  mkdirSync(join(outputRoot, "2026-01-02_0000--live--def456"), { recursive: true }); // a live agent has no agent.json yet
 
   const control = createServer((request, response) =>
-    response.end(request.method === "POST" ? JSON.stringify({ id: "new1", outputDir: join(outputRoot, "stamp--new--new1") }) : '{"tasks":[]}'),
+    response.end(request.method === "POST" ? JSON.stringify({ id: "new1", outputDir: join(outputRoot, "stamp--new--new1") }) : '{"agents":[]}'),
   ).listen(7411, "127.0.0.1");
   t.after(() => void control.close());
   await new Promise((done) => control.once("listening", done));

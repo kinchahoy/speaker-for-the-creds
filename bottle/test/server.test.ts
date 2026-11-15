@@ -4,11 +4,11 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { startGuestListener } from "../src/server.ts";
 import type { Config } from "../src/config.ts";
-import type { Tasks } from "../src/tasks.ts";
+import type { Agents } from "../src/agents.ts";
 
 test("Hono's own errors answer speaker's shape: a bad bearer token is 401 denied, malformed JSON is 400 invalid", async (t) => {
-  const tasks = { byGuestToken: new Map([["good", { state: "ready", live: {} }]]) } as unknown as Tasks;
-  const server = startGuestListener({ guestPort: 0 } as Config, tasks);
+  const agents = { byGuestToken: new Map([["good", { state: "ready", live: {} }]]) } as unknown as Agents;
+  const server = startGuestListener({ guestPort: 0 } as Config, agents);
   t.after(() => server.close());
   await once(server, "listening");
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/guest/status`;

@@ -17,7 +17,7 @@ import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
 import { Catalog, pi } from "../src/pi.ts";
 import { modelDoor, type Boot, type Guest } from "../src/sandbox.ts";
-import { Tasks } from "../src/tasks.ts";
+import { Agents } from "../src/agents.ts";
 
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
 const { WebSocketServer } = createRequire(import.meta.url)("../../speaker/node_modules/ws") as Ws;
@@ -31,11 +31,11 @@ const until = async (ok: () => boolean | Promise<boolean>, timeoutMs = 10_000) =
 const limits = { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 };
 
 /**
- * A real speaker with an approved sandbox host, and Tasks over a stand-in VM: every guest command is recorded and
+ * A real speaker with an approved sandbox host, and Agents over a stand-in VM: every guest command is recorded and
  * succeeds, and Pi reports "not running" so a close needs no grace period.
  */
 async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions: {} }) {
-  const root = await mkdtemp(join(tmpdir(), "bottle-tasks-"));
+  const root = await mkdtemp(join(tmpdir(), "bottle-agents-"));
   const dirs = { configRoot: join(root, "config"), stateRoot: join(root, "state"), outputRoot: join(root, "output") };
   for (const dir of Object.values(dirs)) await mkdir(dir);
   const app = await createApp(readConfig({ DATA_DIR: join(root, "speaker"), PUBLIC_URL: "http://localhost", ...(await freePorts()) }));
@@ -48,7 +48,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     fetch(`${url}/admin${path}`, { method: "POST", headers: owner, body, redirect: "manual" });
   const panel = async (name: "inbox" | "active") => (await fetch(`${url}/admin/panel/${name}`, { headers: owner })).text();
 
-  const hostToken = "tasks-host-token";
+  const hostToken = "agents-host-token";
   const registered = await fetch(`${url}/_speaker/hosts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -65,7 +65,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     bindHost: "127.0.0.1",
     controlPort: 1,
     guestPort: 2,
-    maxTasks: 2,
+    maxAgents: 2,
     idleStopMinutes: 10,
     guestImage: "test",
     speaker: { url, proxyPort: 1, sshPort: 2 },
@@ -103,7 +103,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     };
     // Pi's session as the guest would have written it, for the archive.
     await mkdir(`${paths.work}/.pi-session`, { recursive: true });
-    await writeFile(`${paths.work}/.pi-session/task.jsonl`, `${JSON.stringify({ type: "session", id: "s1" })}\n`);
+    await writeFile(`${paths.work}/.pi-session/agent.jsonl`, `${JSON.stringify({ type: "session", id: "s1" })}\n`);
     return {
       sessionId: "bottle-test",
       exec: async (command) => {
@@ -118,9 +118,9 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
       close: async () => void closed++,
     } satisfies Guest;
   };
-  const tasks = new Tasks(config, templates, Catalog.parse(catalog), hostToken, boot);
+  const agents = new Agents(config, templates, Catalog.parse(catalog), hostToken, boot);
   t.after(async () => {
-    tasks.stop();
+    agents.stop();
     for (const stub of stubs) stub.close();
     for (const client of wss.clients) client.terminate();
     app.proxy.close();
@@ -131,7 +131,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   });
   return {
     url,
-    tasks,
+    agents,
     commands,
     closed: () => closed,
     failRestarts: () => (restartFails = true),
@@ -145,38 +145,38 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
 
 test("a launch boots the VM, starts Pi, writes its configuration and files the template's first request", async (t) => {
   const f = await fixture(t);
-  const task = await f.tasks.create({ template: "web", name: "docs" });
-  assert.equal(task.state, "idle");
-  assert.equal(task.attended, true);
+  const agent = await f.agents.create({ template: "web", name: "docs" });
+  assert.equal(agent.state, "idle");
+  assert.equal(agent.attended, true);
   assert.ok(f.commands.includes("dtach -n /run/pi.dtach /usr/local/bin/pi-launch"), "Pi started");
-  assert.match(readFileSync(`${task.guestConfigDir}/args`, "utf8"), /--model\nm\n/);
-  assert.match(readFileSync(`${task.guestConfigDir}/APPEND_SYSTEM.md`, "utf8"), /# Task: docs/);
+  assert.match(readFileSync(`${agent.guestConfigDir}/args`, "utf8"), /--model\nm\n/);
+  assert.match(readFileSync(`${agent.guestConfigDir}/APPEND_SYSTEM.md`, "utf8"), /# Task: docs/);
   const inbox = await f.panel("inbox");
   assert.match(inbox, /<strong>docs<\/strong>/);
   assert.match(inbox, /launch template web: Read example\.com/);
   assert.ok(inbox.includes('value="site:example.com"'));
-  // The task waits for the owner: the request shows as pending in its listing.
-  await until(() => f.tasks.pendingRequests(task).length === 1);
-  assert.equal(f.tasks.pendingRequests(task)[0]!.what, "site:example.com");
+  // The agent waits for the owner: the request shows as pending in its listing.
+  await until(() => f.agents.pendingRequests(agent).length === 1);
+  assert.equal(f.agents.pendingRequests(agent)[0]!.what, "site:example.com");
   // Without a template want, nothing is asked at launch.
-  await f.tasks.create({ template: "offline" });
+  await f.agents.create({ template: "offline" });
   assert.equal((await f.panel("inbox")).match(/<article id="request-/g)?.length, 1);
 });
 
-test("an approved grant reaches the task's live view and is reported to speaker as in force", async (t) => {
+test("an approved grant reaches the agent's live view and is reported to speaker as in force", async (t) => {
   const f = await fixture(t);
-  const task = await f.tasks.create({ template: "web" });
-  await until(() => f.tasks.pendingRequests(task).length === 1);
-  const [request] = f.tasks.pendingRequests(task);
+  const agent = await f.agents.create({ template: "web" });
+  await until(() => f.agents.pendingRequests(agent).length === 1);
+  const [request] = f.agents.pendingRequests(agent);
   const body = new URLSearchParams({ duration: "1h", items: "site:example.com", shown: "site:example.com" });
   assert.equal((await f.ownerPost(`/requests/${request!.id}/approve`, body)).status, 303);
-  await until(() => task.live.hosts.some((entry) => entry.host === "example.com"));
+  await until(() => agent.live.hosts.some((entry) => entry.host === "example.com"));
   assert.deepEqual(
-    task.grants.map((grant) => grant.item),
+    agent.grants.map((grant) => grant.item),
     ["site:example.com"],
   );
-  assert.match(readFileSync(`${task.outputDir}/_control/grants.jsonl`, "utf8"), /"item":"site:example.com"/);
-  assert.ok(task.live.events.some((event) => event.text === "grants now: site:example.com"));
+  assert.match(readFileSync(`${agent.outputDir}/_control/grants.jsonl`, "utf8"), /"item":"site:example.com"/);
+  assert.ok(agent.live.events.some((event) => event.text === "grants now: site:example.com"));
   // Speaker hears it applied: the grant is no longer marked as waiting or granted-not-applied.
   await until(async () => {
     const active = await f.panel("active");
@@ -186,20 +186,20 @@ test("an approved grant reaches the task's live view and is reported to speaker 
 
 test("stop asks Pi to quit, exports the transcript, archives the records, closes the VM and ends the speaker agent", async (t) => {
   const f = await fixture(t);
-  const task = await f.tasks.create({ template: "offline", name: "archive me", prompt: "write DONE" });
-  assert.equal(task.attended, false);
-  await writeFile(`${task.outputDir}/artifacts/result.txt`, "result\n");
+  const agent = await f.agents.create({ template: "offline", name: "archive me", prompt: "write DONE" });
+  assert.equal(agent.attended, false);
+  await writeFile(`${agent.outputDir}/artifacts/result.txt`, "result\n");
   await f.askModel();
   await f.askModel();
-  await f.tasks.close(task);
-  assert.equal(task.state, "archived");
+  await f.agents.close(agent);
+  assert.equal(agent.state, "archived");
   assert.equal(f.closed(), 1);
-  assert.equal(f.tasks.byId.has(task.id), false);
+  assert.equal(f.agents.byId.has(agent.id), false);
   assert.ok(f.commands.includes("printf '/quit\\r' | dtach -p /run/pi.dtach"), "Pi asked to quit");
-  assert.ok(f.commands.some((command) => command.startsWith("pi --export /work/.pi-session/task.jsonl")));
-  const control = `${task.outputDir}/_control`;
-  const record = JSON.parse(readFileSync(`${control}/task.json`, "utf8"));
-  assert.deepEqual([record.id, record.state, record.name, record.attended], [task.id, "archived", "archive me", false]);
+  assert.ok(f.commands.some((command) => command.startsWith("pi --export /work/.pi-session/agent.jsonl")));
+  const control = `${agent.outputDir}/_control`;
+  const record = JSON.parse(readFileSync(`${control}/agent.json`, "utf8"));
+  assert.deepEqual([record.id, record.state, record.name, record.attended], [agent.id, "archived", "archive me", false]);
   const manifest = JSON.parse(readFileSync(`${control}/manifest.json`, "utf8"));
   assert.equal(manifest.closed, true);
   assert.deepEqual(
@@ -219,54 +219,54 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
   }
   assert.ok(existsSync(`${control}/pi-session.jsonl`));
   assert.match(readFileSync(`${control}/policy-events.jsonl`, "utf8"), /owner began archival/);
-  assert.equal(existsSync(`${f.config.stateRoot}/tasks/${task.id}`), false, "the work tree is removed");
-  // The task's agent is gone from speaker.
-  const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.agentToken}` } });
+  assert.equal(existsSync(`${f.config.stateRoot}/agents/${agent.id}`), false, "the work tree is removed");
+  // The agent's speaker record is gone.
+  const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } });
   assert.equal(response.status, 403);
 });
 
-test("a task whose Pi restart failed is pi-down, and closing it still exports the transcript", async (t) => {
+test("an agent whose Pi restart failed is pi-down, and closing it still exports the transcript", async (t) => {
   const catalog = {
     mcps: {},
     extensions: { notes: { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] } },
   };
   const f = await fixture(t, catalog);
-  const task = await f.tasks.create({ template: "offline", name: "restarts" });
+  const agent = await f.agents.create({ template: "offline", name: "restarts" });
   f.failRestarts();
-  await f.tasks.speaker.request({ agentId: task.agentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
-  await until(() => f.tasks.pendingRequests(task).length === 1);
-  const [request] = f.tasks.pendingRequests(task);
+  await f.agents.speaker.request({ agentId: agent.speakerAgentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
+  await until(() => f.agents.pendingRequests(agent).length === 1);
+  const [request] = f.agents.pendingRequests(agent);
   const body = new URLSearchParams({ duration: "1h", items: "ext:notes", shown: "ext:notes" });
   assert.equal((await f.ownerPost(`/requests/${request!.id}/approve`, body)).status, 303);
-  await until(() => task.state === "pi-down");
+  await until(() => agent.state === "pi-down");
   f.commands.length = 0;
-  await f.tasks.close(task);
-  assert.equal(task.state, "archived");
+  await f.agents.close(agent);
+  assert.equal(agent.state, "archived");
   assert.ok(f.commands.includes("printf '/quit\\r' | dtach -p /run/pi.dtach"), "Pi asked to quit");
   assert.ok(
-    f.commands.some((command) => command.startsWith("pi --export /work/.pi-session/task.jsonl")),
+    f.commands.some((command) => command.startsWith("pi --export /work/.pi-session/agent.jsonl")),
     "transcript exported",
   );
-  assert.ok(existsSync(`${task.outputDir}/_control/pi-session.jsonl`));
+  assert.ok(existsSync(`${agent.outputDir}/_control/pi-session.jsonl`));
 });
 
 const notes = {
   mcps: {},
   extensions: { notes: { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] } },
 };
-const grantNotes = async (f: Awaited<ReturnType<typeof fixture>>, task: { agentId: string }) => {
-  await f.tasks.speaker.request({ agentId: task.agentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
-  await until(() => f.tasks.pendingRequests(task as never).length === 1);
+const grantNotes = async (f: Awaited<ReturnType<typeof fixture>>, agent: { speakerAgentId: string }) => {
+  await f.agents.speaker.request({ agentId: agent.speakerAgentId, want: ["ext:notes"], reason: "take notes", duration: "1h" });
+  await until(() => f.agents.pendingRequests(agent as never).length === 1);
   const body = new URLSearchParams({ duration: "1h", items: "ext:notes", shown: "ext:notes" });
-  assert.equal((await f.ownerPost(`/requests/${f.tasks.pendingRequests(task as never)[0]!.id}/approve`, body)).status, 303);
+  assert.equal((await f.ownerPost(`/requests/${f.agents.pendingRequests(agent as never)[0]!.id}/approve`, body)).status, 303);
 };
 
 test("a grant that restarts Pi writes the change for the guest, and the grant is reported in force", async (t) => {
   const f = await fixture(t, notes);
-  const task = await f.tasks.create({ template: "offline" });
-  await grantNotes(f, task);
-  await until(() => task.extRunning.includes("notes") && task.state === "idle");
-  assert.deepEqual(JSON.parse(readFileSync(`${task.guestConfigDir}/change.json`, "utf8")), {
+  const agent = await f.agents.create({ template: "offline" });
+  await grantNotes(f, agent);
+  await until(() => agent.extRunning.includes("notes") && agent.state === "idle");
+  assert.deepEqual(JSON.parse(readFileSync(`${agent.guestConfigDir}/change.json`, "utf8")), {
     id: 1,
     added: ["ext:notes"],
     removed: [],
@@ -279,44 +279,44 @@ test("an approved mcp: grant puts the server into Pi's MCP config, and a revoke 
     mcps: { files: { label: "Files", transport: "stdio", command: "/opt/mcp/files", args: ["--ro"], tools: ["read-file"], write: false } },
     extensions: {},
   });
-  const task = await f.tasks.create({ template: "offline" });
-  const servers = () => JSON.parse(readFileSync(`${task.guestConfigDir}/mcp.json`, "utf8")).mcpServers;
-  await f.tasks.speaker.request({ agentId: task.agentId, want: ["mcp:files"], reason: "read files", duration: "1h" });
-  await until(() => f.tasks.pendingRequests(task).length === 1);
+  const agent = await f.agents.create({ template: "offline" });
+  const servers = () => JSON.parse(readFileSync(`${agent.guestConfigDir}/mcp.json`, "utf8")).mcpServers;
+  await f.agents.speaker.request({ agentId: agent.speakerAgentId, want: ["mcp:files"], reason: "read files", duration: "1h" });
+  await until(() => f.agents.pendingRequests(agent).length === 1);
   const body = new URLSearchParams({ duration: "1h", items: "mcp:files", shown: "mcp:files" });
-  assert.equal((await f.ownerPost(`/requests/${f.tasks.pendingRequests(task)[0]!.id}/approve`, body)).status, 303);
-  await until(() => task.mcpRunning.includes("files") && task.state === "idle");
+  assert.equal((await f.ownerPost(`/requests/${f.agents.pendingRequests(agent)[0]!.id}/approve`, body)).status, 303);
+  await until(() => agent.mcpRunning.includes("files") && agent.state === "idle");
   assert.deepEqual(Object.keys(servers()), ["files"]);
   assert.equal(servers().files.command, "/opt/mcp/files");
-  const grantId = task.grants.find((grant) => grant.item === "mcp:files")!.id;
+  const grantId = agent.grants.find((grant) => grant.item === "mcp:files")!.id;
   assert.equal((await f.ownerPost("/grants/revoke", new URLSearchParams({ id: grantId }))).status, 303);
-  await until(() => task.mcpRunning.length === 0 && task.state === "idle");
+  await until(() => agent.mcpRunning.length === 0 && agent.state === "idle");
   assert.deepEqual(servers(), {});
 });
 
-test("a task whose Pi dies right after a restart is pi-down with Pi's stderr, and the grant is not in force", async (t) => {
+test("an agent whose Pi dies right after a restart is pi-down with Pi's stderr, and the grant is not in force", async (t) => {
   const f = await fixture(t, notes);
-  const task = await f.tasks.create({ template: "offline" });
+  const agent = await f.agents.create({ template: "offline" });
   f.killPiOnLaunch();
-  await grantNotes(f, task);
-  await until(() => task.state === "pi-down");
-  assert.deepEqual(task.extRunning, []);
+  await grantNotes(f, agent);
+  await until(() => agent.state === "pi-down");
+  assert.deepEqual(agent.extRunning, []);
   assert.ok(
-    task.live.events.some((event) => event.text.includes("Pi restart failed: Pi restart: Pi exited right after launch: Error: cannot load /opt/notes")),
+    agent.live.events.some((event) => event.text.includes("Pi restart failed: Pi restart: Pi exited right after launch: Error: cannot load /opt/notes")),
   );
 });
 
-test("reloading the catalog tells speaker what the host now offers and leaves running tasks alone", async (t) => {
+test("reloading the catalog tells speaker what the host now offers and leaves running agents alone", async (t) => {
   const entry = { label: "Notes", guestPath: "/opt/notes", description: "Take notes", tools: ["note"], sites: [] };
   const f = await fixture(t, { mcps: {}, extensions: { notes: entry } });
-  const task = await f.tasks.create({ template: "offline" });
+  const agent = await f.agents.create({ template: "offline" });
   const offered = async () =>
     Object.keys(
-      ((await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.agentToken}` } })).json()) as { extensions: object })
+      ((await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as { extensions: object })
         .extensions,
     );
   await until(async () => (await offered()).includes("notes"));
-  f.tasks.reloadCatalog(Catalog.parse({ mcps: {}, extensions: { wiki: { ...entry, label: "Wiki", guestPath: "/opt/wiki" } } }));
+  f.agents.reloadCatalog(Catalog.parse({ mcps: {}, extensions: { wiki: { ...entry, label: "Wiki", guestPath: "/opt/wiki" } } }));
   await until(async () => (await offered()).join() === "wiki");
-  assert.equal(task.state, "idle");
+  assert.equal(agent.state, "idle");
 });
