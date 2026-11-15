@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-15T01:30
+updated: 2026-11-15T02:30
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -11,14 +11,19 @@ tags: [workshop, status]
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
-## 2026-11-15 01:30 · paused
+## 2026-11-15 02:30 · paused
 
 **Next**
-- Review the approval-engine rework on branch `worktree-agent-a2c462bff62e072fb` (worktree `.claude/worktrees/agent-a2c462bff62e072fb`, commits `bc5d17a`, `71ba957`; not merged, not pushed). Decide: trim and merge, or drop.
+- Run `E2E.md` once against the new approval engine (owner runs `mise run init`, enters the OpenRouter key on the openrouter service; a subagent drives checks A–L while the owner approves live).
+- After it passes: `mise run lock`.
 
 **Open**
-- The rework adds ~390 lines to speaker (4,748 → 5,138); it should come down before merging.
-- Its "flag to owner" items: host restore at startup bypasses `transition()`; hosts are permanent-only; reconcile skips host catalog changes; extension-bundled sites stay a request-time expansion.
+- A never-approved sandbox host now makes bottle wait indefinitely at startup (the price of surviving speaker restarts). Bound it at the 5-minute outage limit?
+- Speaker is 4,984 non-test lines (main before the engine: 4,748); the rest of the extra is the engine itself.
+
+**Settled**
+- Speaker is one approval engine (`speaker/engine.ts`): every kind is a uniform adapter, sandbox hosts included; one lifecycle table; `reconcile()` after Setup changes; one card shape for the web inbox, `/admin/api` and Herdr. Merged from the worktree branch, which is removed.
+- Host approvals are not kept across a speaker restart: known hosts come back pending, bottle keeps waiting.
 
 ## 2026-11-14 19:30 · paused
 
