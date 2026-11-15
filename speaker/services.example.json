@@ -27,6 +27,16 @@
     "read": "ask",
     "write": "ask"
   },
+  "openrouter": {
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "notes": "# OpenRouter\n\nOpenAI-compatible model API under `/openrouter/`.\n\n- `GET /openrouter/models` lists models (needs `openrouter.read`).\n- `POST /openrouter/chat/completions` with `{\"model\":\"<id>\",\"messages\":[...]}` runs a model and spends credit (needs `openrouter.full`).\n",
+    "auth": {
+      "type": "bearer",
+      "secret": "openrouter"
+    },
+    "read": "ask",
+    "write": "ask"
+  },
   "context7": {
     "baseUrl": "https://mcp.context7.com/mcp",
     "notes": "# Context7\n\nRemote MCP server for library docs (tools `resolve-library-id`, `query-docs`), reached through speaker at `/context7` (Streamable HTTP, JSON-RPC over POST). Listing and read-only tools need `context7.read`.\n",
