@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import type { Context } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
@@ -527,61 +528,52 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         service.auth.type === 'basic' ? `Basic ${Buffer.from(secret).toString('base64')}` : `Bearer ${secret}`,
       )
   }
+  // Lenient page schema: the client's own tools/list schema rejects tools without an inputSchema; only the hints matter here.
+  const mcpToolPage = z.object({
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        annotations: z
+          .object({ readOnlyHint: z.boolean().optional(), destructiveHint: z.boolean().optional() })
+          .optional(),
+      }),
+    ),
+    nextCursor: z.string().optional(),
+  })
   type McpTool = { readOnly: boolean; destructive: boolean; annotated: boolean }
   const mcpTools = new Map<string, { at: number; tools: Map<string, McpTool> }>()
-  // Lists an MCP service's tools with speaker's own credentialed session (initialize, tools/list, close).
+  // Lists an MCP service's tools with speaker's own credentialed session through the official MCP client.
   async function listMcpTools(id: string) {
     const service = services[id],
       secret = credentialOf(id)
     if (!service || secret === undefined) throw new Error('MCP service or credential missing')
     const url = upstreamUrl(service, secret, [], '')
     if (!url) throw new Error('Invalid MCP service URL')
-    let sessionId: string | undefined
-    let version: string | undefined
-    const rpc = async (body: { id?: number; method: string; params?: object }, method = 'POST') => {
-      const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' })
-      if (sessionId) headers.set('mcp-session-id', sessionId)
-      if (version) headers.set('mcp-protocol-version', version)
-      applyCredential(service, secret, headers)
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: method === 'POST' ? JSON.stringify({ jsonrpc: '2.0', ...body }) : undefined,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(10_000),
-      })
-      if (!response.ok) throw new Error(`MCP ${body.method} returned ${response.status}`)
-      sessionId = response.headers.get('mcp-session-id') ?? sessionId
-      const text = await response.text()
-      if (body.id === undefined || !text) return undefined
-      const messages = response.headers.get('content-type')?.includes('text/event-stream')
-        ? text
-            .split('\n')
-            .filter((line) => line.startsWith('data:'))
-            .map((line) => JSON.parse(line.slice(5)))
-        : [JSON.parse(text)]
-      return messages.find((message) => message.id === body.id)?.result
-    }
-    const init = await rpc({
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'speaker', version: '1' } },
-    })
-    version = init?.protocolVersion
-    await rpc({ method: 'notifications/initialized' })
+    const headers = new Headers()
+    applyCredential(service, secret, headers)
+    const client = new Client({ name: 'speaker', version: '1' })
+    const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers, redirect: 'manual' } })
+    const signal = AbortSignal.timeout(10_000)
     const tools = new Map<string, McpTool>()
-    let cursor: string | undefined
-    do {
-      const page = await rpc({ id: 2, method: 'tools/list', params: cursor ? { cursor } : {} })
-      for (const tool of page?.tools ?? [])
-        tools.set(tool.name, {
-          readOnly: tool.annotations?.readOnlyHint === true,
-          destructive: tool.annotations?.destructiveHint === true,
-          annotated: Boolean(tool.annotations),
+    try {
+      await client.connect(transport, { signal })
+      let cursor: string | undefined
+      do {
+        const page = await client.request({ method: 'tools/list', params: cursor ? { cursor } : {} }, mcpToolPage, {
+          signal,
         })
-      cursor = page?.nextCursor
-    } while (cursor)
-    if (sessionId) await rpc({ method: 'session/close' }, 'DELETE').catch(() => undefined)
+        for (const tool of page.tools)
+          tools.set(tool.name, {
+            readOnly: tool.annotations?.readOnlyHint === true,
+            destructive: tool.annotations?.destructiveHint === true,
+            annotated: Boolean(tool.annotations),
+          })
+        cursor = page.nextCursor
+      } while (cursor)
+    } finally {
+      await transport.terminateSession().catch(() => undefined)
+      await client.close().catch(() => undefined)
+    }
     mcpTools.set(id, { at: Date.now(), tools })
     audit('mcp_tools_listed', { service: id, tools: tools.size })
     return tools
