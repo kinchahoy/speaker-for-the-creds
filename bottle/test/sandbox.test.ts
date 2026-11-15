@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { connect, createServer as createNetServer } from "node:net";
@@ -15,9 +15,6 @@ const live = (extra: Partial<Live> = {}): Live => ({
   secretHosts: [],
   shares: new Map(),
   events: [],
-  httpResponses: [],
-  httpResponsesOmitted: 0,
-  httpBodyBytes: 0,
   modelRequests: 0,
   modelCapNoted: false,
   ...extra,
@@ -108,10 +105,9 @@ describe("model endpoint", () => {
     const { port } = upstream.address() as { port: number };
     const config = { hostedProviders: [], localModel: { upstream: `127.0.0.1:${port}`, guestHost: "model.internal" } } as unknown as Config;
     const view = live({ maxModelRequests: 2 });
-    const captures = join(root, "blobs");
-    mkdirSync(captures);
+    const modelCalls = join(root, "model-calls.jsonl");
     const socket = join(root, "model.sock");
-    const door = await listen(socket, modelDoor(config, view, secretRoute(view, speakerProxy), captures));
+    const door = await listen(socket, modelDoor(config, view, secretRoute(view, speakerProxy), modelCalls));
     const client = new Client("http://model.internal", { socketPath: socket });
     const ask = async () => {
       const response = await client.request({
@@ -129,10 +125,12 @@ describe("model endpoint", () => {
     // The model door keeps the OpenAI error shape Pi's model client reads.
     assert.deepEqual(JSON.parse(refused.body), { error: { message: "model request limit 2 reached; the owner can raise it" } });
     assert.equal(view.modelRequests, 2);
-    assert.equal(view.httpResponses.length, 2);
-    assert.equal(view.httpResponses[0]!.destination, `http://127.0.0.1:${port}`);
-    assert.equal(view.httpResponses[0]!.requestCapture, "complete");
-    assert.equal(view.httpResponses[0]!.responseCapture, "complete");
+    const calls = readFileSync(modelCalls, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(calls.length, 2);
+    assert.deepEqual([calls[0].status, calls[0].request, calls[0].reply, calls[0].truncated], [200, '{"model":"m"}', '{"choices":[]}', false]);
     await client.close();
     door.close();
     upstream.close();

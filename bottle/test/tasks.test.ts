@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -16,7 +16,8 @@ import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
 import { Catalog, pi } from "../src/pi.ts";
-import type { Boot, Guest } from "../src/sandbox.ts";
+import { modelDoor, secretRoute, type Boot, type Guest } from "../src/sandbox.ts";
+import type { Dispatcher } from "undici";
 import { Tasks } from "../src/tasks.ts";
 
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -83,7 +84,22 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   let piDies = false;
   let piUp = false;
   pi.settleMs = 50;
-  const boot: Boot = async (_config, _live, _limits, paths) => {
+  // The real model door over a stub upstream, wired as boot wires it; a test asks it for model calls.
+  const stubs: Server[] = [];
+  let askModel = async () => {};
+  const boot: Boot = async (_config, live, _limits, paths) => {
+    const upstream = createServer((req, res) => void req.resume().on("end", () => res.writeHead(200).end("data: {}\n\n")));
+    const modelConfig = { ...config, localModel: { ...config.localModel, upstream: "127.0.0.1:0" } };
+    const door = createServer(modelDoor(modelConfig, live, secretRoute(live, { close: async () => {} } as Dispatcher), paths.modelCalls));
+    stubs.push(upstream, door);
+    upstream.listen(0, "127.0.0.1");
+    door.listen(0, "127.0.0.1");
+    await Promise.all([once(upstream, "listening"), once(door, "listening")]);
+    modelConfig.localModel.upstream = `127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    askModel = async () => {
+      const response = await fetch(`http://127.0.0.1:${(door.address() as AddressInfo).port}/v1/chat/completions`, { method: "POST", body: '{"model":"m"}' });
+      await response.text();
+    };
     // Pi's session as the guest would have written it, for the archive.
     await mkdir(`${paths.work}/.pi-session`, { recursive: true });
     await writeFile(`${paths.work}/.pi-session/task.jsonl`, `${JSON.stringify({ type: "session", id: "s1" })}\n`);
@@ -104,6 +120,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   const tasks = new Tasks(config, templates, Catalog.parse(catalog), hostToken, boot);
   t.after(async () => {
     tasks.stop();
+    for (const stub of stubs) stub.close();
     for (const client of wss.clients) client.terminate();
     await app.stop();
     server.closeAllConnections();
@@ -120,6 +137,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     ownerPost,
     panel,
     config,
+    askModel: () => askModel(),
   };
 }
 
@@ -169,6 +187,8 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
   const task = await f.tasks.create({ template: "offline", name: "archive me", prompt: "write DONE" });
   assert.equal(task.attended, false);
   await writeFile(`${task.outputDir}/artifacts/result.txt`, "result\n");
+  await f.askModel();
+  await f.askModel();
   await f.tasks.close(task);
   assert.equal(task.state, "archived");
   assert.equal(f.closed(), 1);
@@ -184,18 +204,20 @@ test("stop asks Pi to quit, exports the transcript, archives the records, closes
     manifest.files.map((file: { path: string }) => file.path),
     ["result.txt"],
   );
-  const trace = readFileSync(`${control}/trace.jsonl`, "utf8")
+  const calls = readFileSync(`${control}/model-calls.jsonl`, "utf8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  assert.deepEqual(
-    trace.map((run) => run.name),
-    ["archive me", "pi"],
-  );
+  assert.equal(calls.length, 2, "one line per model call");
+  for (const call of calls) {
+    assert.deepEqual(Object.keys(call).sort(), ["at", "durationMs", "reply", "request", "status", "truncated"]);
+    assert.equal(call.status, 200);
+    assert.equal(call.request, '{"model":"m"}');
+    assert.equal(call.reply, "data: {}\n\n");
+  }
   assert.ok(existsSync(`${control}/pi-session.jsonl`));
   assert.match(readFileSync(`${control}/policy-events.jsonl`, "utf8"), /owner began archival/);
   assert.equal(existsSync(`${f.config.stateRoot}/tasks/${task.id}`), false, "the work tree is removed");
-  assert.equal(existsSync(`${control}/blobs`), false);
   // The task's agent is gone from speaker.
   const response = await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${task.agentToken}` } });
   assert.equal(response.status, 403);

@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
@@ -10,7 +10,6 @@ import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
 import { attendedFor, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
-import { writeArchive } from "./trace.ts";
 
 /**
  * A task's lifecycle. `starting` until Pi first runs, or `awaiting-key` while a one-shot task waits for its hosted
@@ -85,6 +84,40 @@ export type Task = {
   live: Live;
   guest: Guest;
 };
+
+type Entry = { path: string; bytes?: number; sha256?: string; type: "file" | "directory" | "symlink" | "other" };
+/** Agent-created links never make the trusted archiver follow paths outside artifacts. */
+const walk = (root: string, prefix = ""): Entry[] =>
+  readdirSync(root, { withFileTypes: true }).flatMap((entry): Entry[] => {
+    const path = `${root}/${entry.name}`;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) return [{ path: relative, type: "directory" }, ...walk(path, relative)];
+    if (entry.isFile())
+      return [{ path: relative, bytes: lstatSync(path).size, sha256: createHash("sha256").update(readFileSync(path)).digest("hex"), type: "file" }];
+    return [{ path: relative, type: entry.isSymbolicLink() ? "symlink" : "other" }];
+  });
+
+/**
+ * Writes a closed task's trusted records into `<outputDir>/_control`: the Pi session and transcript, task.json,
+ * policy-events.jsonl and the artifacts manifest. (The model door has already appended model-calls.jsonl there.)
+ */
+function writeArchive(task: Task, status: "archived" | "failed-archive", error?: string) {
+  const control = `${task.outputDir}/_control`;
+  const closedAt = new Date().toISOString();
+  const session = `${task.workDir}/.pi-session/task.jsonl`;
+  const transcript = `${task.workDir}/transcript.html`;
+  if (existsSync(session)) copyFileSync(session, `${control}/pi-session.jsonl`);
+  else note(task.live, "Pi session file was unavailable during archival");
+  if (existsSync(transcript)) copyFileSync(transcript, `${control}/transcript.html`);
+  else note(task.live, "Pi transcript export was unavailable during archival");
+  const lines = (records: object[]) => records.map((record) => JSON.stringify(record)).join("\n");
+  const { id, name, slug, templateId, attended, agentId, model, startedAt, deadline } = task;
+  const record = { id, name, slug, state: status, templateId, attended, agentId, model, startedAt, deadline, closedAt, ...(error ? { error } : {}) };
+  writeFileSync(`${control}/task.json`, JSON.stringify(record, null, 2));
+  writeFileSync(`${control}/policy-events.jsonl`, lines(task.live.events));
+  const manifest = { closed: status === "archived", files: walk(`${task.outputDir}/artifacts`), ...(error ? { error } : {}) };
+  writeFileSync(`${control}/manifest.json`, JSON.stringify(manifest, null, 2));
+}
 
 const slugify = (name: string) =>
   name
@@ -202,9 +235,6 @@ export class Tasks {
       secretHosts: [],
       shares: new Map(),
       events,
-      httpResponses: [],
-      httpResponsesOmitted: 0,
-      httpBodyBytes: 0,
       modelRequests: 0,
       maxModelRequests: template.limits.maxModelRequests,
       modelCapNoted: false,
@@ -222,7 +252,7 @@ export class Tasks {
         this.config,
         live,
         template.limits,
-        { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, capture: `${outputDir}/_control/blobs` },
+        { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, modelCalls: `${outputDir}/_control/model-calls.jsonl` },
         { BOTTLE_TOKEN: guestToken, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
         { url: this.config.speaker.url, agentToken: agent.agentToken, ...(ca ? { ca } : {}) },
         ca === undefined ? undefined : speakerProxy(this.config, agent.agentToken, ca),
@@ -457,10 +487,6 @@ export class Tasks {
     this.#move(task, "close");
     for (const timer of task.timers) clearTimeout(timer);
     note(task.live, "owner began archival");
-    const modelOrigins = new Set([
-      `http://${this.config.localModel.upstream}`,
-      ...this.config.hostedProviders.map((provider) => new URL(provider.baseUrl).origin),
-    ]);
     try {
       if (started) {
         await pi.quit(task.guest);
@@ -471,7 +497,7 @@ export class Tasks {
         }
         await pi.export(task.guest);
       }
-      writeArchive(task, modelOrigins, "archived");
+      writeArchive(task, "archived");
       await task.guest.close();
       await this.speaker.deleteAgent(task.agentId);
       rmSync(`${this.config.stateRoot}/tasks/${task.id}`, { recursive: true, force: true });
@@ -484,7 +510,7 @@ export class Tasks {
       this.#move(task, "archiveFailed");
       // The VM and its speaker identity must not outlive the task; the work tree stays for the owner.
       try {
-        writeArchive(task, modelOrigins, "failed-archive", message);
+        writeArchive(task, "failed-archive", message);
       } finally {
         await Promise.allSettled([task.guest.close(), this.speaker.deleteAgent(task.agentId)]);
       }

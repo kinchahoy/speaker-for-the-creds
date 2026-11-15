@@ -5,8 +5,8 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { createServer, type IncomingHttpHeaders, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer, type IncomingMessage, type RequestListener, type ServerResponse } from "node:http";
 import { BlockList, connect, createServer as createNetServer, isIP, isIPv4, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,6 @@ import { z } from "zod";
 import { microsandboxHome, type Config } from "./config.ts";
 import { coversAny, errorBody } from "../../speaker/items.ts";
 import { codes, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
-import { recordHttp, type HttpResponseRecord } from "./trace.ts";
 
 /** The live grant view the doors read. Each speaker snapshot replaces these entries; every use checks expiry. */
 export type Live = {
@@ -30,9 +29,6 @@ export type Live = {
   /** Folder grants by share, mounted under /input over SSH through speaker. */
   shares: Map<string, Timed & { writable: boolean }>;
   events: { at: string; text: string }[];
-  httpResponses: HttpResponseRecord[];
-  httpResponsesOmitted: number;
-  httpBodyBytes: number;
   /** Spend cap: model requests allowed so far, the owner's limit, and whether the refusal was recorded. */
   modelRequests: number;
   maxModelRequests?: number;
@@ -215,8 +211,6 @@ const newSshKey = async (dir: string) => {
   return key;
 };
 
-const headersOf = (headers: IncomingHttpHeaders) =>
-  new Headers(Object.entries(headers).flatMap(([name, value]) => (value === undefined ? [] : [[name, [value].flat().join(", ")]])));
 /** A door's own refusal, in speaker's error shape. */
 const reply = (res: ServerResponse, status: keyof typeof codes, message: string, next?: string) =>
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(errorBody(codes[status], message, next === undefined ? {} : { next })));
@@ -225,12 +219,12 @@ const modelReply = (res: ServerResponse, status: number, message: string) =>
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ error: { message } }));
 type Reply = (res: ServerResponse, status: keyof typeof codes, message: string) => void;
 
-/** Sends a guest request on to `target` and streams the answer back; with `record`, also notes it for trace.jsonl. */
+/** Sends a guest request on to `target` and streams the answer back; with `record`, also appends one line to its `model-calls.jsonl`. */
 const forward = async (
   req: IncomingMessage,
   res: ServerResponse,
   target: URL,
-  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; dir: string }; fail?: Reply } = {},
+  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; file: string }; fail?: Reply } = {},
 ) => {
   const started = Date.now();
   const sent = await buffer(req);
@@ -257,21 +251,20 @@ const forward = async (
     if (total < limit) chunks.push(chunk.subarray(0, limit - total));
     total += chunk.length;
   });
-  const complete = await pipeline(upstream.body, res).then(
-    () => true,
-    () => false,
-  );
-  if (options.record)
-    recordHttp(
-      options.record.live,
-      options.record.dir,
-      true,
-      { method, url: target.href, headers: headersOf(req.headers) },
-      { status: upstream.statusCode, headers: headersOf(upstream.headers) },
-      body.subarray(0, 8 * 1024 * 1024),
-      Buffer.concat(chunks),
-      { durationMs: Date.now() - started, bytes: total, requestBytes: body.length, requestLimit: 8 * 1024 * 1024, responseLimit: limit, complete },
-    );
+  await pipeline(upstream.body, res).catch(() => undefined); // a dropped guest still leaves its call on record
+  // The raw bodies, each cut at a cap: a streamed reply stays as its event stream.
+  if (options.record) {
+    const request = body.subarray(0, 8 * 1024 * 1024);
+    const line = {
+      at: new Date().toISOString(),
+      status: upstream.statusCode,
+      durationMs: Date.now() - started,
+      request: request.toString(),
+      reply: Buffer.concat(chunks).toString(),
+      truncated: body.length > request.length || total > limit,
+    };
+    appendFileSync(options.record.file, `${JSON.stringify(line)}\n`);
+  }
 };
 
 /**
@@ -279,7 +272,7 @@ const forward = async (
  * request counts against the task's cap; a refused one gets a 429 that says so.
  */
 export const modelDoor =
-  (config: Config, live: Live, route: ReturnType<typeof secretRoute>, dir: string): RequestListener =>
+  (config: Config, live: Live, route: ReturnType<typeof secretRoute>, modelCalls: string): RequestListener =>
   async (req, res) => {
     const path = req.url ?? "/";
     const provider = config.hostedProviders.find((entry) => path.startsWith(`/hosted/${entry.id}/`));
@@ -288,7 +281,7 @@ export const modelDoor =
       return void modelReply(res, 403, `the ${provider.credential} secret is not granted to this task`);
     if (!countModelRequest(live)) return void modelReply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
     const dispatcher = provider ? route.dispatcher(provider.host) : undefined;
-    await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, dir }, fail: modelReply });
+    await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, file: modelCalls }, fail: modelReply });
   };
 
 /**
@@ -412,14 +405,13 @@ export const listen = async (path: string, handler: RequestListener, fail: Reply
 /**
  * Starts one VM for a task: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
  * model-request cap), folders from `live.shares` mounted under /input and following later changes, `paths` mounted at
- * /work, /output and /etc/bottle, and model request bodies recorded into `live.httpResponses` with their blobs under
- * `paths.capture`. Grant changes need no VM call: the doors re-read `live` on every use.
+ * /work, /output and /etc/bottle, and model calls appended to `paths.modelCalls`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
 export async function boot(
   config: Config,
   live: Live,
   limits: { cpus: number; memoryMiB: number; rootfsGiB: number },
-  paths: { work: string; artifacts: string; guestConfig: string; capture: string },
+  paths: { work: string; artifacts: string; guestConfig: string; modelCalls: string },
   env: Record<string, string>,
   speaker: { url: string; agentToken: string; ca?: string },
   proxy: Dispatcher | undefined,
@@ -429,7 +421,6 @@ export async function boot(
   const name = `${VM_PREFIX}${randomBytes(4).toString("hex")}`;
   const dir = paths.work.slice(0, paths.work.lastIndexOf("/"));
   const socketDir = socketFolder();
-  mkdirSync(paths.capture, { recursive: true });
   const route = secretRoute(live, proxy);
   const proxyPort = config.speaker.proxyPort;
   const egress = egressProxy(live, route, {
@@ -441,7 +432,7 @@ export async function boot(
   const key = sshPort ? await newSshKey(dir) : undefined;
   const servers = [
     await serveEgress(egress, `${socketDir}/egress.sock`),
-    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.capture), modelReply),
+    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.modelCalls), modelReply),
     await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key?.public)),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
     ...(sshPort ? [await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, sshPort)] : []),

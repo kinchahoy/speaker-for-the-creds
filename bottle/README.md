@@ -189,11 +189,11 @@ The guest has no network device. Its only doors are host unix sockets on guest v
 When `speaker.sshPort` is set, a fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
 {.ai}
 
-Code: `src/sandbox.ts` (the VM and its doors), `src/trace.ts` (HTTP capture, trace records, archive writing), `src/tasks.ts` (task lifecycle as a transition table; see `ls` states above), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).
+Code: `src/sandbox.ts` (the VM and its doors), `src/tasks.ts` (task lifecycle as a transition table, see `ls` states above; also the archive writer), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).
 {.ai}
 
 - Egress: one `proxy-chain` server per task decides every request from the live grant view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the task launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`. Without `speaker.proxyPort`, secrets are unavailable.
-- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and records bodies for `trace.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
+- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and appends one line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
 - Speaker: the speaker door allows only speaker's agent-facing routes and adds the task's agent token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
 - Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
 - Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
@@ -330,10 +330,10 @@ Placeholder substitution keeps the real value off the guest and off bottle. It d
 bottle mounts `/input` for granted shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
 {.ai}
 
-At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `trace.jsonl`.
+At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds task metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `model-calls.jsonl`.
 {.ai}
 
-The trace retains project and harness records, matched tool calls and results, and captured model exchanges. It keeps unmatched native records and records failures and truncation. Capture limits are 8 MiB per model request, 32 MiB per model response, and 1 MiB per ordinary HTTP body. bottle stages bodies in `_control/blobs`, embeds them as text or base64 at close, then removes the staging blobs. It assembles streamed model replies into finished messages. Whether LangSmith and Phoenix can ingest the trace is unverified. Each record's metadata sits under a `bottle` key (the project record's `source` is `bottle`).
+`model-calls.jsonl` has one JSON line per model call: `at`, `status`, `durationMs`, the `request` body and the raw `reply` body (a streamed reply stays as its event stream), and `truncated`. Bodies are cut at 8 MiB for a request and 32 MiB for a reply. Tool calls are in Pi's session file.
 {.ai}
 
 You delete archives manually. If archiving fails, bottle keeps the work tree for recovery and reports the failure. You cannot retroactively revoke a completed write or a note the agent already read. Treat captured prompts, replies, and artifacts as private data.
