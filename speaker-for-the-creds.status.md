@@ -21,10 +21,8 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 **Open**
 - Speaker's share `delivery` setting (`vm` / `ssh` / `both`) is still in Setup. A `vm` share is now unreachable; dropping the setting would make `vm`-only shares deliverable over SSH (share containment), so it waits for the owner.
-- `bottle init --skip-register` writes placeholder proxy and SSH ports from `config.example.json` until `register` replaces them. Fail fast instead?
 - Herdr names the bottle space after its first terminal's folder; there is no label for a space name, so it needs one rename by hand.
-- `speaker/test/jump.test.ts` hangs on this machine: `Host *` in `~/.ssh/config` sets `ControlMaster auto` / `ControlPersist 30m`, and the mux master holds the test open. Fix in the generated ssh lines (`-o ControlMaster=no`) or in the ssh config?
-- Settled: SSH_PORT and PROXY_PORT are now required.
+- Settled: SSH_PORT and PROXY_PORT are now required; placeholder ports after `init --skip-register` are fine; the jump test runs agent lines with `-F /dev/null` (the test plays an agent, whose VM has no ssh config), so `mise run test` passes in full here.
 
 ## 2026-11-14 14:00 · paused
 

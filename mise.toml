@@ -36,7 +36,7 @@ run = "pnpm --recursive exec oxfmt"
 
 [tasks.test]
 description = "Run both packages' tests"
-run = "pnpm --recursive exec sh -c 'node --test --test-timeout=30000 test/*.test.ts'"
+run = "pnpm --recursive --workspace-concurrency=1 exec sh -c 'node --test --test-timeout=30000 test/*.test.ts'"
 
 [tasks.speaker]
 description = "Run speaker with live reload"

@@ -16,20 +16,12 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createJump } from '../jump.ts'
 import { createApp, readConfig } from '../server.ts'
 import { generateSshKey } from '../store.ts'
-import { setOwnerPassword } from './owner.ts'
+import { freePort, setOwnerPassword } from './owner.ts'
 
 const run = promisify(execFile)
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
 const user = userInfo().username
 
-async function freePort() {
-  const server = createServer().listen(0, '127.0.0.1')
-  await once(server, 'listening')
-  const { port } = server.address() as AddressInfo
-  server.close()
-  await once(server, 'close')
-  return port
-}
 async function listening(port: number) {
   for (let i = 0; i < 100; i++) {
     const open = await new Promise<boolean>((done) => {
@@ -46,9 +38,12 @@ async function listening(port: number) {
   throw new Error(`Nothing listens on ${port}`)
 }
 // Runs a shell line and reports what happened instead of throwing on a failed exit.
+// The test plays the agent, whose VM has no ssh config: the owner's ~/.ssh/config (a ControlMaster, say) must not apply
+// to the command lines speaker hands out, so they run with -F /dev/null.
+const asAgent = (line: string) => line.replace(/^(ssh|sftp|scp|sshfs) /, '$1 -F /dev/null ')
 const sh = (line: string) =>
   new Promise<{ code: number; stdout: string; stderr: string }>((done) =>
-    execFile('sh', ['-c', line], { timeout: 12_000 }, (error, stdout, stderr) =>
+    execFile('sh', ['-c', asAgent(line)], { timeout: 12_000 }, (error, stdout, stderr) =>
       done({ code: error ? ((error as { code?: number }).code ?? 1) : 0, stdout, stderr }),
     ),
   )
@@ -207,7 +202,7 @@ test('a command runs through the jump server as the target account and is logged
   assert.equal(await readFile(join(f.dir, 'via-box.txt'), 'utf8'), 'not in any share\n')
 
   // A session that is running when the owner revokes the grant is ended, with one line on stderr.
-  const running = spawn('sh', ['-c', await f.line('ssh:box', 'ssh', { '<command>': 'sleep 30' })])
+  const running = spawn('sh', ['-c', asAgent(await f.line('ssh:box', 'ssh', { '<command>': 'sleep 30' }))])
   let errors = ''
   running.stderr.on('data', (chunk) => {
     errors += chunk
