@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-14T19:30
+updated: 2026-11-15T01:30
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,15 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-15 01:30 · paused
+
+**Next**
+- Review the approval-engine rework on branch `worktree-agent-a2c462bff62e072fb` (worktree `.claude/worktrees/agent-a2c462bff62e072fb`, commits `bc5d17a`, `71ba957`; not merged, not pushed). Decide: trim and merge, or drop.
+
+**Open**
+- The rework adds ~390 lines to speaker (4,748 → 5,138); it should come down before merging.
+- Its "flag to owner" items: host restore at startup bypasses `transition()`; hosts are permanent-only; reconcile skips host catalog changes; extension-bundled sites stay a request-time expansion.
 
 ## 2026-11-14 19:30 · paused
 
