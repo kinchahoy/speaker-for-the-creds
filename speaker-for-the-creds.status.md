@@ -18,12 +18,11 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - After it passes: `mise run lock`.
 
 **Open**
-- A never-approved sandbox host now makes bottle wait indefinitely at startup (the price of surviving speaker restarts). Bound it at the 5-minute outage limit?
 - Speaker is 4,984 non-test lines (main before the engine: 4,748); the rest of the extra is the engine itself.
 
 **Settled**
 - Speaker is one approval engine (`speaker/engine.ts`): every kind is a uniform adapter, sandbox hosts included; one lifecycle table; `reconcile()` after Setup changes; one card shape for the web inbox, `/admin/api` and Herdr. Merged from the worktree branch, which is removed.
-- Host approvals are not kept across a speaker restart: known hosts come back pending, bottle keeps waiting.
+- Host approvals are not kept across a speaker restart: known hosts come back pending. bottle treats a pending host as an outage and gives up after its limit (5 minutes, or 30 s at its own startup), naming the approval.
 
 ## 2026-11-14 19:30 · paused
 

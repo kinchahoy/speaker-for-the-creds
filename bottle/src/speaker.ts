@@ -132,8 +132,8 @@ export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, re
 
 /**
  * Classifies why speaker can't be used: a 401 is fatal when the token is unknown (speaker data reset or a different
- * speaker); a host speaker knows but the owner has not approved (again) yet is `pending`, which clears up when the owner
- * approves, whenever that is; anything else (network error, 5xx, locked) may clear up too.
+ * speaker); a host speaker knows but the owner has not approved (again) yet, a network error, a 5xx or a locked speaker
+ * may clear up, so they count toward the outage limits like any other outage.
  */
 const probeSpeaker = async (config: Config, hostToken: string) => {
   try {
@@ -143,7 +143,7 @@ const probeSpeaker = async (config: Config, hostToken: string) => {
     });
     const body = await response.text();
     if (response.status === 401 && body.includes('"approval_required"'))
-      return { fatal: false, pending: true, message: `speaker is waiting for the owner to approve this sandbox host in /admin` };
+      return { fatal: false, message: `speaker is waiting for the owner to approve this sandbox host in /admin` };
     if (response.status === 401)
       return {
         fatal: true,
@@ -205,7 +205,7 @@ export const watchGrants = (
     if (probe.fatal) return fail(probe.message);
     const down = Date.now() - outage.since;
     const reached = outage.state === "stale" ? outage.was !== "connecting" : outage.state === "down";
-    if (!("pending" in probe) && down >= (reached ? limits.outageMs : limits.firstConnectMs))
+    if (down >= (reached ? limits.outageMs : limits.firstConnectMs))
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
           `Check that speaker is running and that speaker.url is right in the bottle config.json.`,

@@ -293,7 +293,7 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   await until(() => received.at(-1)?.grants.length === 1);
 });
 
-test("after a speaker restart a known host is pending again; bottle keeps retrying and resumes once the owner approves it", async (t) => {
+test("after a speaker restart a known host is pending again: bottle resumes once the owner approves it, and gives up past the outage limit", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-restart-"));
   const speakerPort = await speakerFreePort();
   let running: { app: Awaited<ReturnType<typeof createApp>>; server: Server; wss: InstanceType<Ws["WebSocketServer"]> } | undefined;
@@ -338,7 +338,7 @@ test("after a speaker restart a known host is pending again; bottle keeps retryi
 
   const fatal: string[] = [];
   const snapshots: Snapshot[] = [];
-  // Limits shorter than the whole restart: a pending host must not count toward giving up.
+  // A pending host counts as an outage: approved within the limit the link resumes, left pending it is given up on.
   watchGrants(
     t,
     config,
@@ -348,7 +348,7 @@ test("after a speaker restart a known host is pending again; bottle keeps retryi
     {
       ...SPEAKER_LIMITS,
       firstConnectMs: 400,
-      outageMs: 400,
+      outageMs: 4_000,
       retryMs: 50,
       maxBackoffMs: 100,
     },
@@ -367,13 +367,22 @@ test("after a speaker restart a known host is pending again; bottle keeps retryi
   const owner = sessionCookie(signedIn);
   const pending = snapshots.length;
   await until(async () => (await (await fetch(`${url}/admin/panel/inbox`, { headers: { cookie: owner } })).text()).includes(`host-${id}`));
-  await sleep(1_000);
-  assert.deepEqual(fatal, [], "a pending host is waited for, not given up on");
   assert.equal(snapshots.length, pending, "nothing is heard while it is pending");
-
   assert.equal((await ownerPost(owner, `/hosts/${id}/approve`)).status, 303);
   await until(() => snapshots.length > pending);
   assert.deepEqual(fatal, []);
+
+  // Restarted again and never approved: bottle gives up, naming the approval.
+  await stop();
+  await boot();
+  await fetch(`${url}/admin/signin`, {
+    method: "POST",
+    headers: { origin: "http://localhost" },
+    body: new URLSearchParams({ password: ownerPassword }),
+    redirect: "manual",
+  });
+  await until(() => fatal.length > 0, 15_000);
+  assert.match(fatal[0]!, /approve this sandbox host/);
 });
 
 test("a grant counts as decided for the agent only once the sandbox host reports it in force", async (t) => {
