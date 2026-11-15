@@ -2,7 +2,7 @@
 
 # Plan: a smaller speaker-for-the-creds, with Herdr as a place to work
 
-<sub>AI-written, 2026-11-14. Steps 0 to 4 are built (see the status log); step 5 is not. Line counts are estimates.</sub>
+<sub>AI-written, 2026-11-14. Steps 0 to 5 are built (see the status log); step 5 became the owner API and a Herdr inbox. Line counts are estimates.</sub>
 
 ## Intent
 
