@@ -4,6 +4,7 @@ import { upgradeWebSocket } from '@hono/node-server'
 import type { Context, Hono, MiddlewareHandler } from 'hono'
 import { etag } from 'hono/etag'
 import { HTTPException } from 'hono/http-exception'
+import { proxy } from 'hono/proxy'
 import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
@@ -595,40 +596,31 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     if (grant) core.useOf(grant)
     core.useOf(agent)
     const headers = new Headers(c.req.raw.headers)
-    const hopHeaders = [
-      'connection',
-      'keep-alive',
-      'proxy-authenticate',
-      'proxy-authorization',
-      'te',
-      'trailer',
-      'transfer-encoding',
-      'upgrade',
-    ]
     const connectionHeaders = (headers.get('connection') ?? '')
       .split(',')
       .map((header) => header.trim())
       .filter(Boolean)
     for (const name of [...headers.keys()])
       if (
-        /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*|speaker-.*)$/i.test(
+        /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*|speaker-.*|connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i.test(
           name,
         ) ||
-        hopHeaders.includes(name) ||
         connectionHeaders.includes(name)
       )
         headers.delete(name)
-    headers.set('accept-encoding', 'identity')
     core.applyCredential(service, secret, headers)
     const start = Date.now()
-    const upstream = await fetch(target, {
+    // proxy() validates a malformed Connection header (400), drops response hop-by-hop headers and content-encoding.
+    const upstream = await proxy(target, {
+      raw: c.req.raw,
+      strictConnectionProcessing: true,
       method,
       headers,
       body,
-      duplex: 'half',
       redirect: 'manual',
       signal: c.req.raw.signal,
     } as RequestInit).catch((error: Error) => {
+      if (error instanceof HTTPException) throw error
       core.audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
       return undefined
     })
@@ -647,11 +639,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer`, {
         next: 'Try again shortly; if it keeps failing, tell the user',
       })
-    const responseHeaders = new Headers(upstream.headers)
-    for (const name of [...hopHeaders, 'content-encoding', 'content-length']) responseHeaders.delete(name)
-    const location = responseHeaders.get('location')
+    const location = upstream.headers.get('location')
     if (service.auth.type === 'path' && location?.includes(secret))
-      responseHeaders.set('location', location.replaceAll(secret, '<redacted>'))
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders })
+      upstream.headers.set('location', location.replaceAll(secret, '<redacted>'))
+    return upstream
   })
 }
