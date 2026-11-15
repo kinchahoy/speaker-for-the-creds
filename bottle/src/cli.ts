@@ -3,8 +3,10 @@ import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
+import { hc as honoClient } from "hono/client";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { attach } from "./sandbox.ts";
+import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
@@ -19,7 +21,7 @@ type Task = {
   sessionId: string;
   pendingRequests: { id: string; what: string; reason: string }[];
   done: boolean;
-  summary: string;
+  summary?: string;
 };
 
 // mise names the task it runs; installed on PATH, the command is plain `bottle`.
@@ -70,25 +72,22 @@ const loadCliConfig = (): Config => {
 async function main(command: Command_, values: Values, positionals: string[]) {
   const config = loadCliConfig();
   const control = controlOrigin(config);
+  const controlApi = honoClient<ControlApi>(control).api;
 
-  const api = async <T>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> => {
-    let response: Response;
+  const api = async <R extends { ok: boolean; status: number; json(): Promise<unknown> }>(request: Promise<R>): Promise<Awaited<ReturnType<R["json"]>>> => {
+    let response: R;
     try {
-      response = await fetch(url, {
-        method,
-        headers: { "content-type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
+      response = await request;
     } catch (error) {
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
-      throw new Error(`cannot reach ${url} (${cause}). Is bottle running? Config: ${configPath}`);
+      throw new Error(`cannot reach ${control} (${cause}). Is bottle running? Config: ${configPath}`);
     }
     const payload = (await response.json().catch(() => ({}))) as { message?: string; next?: string };
-    if (!response.ok) throw new Error([payload.message ?? `HTTP ${response.status} from ${url}`, payload.next].filter(Boolean).join(". "));
-    return payload as T;
+    if (!response.ok) throw new Error([payload.message ?? `HTTP ${response.status} from ${control}`, payload.next].filter(Boolean).join(". "));
+    return payload as Awaited<ReturnType<R["json"]>>;
   };
 
-  const tasks = async (): Promise<Task[]> => (await api<{ tasks: Task[] }>("GET", `${control}/api/state`)).tasks;
+  const tasks = async (): Promise<Task[]> => (await api(controlApi.state.$get())).tasks;
 
   /** Exact id or name first, then unique id or name prefix. */
   const resolveTask = async (wanted: string): Promise<Task> => {
@@ -108,14 +107,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     const attended = values.attended ? true : values.unattended ? false : undefined;
-    const { id, outputDir } = await api<{ id: string; outputDir: string }>("POST", `${control}/api/tasks`, {
-      name,
-      template,
-      model,
-      prompt,
-      attended,
-      hours,
-    });
+    const { id, outputDir } = await api(controlApi.tasks.$post({ json: { name, template, model, prompt, attended, hours } }));
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
     console.log(
@@ -177,7 +169,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     child.on("exit", (code) => process.exit(code ?? 1));
   } else if (command === "stop") {
     const task = await resolveTask(positionals[0]!);
-    await api("POST", `${control}/api/tasks/${task.id}/close`);
+    await api(controlApi.tasks[":id"].close.$post({ param: { id: task.id } }));
     console.log(`Closing ${task.id} (${task.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
   }
 }

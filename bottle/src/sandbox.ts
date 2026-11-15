@@ -18,6 +18,7 @@ import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
 import { microsandboxHome, type Config } from "./config.ts";
+import { speakerApi } from "./speaker.ts";
 import { coversAny, errorBody } from "../../speaker/items.ts";
 import { codes, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
 
@@ -355,10 +356,7 @@ const guestFolders = (vm: MicroVm, config: Config, agentToken: string) => {
   return {
     // speaker's /catalog gives the complete sshfs command line for the grant, with the jump server's pinned host key.
     mount: async (share: string, writable: boolean) => {
-      const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
-        headers: { authorization: `Bearer ${agentToken}` },
-        signal: AbortSignal.timeout(10_000),
-      });
+      const response = await speakerApi(config, agentToken).catalog.$get({}, { init: { signal: AbortSignal.timeout(10_000) } });
       if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}`);
       const item = `folder:${share}${writable ? ":rw" : ""}`;
       const grant = Catalog.parse(await response.json()).ssh.find((entry) => entry.item === item);

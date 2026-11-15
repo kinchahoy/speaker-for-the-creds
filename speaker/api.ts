@@ -31,6 +31,8 @@ import {
 import { catalogView } from './catalog.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
 
+export type SpeakerApi = ReturnType<typeof agentApi>
+
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${core.baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', core.baseOf(c))
@@ -263,6 +265,13 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     statusOf(request) !== 'pending' && !applying(request).some((item) => !['mcp', 'ext'].includes(kindOf(item) ?? ''))
   // Enrollment and registration are unauthenticated: one shared budget caps how many identities anyone can create.
   // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
+  // Declares a route's JSON body type for the typed client; the handler still parses it itself.
+  const json =
+    <T>(): MiddlewareHandler<Env, string, { in: { json: T } }> =>
+    (_c, next) =>
+      next()
+  const hostBody = hostSchema.pick({ name: true, kinds: true, tokenHash: true })
+  const requestBody = requestSchema.extend({ agentId: idSchema.optional() })
   const enrollmentLimit = rateLimiter<Env>({
     windowMs: 15 * 60_000,
     limit: 20,
@@ -274,374 +283,389 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       next: 'Wait a few minutes before enrolling again',
     },
   })
-  app.get('/_speaker/health', (c) => c.json({ ok: true }))
-  // The proxy's public certificate: agents trust it for the hosts of their secrets.
-  app.get('/_speaker/proxy/ca.pem', locked, async (c) =>
-    c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
-  )
-  // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
-  app.use('/skill.md', etag())
-  app.use('/_speaker/help', etag())
-  app.get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
-  app.get('/_speaker/help', (c) => c.text(withAddress(c, core.skill), 200, markdown))
-  app.get('/', (c) =>
-    c.req.header('accept')?.includes('text/html')
-      ? c.html(
-          '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
+  // The routes are one chain so that `SpeakerApi` carries their paths to bottle's typed client.
+  return (
+    app
+      .get('/_speaker/health', (c) => c.json({ ok: true }))
+      // The proxy's public certificate: agents trust it for the hosts of their secrets.
+      .get('/_speaker/proxy/ca.pem', locked, async (c) =>
+        c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
+      )
+      // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
+      .use('/skill.md', etag())
+      .use('/_speaker/help', etag())
+      .get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
+      .get('/_speaker/help', (c) => c.text(withAddress(c, core.skill), 200, markdown))
+      .get('/', (c) =>
+        c.req.header('accept')?.includes('text/html')
+          ? c.html(
+              '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
+            )
+          : c.text(withAddress(c, core.skill), 200, markdown),
+      )
+      .post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
+        const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
+        let agent = core.agentByToken(tokenHash)
+        // A revoked token stays dead; asking again means a new token, which reaches the owner as a new agent.
+        if (agent?.status === 'revoked') return revokedReply(c)
+        const source = core.sourceOf(c)
+        if (agent && agent.source !== source)
+          throw invalid('This token is already enrolled from another address. Make a new token and enroll again')
+        const created = !agent
+        if (!agent) {
+          const enrolling: Agent = {
+            id: core.rid(),
+            tokenHash,
+            status: 'enrolled',
+            ...identity,
+            source,
+            createdAt: Date.now(),
+            lastSeen: Date.now(),
+            uses: 0,
+            lastUsedAt: null,
+            counts: noCounts(),
+          }
+          // Refuse unknown names before enrolling, so a bad first request leaves no token behind.
+          if (want.length) resolveItems(want, enrolling)
+          agent = enrolling
+          core.agents.set(agent.id, agent)
+          core.audit('agent_enrolled', { agent: agent.id, source })
+        }
+        const result = want.length ? await ask(c, agent, { want, reason: reason ?? '', duration, sshKey }) : undefined
+        if (!result && sshKey) agent.sshKey = sshKey
+        return c.json(
+          { id: agent.id, ...(result ? { request: result } : { next: 'GET /_speaker/catalog' }) },
+          created ? 201 : 200,
         )
-      : c.text(withAddress(c, core.skill), 200, markdown),
-  )
-  app.post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
-    const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
-    let agent = core.agentByToken(tokenHash)
-    // A revoked token stays dead; asking again means a new token, which reaches the owner as a new agent.
-    if (agent?.status === 'revoked') return revokedReply(c)
-    const source = core.sourceOf(c)
-    if (agent && agent.source !== source)
-      throw invalid('This token is already enrolled from another address. Make a new token and enroll again')
-    const created = !agent
-    if (!agent) {
-      const enrolling: Agent = {
-        id: core.rid(),
-        tokenHash,
-        status: 'enrolled',
-        ...identity,
-        source,
-        createdAt: Date.now(),
-        lastSeen: Date.now(),
-        uses: 0,
-        lastUsedAt: null,
-        counts: noCounts(),
-      }
-      // Refuse unknown names before enrolling, so a bad first request leaves no token behind.
-      if (want.length) resolveItems(want, enrolling)
-      agent = enrolling
-      core.agents.set(agent.id, agent)
-      core.audit('agent_enrolled', { agent: agent.id, source })
-    }
-    const result = want.length ? await ask(c, agent, { want, reason: reason ?? '', duration, sshKey }) : undefined
-    if (!result && sshKey) agent.sshKey = sshKey
-    return c.json(
-      { id: agent.id, ...(result ? { request: result } : { next: 'GET /_speaker/catalog' }) },
-      created ? 201 : 200,
-    )
-  })
-  app.post('/_speaker/hosts', locked, enrollmentLimit, async (c) => {
-    const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
-    const host: Host = {
-      id: core.rid(),
-      ...input,
-      status: 'pending',
-      source: core.sourceOf(c),
-      registeredAt: Date.now(),
-    }
-    core.hosts.set(host.id, host)
-    await core.saveHosts()
-    core.audit('host_registered', { host: host.id, name: host.name })
-    void core.notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
-    // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
-    return c.json(
-      { id: host.id, status: host.status, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
-      201,
-    )
-  })
-  app.all('/_demo-upstream/*', async (c) => {
-    if (c.req.header('authorization') !== `Bearer ${demoSecret}`)
-      return c.json({ error: 'demo_credential_rejected' }, 401)
-    const body = await c.req.text()
-    return c.json({
-      ok: true,
-      credential: 'accepted',
-      method: c.req.method,
-      path: c.req.path,
-      bodyBytes: Buffer.byteLength(body),
-    })
-  })
-  app.route('/admin', admin)
-  app.use('*', locked, auth)
-  app.get(
-    '/_speaker/hosts/ws',
-    async (c, next) => {
-      hostCaller(c)
-      await next()
-    },
-    upgradeWebSocket((c) => {
-      const id = hostCaller(c).id
-      return {
-        onOpen: (_event, ws) => {
-          core.connections.get(id)?.ws.close(1000, 'replaced')
-          core.connections.set(id, { ws, applied: new Set() })
-          ws.send(JSON.stringify(core.snapshot(id)))
+      })
+      .post('/_speaker/hosts', locked, enrollmentLimit, json<z.input<typeof hostBody>>(), async (c) => {
+        const input = hostBody.parse(await c.req.json())
+        const host: Host = {
+          id: core.rid(),
+          ...input,
+          status: 'pending',
+          source: core.sourceOf(c),
+          registeredAt: Date.now(),
+        }
+        core.hosts.set(host.id, host)
+        await core.saveHosts()
+        core.audit('host_registered', { host: host.id, name: host.name })
+        void core.notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
+        // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
+        return c.json(
+          { id: host.id, status: host.status, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
+          201,
+        )
+      })
+      .all('/_demo-upstream/*', async (c) => {
+        if (c.req.header('authorization') !== `Bearer ${demoSecret}`)
+          return c.json({ error: 'demo_credential_rejected' }, 401)
+        const body = await c.req.text()
+        return c.json({
+          ok: true,
+          credential: 'accepted',
+          method: c.req.method,
+          path: c.req.path,
+          bodyBytes: Buffer.byteLength(body),
+        })
+      })
+      .route('/admin', admin)
+      .use('*', locked, auth)
+      .get(
+        '/_speaker/hosts/ws',
+        async (c, next) => {
+          hostCaller(c)
+          await next()
         },
-        onMessage: (event, ws) => {
-          const connection = core.connections.get(id)
-          if (connection?.ws !== ws) return
-          const message = z
-            .discriminatedUnion('type', [
-              z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
-              z.object({
-                type: z.literal('catalog'),
-                mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
-                extensions: z.array(
+        upgradeWebSocket((c) => {
+          const id = hostCaller(c).id
+          return {
+            onOpen: (_event, ws) => {
+              core.connections.get(id)?.ws.close(1000, 'replaced')
+              core.connections.set(id, { ws, applied: new Set() })
+              ws.send(JSON.stringify(core.snapshot(id)))
+            },
+            onMessage: (event, ws) => {
+              const connection = core.connections.get(id)
+              if (connection?.ws !== ws) return
+              const message = z
+                .discriminatedUnion('type', [
+                  z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
                   z.object({
-                    id: idSchema,
-                    label: z.string(),
-                    description: z.string(),
-                    tools: z.array(z.string()),
-                    // Each site becomes a `site:` item, so it must be a valid one.
-                    sites: z.array(z.string().refine((host) => kindOf(`site:${host}`) === 'site', 'Not a site name')),
+                    type: z.literal('catalog'),
+                    mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
+                    extensions: z.array(
+                      z.object({
+                        id: idSchema,
+                        label: z.string(),
+                        description: z.string(),
+                        tools: z.array(z.string()),
+                        // Each site becomes a `site:` item, so it must be a valid one.
+                        sites: z.array(
+                          z.string().refine((host) => kindOf(`site:${host}`) === 'site', 'Not a site name'),
+                        ),
+                      }),
+                    ),
                   }),
-                ),
-              }),
-            ])
-            .parse(JSON.parse(String(event.data)))
-          if (message.type === 'catalog') {
-            connection.catalog = { mcps: message.mcps, extensions: message.extensions }
-            core.audit('host_catalog', { host: id, mcps: message.mcps.length, extensions: message.extensions.length })
-          } else connection.applied = new Set(message.grantIds)
-        },
-        onClose: (_event, ws) => {
-          if (core.connections.get(id)?.ws === ws) core.connections.delete(id)
-        },
-      }
-    }),
-  )
-  // A sandbox host checking that speaker has approved it (the auth middleware has already refused unapproved ones).
-  app.get('/_speaker/hosts/self', (c) => {
-    const caller = c.get('caller')
-    if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
-    return c.json({ id: caller.host.id, name: caller.host.name, status: caller.host.status })
-  })
-  app.post('/_speaker/hosts/agents', async (c) => {
-    const host = hostCaller(c)
-    const identity = identitySchema.parse(await c.req.json())
-    const token = randomBytes(32).toString('base64url')
-    // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
-    const agent: Agent = {
-      id: core.rid(),
-      tokenHash: hash(token),
-      status: 'enrolled',
-      ...identity,
-      source: core.sourceOf(c),
-      host: host.id,
-      createdAt: Date.now(),
-      lastSeen: Date.now(),
-      uses: 0,
-      lastUsedAt: null,
-      counts: noCounts(),
-    }
-    core.agents.set(agent.id, agent)
-    core.audit('agent_created', { agent: agent.id, host: host.id })
-    return c.json({ id: agent.id, token }, 201)
-  })
-  app.delete('/_speaker/hosts/agents/:id', (c) => {
-    const id = c.req.param('id')
-    if (core.agentById(id)?.host !== hostCaller(c).id) throw invalid('Agent not found', undefined, 404)
-    core.endAgent(id)
-    return c.json({ ok: true })
-  })
-  app.get('/_speaker/catalog', (c) =>
-    c.json(catalogView(core, c, agentCaller(c), offered(agentCaller(c)), (request) => outcome(c, request))),
-  )
-  app.post('/_speaker/requests', async (c) => {
-    const caller = c.get('caller')
-    const input = requestSchema.extend({ agentId: idSchema.optional() }).parse(await c.req.json())
-    let agent: Agent | undefined
-    if (caller.role === 'host') {
-      agent = input.agentId ? core.agentById(input.agentId) : undefined
-      if (agent?.host !== caller.host.id) throw invalid('Agent not found', undefined, 404)
-    } else {
-      if (input.agentId && input.agentId !== caller.agent.id) throw invalid('An agent requests only for itself')
-      agent = caller.agent
-    }
-    const result = await ask(c, agent, input)
-    return c.json(result, result.status === 'pending' ? 202 : 200)
-  })
-  // One request's outcome by id, held like POST with `Speaker-Wait`. Watching an open request this way never files a
-  // new one, even after it was decided.
-  app.get('/_speaker/requests/:id', async (c) => {
-    const caller = c.get('caller')
-    const request = core.requests.get(c.req.param('id'))
-    const mine =
-      request !== undefined &&
-      (caller.role === 'host'
-        ? core.agentById(request.agentId)?.host === caller.host.id
-        : request.agentId === caller.agent.id)
-    if (!request || !mine)
-      throw invalid('No such request (decided requests are kept for a day)', undefined, 404, 'POST /_speaker/requests')
-    await hold(c, () => settled(request))
-    const result = outcome(c, request)
-    return c.json(result, result.status === 'pending' ? 202 : 200)
-  })
-  // Notes and the caller's current state for one service.
-  app.get('/_speaker/help/:name', (c) => {
-    const agent = agentCaller(c)
-    const name = c.req.param('name')
-    if (!Object.hasOwn(core.services, name)) throw invalid('Unknown service', undefined, 404)
-    const service = core.services[name]
-    const until = (expiresAt: string | null) => (expiresAt === null ? 'with no end' : `until ${expiresAt} (UTC)`)
-    const access = (write: boolean) => {
-      const rule = write ? service.write : service.read
-      if (rule === 'open') return 'open: needs no grant.'
-      if (rule === 'never') return 'never granted by the owner. Do not ask for it.'
-      const grant = core.coverFor(agent.id, name, write)
-      return grant
-        ? `granted ${until(grant.expiresAt)}.`
-        : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
-    }
-    const lines = [
-      `# ${name}`,
-      '',
-      `- Call \`${core.baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
-      `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
-      `- Everything else (\`${name}.full\`): ${access(true)}`,
-      '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`). Speaker asks the owner and answers the call once they decide. Without that header, the call answers at once. `denied` is final.',
-      ...(service.mcp
-        ? [
-            `- MCP server (streamable HTTP) at \`${core.baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
-          ]
-        : []),
-      service.notes
-        ? `\n${service.notes.trim()}`
-        : '- No notes for this service. Use the upstream API documentation for paths.',
-    ]
-    return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
-  })
-  app.all('/_speaker/*', (c) =>
-    agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
-  )
-  app.all('*', async (c) => {
-    const incoming = new URL(c.req.url),
-      [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
-    if (!Object.hasOwn(core.services, serviceId))
-      return agentError(c, 404, 'not_found', 'Unknown service', { next: 'GET /_speaker/catalog' })
-    const service = core.services[serviceId],
-      agent = agentCaller(c),
-      method = c.req.method,
-      path = `/${parts.join('/')}`
-    // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
-    let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
-    const trimmed = (p: string) => p.replace(/\/+$/, '')
-    const readPost = method === 'POST' && service.readPaths?.some((p) => trimmed(p) === trimmed(path))
-    let write = !['GET', 'HEAD', 'OPTIONS'].includes(method) && !readPost
-    let detail = ''
-    if (service.mcp && method === 'DELETE') write = false
-    if (service.mcp && method === 'POST') {
-      if (Number(c.req.header('content-length') ?? 0) > 1_048_576)
-        return agentError(c, 413, 'invalid', 'MCP body too large', { next: 'Send a smaller MCP request' })
-      const text = await c.req.text()
-      if (Buffer.byteLength(text) > 1_048_576)
-        return agentError(c, 413, 'invalid', 'MCP body too large', { next: 'Send a smaller MCP request' })
-      body = text
-      ;({ write, detail } = await core.mcpAccess(serviceId, text))
-    }
-    const item = `${serviceId}.${write ? 'full' : 'read'}`
-    const rule = write ? service.write : service.read
-    if (rule === 'never') {
-      core.tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
-      return agentError(c, 403, 'denied', `The owner blocks ${item}`, {
-        item,
-        next: 'Stop: the owner blocks this; do not request it.',
-      })
-    }
-    const secret = core.credentialOf(serviceId)
-    if (secret === undefined)
-      return agentError(c, 503, 'no_key', `${serviceId} has no key configured yet`, {
-        tell_user: `The owner adds a key for ${serviceId} at ${core.baseOf(c)}/admin?section=services`,
-      })
-    if (rule === 'ask' && !core.coverFor(agent.id, serviceId, write)) {
-      const until = core.lockedUntil(agent.id, item)
-      if (until !== undefined) {
-        core.tally(
-          agent,
-          'blocked',
-          `${method} ${serviceId}: ${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
-        )
-        return agentError(c, 403, 'denied', `The owner denied ${item}`, {
-          item,
-          next: 'Stop: the owner denied this request.',
-          retry_after: new Date(until).toISOString(),
-        })
-      }
-      // A call files a request for exactly the item its method implies.
-      const request = core.createRequest(
-        agent,
-        [item],
-        [item],
-        c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
-        '2h',
-        `${method} ${detail ? `${path} · ${detail}` : path}`,
+                ])
+                .parse(JSON.parse(String(event.data)))
+              if (message.type === 'catalog') {
+                connection.catalog = { mcps: message.mcps, extensions: message.extensions }
+                core.audit('host_catalog', {
+                  host: id,
+                  mcps: message.mcps.length,
+                  extensions: message.extensions.length,
+                })
+              } else connection.applied = new Set(message.grantIds)
+            },
+            onClose: (_event, ws) => {
+              if (core.connections.get(id)?.ws === ws) core.connections.delete(id)
+            },
+          }
+        }),
       )
-      await hold(c, () => statusOf(request) !== 'pending')
-      if (!core.coverFor(agent.id, serviceId, write)) {
-        core.tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
-        if (statusOf(request) === 'decided')
-          return agentError(c, 403, 'denied', `The owner denied ${item}`, {
+      // A sandbox host checking that speaker has approved it (the auth middleware has already refused unapproved ones).
+      .get('/_speaker/hosts/self', (c) => {
+        const caller = c.get('caller')
+        if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
+        return c.json({ id: caller.host.id, name: caller.host.name, status: caller.host.status })
+      })
+      .post('/_speaker/hosts/agents', json<z.input<typeof identitySchema>>(), async (c) => {
+        const host = hostCaller(c)
+        const identity = identitySchema.parse(await c.req.json())
+        const token = randomBytes(32).toString('base64url')
+        // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
+        const agent: Agent = {
+          id: core.rid(),
+          tokenHash: hash(token),
+          status: 'enrolled',
+          ...identity,
+          source: core.sourceOf(c),
+          host: host.id,
+          createdAt: Date.now(),
+          lastSeen: Date.now(),
+          uses: 0,
+          lastUsedAt: null,
+          counts: noCounts(),
+        }
+        core.agents.set(agent.id, agent)
+        core.audit('agent_created', { agent: agent.id, host: host.id })
+        return c.json({ id: agent.id, token }, 201)
+      })
+      .delete('/_speaker/hosts/agents/:id', (c) => {
+        const id = c.req.param('id')
+        if (core.agentById(id)?.host !== hostCaller(c).id) throw invalid('Agent not found', undefined, 404)
+        core.endAgent(id)
+        return c.json({ ok: true })
+      })
+      .get('/_speaker/catalog', (c) =>
+        c.json(catalogView(core, c, agentCaller(c), offered(agentCaller(c)), (request) => outcome(c, request))),
+      )
+      .post('/_speaker/requests', json<z.input<typeof requestBody>>(), async (c) => {
+        const caller = c.get('caller')
+        const input = requestBody.parse(await c.req.json())
+        let agent: Agent | undefined
+        if (caller.role === 'host') {
+          agent = input.agentId ? core.agentById(input.agentId) : undefined
+          if (agent?.host !== caller.host.id) throw invalid('Agent not found', undefined, 404)
+        } else {
+          if (input.agentId && input.agentId !== caller.agent.id) throw invalid('An agent requests only for itself')
+          agent = caller.agent
+        }
+        const result = await ask(c, agent, input)
+        return c.json(result, result.status === 'pending' ? 202 : 200)
+      })
+      // One request's outcome by id, held like POST with `Speaker-Wait`. Watching an open request this way never files a
+      // new one, even after it was decided.
+      .get('/_speaker/requests/:id', async (c) => {
+        const caller = c.get('caller')
+        const request = core.requests.get(c.req.param('id'))
+        const mine =
+          request !== undefined &&
+          (caller.role === 'host'
+            ? core.agentById(request.agentId)?.host === caller.host.id
+            : request.agentId === caller.agent.id)
+        if (!request || !mine)
+          throw invalid(
+            'No such request (decided requests are kept for a day)',
+            undefined,
+            404,
+            'POST /_speaker/requests',
+          )
+        await hold(c, () => settled(request))
+        const result = outcome(c, request)
+        return c.json(result, result.status === 'pending' ? 202 : 200)
+      })
+      // Notes and the caller's current state for one service.
+      .get('/_speaker/help/:name', (c) => {
+        const agent = agentCaller(c)
+        const name = c.req.param('name')
+        if (!Object.hasOwn(core.services, name)) throw invalid('Unknown service', undefined, 404)
+        const service = core.services[name]
+        const until = (expiresAt: string | null) => (expiresAt === null ? 'with no end' : `until ${expiresAt} (UTC)`)
+        const access = (write: boolean) => {
+          const rule = write ? service.write : service.read
+          if (rule === 'open') return 'open: needs no grant.'
+          if (rule === 'never') return 'never granted by the owner. Do not ask for it.'
+          const grant = core.coverFor(agent.id, name, write)
+          return grant
+            ? `granted ${until(grant.expiresAt)}.`
+            : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
+        }
+        const lines = [
+          `# ${name}`,
+          '',
+          `- Call \`${core.baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
+          `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
+          `- Everything else (\`${name}.full\`): ${access(true)}`,
+          '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`). Speaker asks the owner and answers the call once they decide. Without that header, the call answers at once. `denied` is final.',
+          ...(service.mcp
+            ? [
+                `- MCP server (streamable HTTP) at \`${core.baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
+              ]
+            : []),
+          service.notes
+            ? `\n${service.notes.trim()}`
+            : '- No notes for this service. Use the upstream API documentation for paths.',
+        ]
+        return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
+      })
+      .all('/_speaker/*', (c) =>
+        agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
+      )
+      .all('*', async (c) => {
+        const incoming = new URL(c.req.url),
+          [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
+        if (!Object.hasOwn(core.services, serviceId))
+          return agentError(c, 404, 'not_found', 'Unknown service', { next: 'GET /_speaker/catalog' })
+        const service = core.services[serviceId],
+          agent = agentCaller(c),
+          method = c.req.method,
+          path = `/${parts.join('/')}`
+        // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
+        let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
+        const trimmed = (p: string) => p.replace(/\/+$/, '')
+        const readPost = method === 'POST' && service.readPaths?.some((p) => trimmed(p) === trimmed(path))
+        let write = !['GET', 'HEAD', 'OPTIONS'].includes(method) && !readPost
+        let detail = ''
+        if (service.mcp && method === 'DELETE') write = false
+        if (service.mcp && method === 'POST') {
+          if (Number(c.req.header('content-length') ?? 0) > 1_048_576)
+            return agentError(c, 413, 'invalid', 'MCP body too large', { next: 'Send a smaller MCP request' })
+          const text = await c.req.text()
+          if (Buffer.byteLength(text) > 1_048_576)
+            return agentError(c, 413, 'invalid', 'MCP body too large', { next: 'Send a smaller MCP request' })
+          body = text
+          ;({ write, detail } = await core.mcpAccess(serviceId, text))
+        }
+        const item = `${serviceId}.${write ? 'full' : 'read'}`
+        const rule = write ? service.write : service.read
+        if (rule === 'never') {
+          core.tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
+          return agentError(c, 403, 'denied', `The owner blocks ${item}`, {
             item,
-            request: request.id,
-            next: 'Stop: the owner denied this request.',
+            next: 'Stop: the owner blocks this; do not request it.',
           })
-        return agentError(c, 403, 'approval_required', `${item} needs the owner's approval`, {
-          item,
-          request: request.id,
-          next: 'Repeat this call with Speaker-Wait: 60 (and Speaker-Reason: <one sentence>)',
-          tell_user: tellUser(c, `request-${request.id}`),
+        }
+        const secret = core.credentialOf(serviceId)
+        if (secret === undefined)
+          return agentError(c, 503, 'no_key', `${serviceId} has no key configured yet`, {
+            tell_user: `The owner adds a key for ${serviceId} at ${core.baseOf(c)}/admin?section=services`,
+          })
+        if (rule === 'ask' && !core.coverFor(agent.id, serviceId, write)) {
+          const until = core.lockedUntil(agent.id, item)
+          if (until !== undefined) {
+            core.tally(
+              agent,
+              'blocked',
+              `${method} ${serviceId}: ${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
+            )
+            return agentError(c, 403, 'denied', `The owner denied ${item}`, {
+              item,
+              next: 'Stop: the owner denied this request.',
+              retry_after: new Date(until).toISOString(),
+            })
+          }
+          // A call files a request for exactly the item its method implies.
+          const request = core.createRequest(
+            agent,
+            [item],
+            [item],
+            c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
+            '2h',
+            `${method} ${detail ? `${path} · ${detail}` : path}`,
+          )
+          await hold(c, () => statusOf(request) !== 'pending')
+          if (!core.coverFor(agent.id, serviceId, write)) {
+            core.tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
+            if (statusOf(request) === 'decided')
+              return agentError(c, 403, 'denied', `The owner denied ${item}`, {
+                item,
+                request: request.id,
+                next: 'Stop: the owner denied this request.',
+              })
+            return agentError(c, 403, 'approval_required', `${item} needs the owner's approval`, {
+              item,
+              request: request.id,
+              next: 'Repeat this call with Speaker-Wait: 60 (and Speaker-Reason: <one sentence>)',
+              tell_user: tellUser(c, `request-${request.id}`),
+            })
+          }
+        }
+        const grant = rule === 'ask' ? core.coverFor(agent.id, serviceId, write) : undefined
+        const target = core.upstreamUrl(service, secret, parts, incoming.search)
+        if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
+        if (grant) core.useOf(grant)
+        core.useOf(agent)
+        const headers = new Headers(c.req.raw.headers)
+        const connectionHeaders = (headers.get('connection') ?? '')
+          .split(',')
+          .map((header) => header.trim())
+          .filter(Boolean)
+        for (const name of [...headers.keys()])
+          if (
+            /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*|speaker-.*|connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i.test(
+              name,
+            ) ||
+            connectionHeaders.includes(name)
+          )
+            headers.delete(name)
+        core.applyCredential(service, secret, headers)
+        const start = Date.now()
+        // proxy() validates a malformed Connection header (400), drops response hop-by-hop headers and content-encoding.
+        const upstream = await proxy(target, {
+          raw: c.req.raw,
+          strictConnectionProcessing: true,
+          method,
+          headers,
+          body,
+          redirect: 'manual',
+          signal: c.req.raw.signal,
+        } as RequestInit).catch((error: Error) => {
+          if (error instanceof HTTPException) throw error
+          core.audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
+          return undefined
         })
-      }
-    }
-    const grant = rule === 'ask' ? core.coverFor(agent.id, serviceId, write) : undefined
-    const target = core.upstreamUrl(service, secret, parts, incoming.search)
-    if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
-    if (grant) core.useOf(grant)
-    core.useOf(agent)
-    const headers = new Headers(c.req.raw.headers)
-    const connectionHeaders = (headers.get('connection') ?? '')
-      .split(',')
-      .map((header) => header.trim())
-      .filter(Boolean)
-    for (const name of [...headers.keys()])
-      if (
-        /^(authorization|cookie|host|content-length|x-forwarded-.*|x-auth-request-.*|x-speaker-.*|speaker-.*|connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i.test(
-          name,
-        ) ||
-        connectionHeaders.includes(name)
-      )
-        headers.delete(name)
-    core.applyCredential(service, secret, headers)
-    const start = Date.now()
-    // proxy() validates a malformed Connection header (400), drops response hop-by-hop headers and content-encoding.
-    const upstream = await proxy(target, {
-      raw: c.req.raw,
-      strictConnectionProcessing: true,
-      method,
-      headers,
-      body,
-      redirect: 'manual',
-      signal: c.req.raw.signal,
-    } as RequestInit).catch((error: Error) => {
-      if (error instanceof HTTPException) throw error
-      core.audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
-      return undefined
-    })
-    core.audit('proxy', {
-      agent: agent.id,
-      service: serviceId,
-      method,
-      path,
-      ...(detail ? { mcp: detail } : {}),
-      status: upstream?.status ?? 502,
-      latencyMs: Date.now() - start,
-      grant: grant?.id ?? null,
-      rule,
-    })
-    if (!upstream)
-      return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer`, {
-        next: 'Try again shortly; if it keeps failing, tell the user',
+        core.audit('proxy', {
+          agent: agent.id,
+          service: serviceId,
+          method,
+          path,
+          ...(detail ? { mcp: detail } : {}),
+          status: upstream?.status ?? 502,
+          latencyMs: Date.now() - start,
+          grant: grant?.id ?? null,
+          rule,
+        })
+        if (!upstream)
+          return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer`, {
+            next: 'Try again shortly; if it keeps failing, tell the user',
+          })
+        const location = upstream.headers.get('location')
+        if (service.auth.type === 'path' && location?.includes(secret))
+          upstream.headers.set('location', location.replaceAll(secret, '<redacted>'))
+        return upstream
       })
-    const location = upstream.headers.get('location')
-    if (service.auth.type === 'path' && location?.includes(secret))
-      upstream.headers.set('location', location.replaceAll(secret, '<redacted>'))
-    return upstream
-  })
+  )
 }

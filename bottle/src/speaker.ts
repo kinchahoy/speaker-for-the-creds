@@ -1,7 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { hc as honoClient } from "hono/client";
 import { ProxyAgent } from "undici";
 import { z } from "zod";
+import { durationNames } from "../../speaker/items.ts";
+import type { SpeakerApi } from "../../speaker/api.ts";
 import type { Config } from "./config.ts";
 import type { Catalog } from "./pi.ts";
 
@@ -33,7 +36,7 @@ export type Snapshot = {
   secrets?: SecretInfo[];
 };
 const Agent = z.object({ id: z.string(), token: z.string() }).transform(({ id, token }) => ({ id, agentToken: token }));
-export type RequestBody = { agentId: string; want: string[]; reason: string; duration: string; sshKey?: string };
+export type RequestBody = { agentId: string; want: string[]; reason: string; duration: (typeof durationNames)[number]; sshKey?: string };
 
 /** `bottle register` writes the sandbox host token that speaker's owner approved. */
 export const readHostToken = (config: Config) => {
@@ -41,6 +44,10 @@ export const readHostToken = (config: Config) => {
   if (!existsSync(path)) throw new Error(`${path} is missing; run "bottle register"`);
   return readFileSync(path, "utf8").trim();
 };
+
+/** Speaker's typed client: a wrong path or body shape fails `tsc`. */
+export const speakerApi = (config: Config, token?: string) =>
+  honoClient<SpeakerApi>(config.speaker.url, { headers: token === undefined ? {} : { authorization: `Bearer ${token}` } })._speaker;
 
 const Registered = z.object({ id: z.string(), proxyPort: z.number(), sshPort: z.number() });
 
@@ -51,18 +58,14 @@ const Registered = z.object({ id: z.string(), proxyPort: z.number(), sshPort: z.
  */
 export const registerHost = async (config: Config, configPath: string, name: string) => {
   const token = randomBytes(32).toString("hex");
-  const response = await fetch(`${config.speaker.url}/_speaker/hosts`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      name,
-      kinds: ["secret", "site", "folder", "mcp", "ext"],
-      tokenHash: createHash("sha256").update(token).digest("hex"),
-    }),
-    signal: AbortSignal.timeout(10_000),
-  }).catch((error: Error & { cause?: { code?: string } }) => {
-    throw new Error(`cannot reach speaker at ${config.speaker.url} (${error.cause?.code ?? error.message}); is it running?`);
-  });
+  const response = await speakerApi(config)
+    .hosts.$post(
+      { json: { name, kinds: ["secret", "site", "folder", "mcp", "ext"], tokenHash: createHash("sha256").update(token).digest("hex") } },
+      { init: { signal: AbortSignal.timeout(10_000) } },
+    )
+    .catch((error: Error & { cause?: { code?: string } }) => {
+      throw new Error(`cannot reach speaker at ${config.speaker.url} (${error.cause?.code ?? error.message}); is it running?`);
+    });
   if (!response.ok) throw new Error(`speaker POST hosts returned ${response.status}: ${await response.text()}`);
   const { id, proxyPort, sshPort } = Registered.parse(await response.json());
   writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
@@ -74,35 +77,26 @@ export const registerHost = async (config: Config, configPath: string, name: str
 
 /** Whether the owner has approved this host: speaker answers `GET /_speaker/hosts/self` 200 for an approved host token, 401 for a pending or unknown one. */
 export const hostApproved = async (config: Config) => {
-  const response = await fetch(`${config.speaker.url}/_speaker/hosts/self`, {
-    headers: { authorization: `Bearer ${readHostToken(config)}` },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const response = await speakerApi(config, readHostToken(config)).hosts.self.$get({}, { init: { signal: AbortSignal.timeout(10_000) } });
   await response.body?.cancel();
   return response.ok;
 };
 
 export const speakerClient = (config: Config, hostToken: string) => {
-  const call = async (method: string, path: string, body?: unknown) => {
-    const response = await fetch(`${config.speaker.url}/_speaker/${path}`, {
-      method,
-      headers: { authorization: `Bearer ${hostToken}`, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) throw new Error(`speaker ${method} ${path} returned ${response.status}: ${await response.text()}`);
+  const api = speakerApi(config, hostToken);
+  const timeout = { init: { signal: AbortSignal.timeout(10_000) } };
+  const check = async (what: string, response: Pick<Response, "ok" | "status" | "text" | "json">) => {
+    if (!response.ok) throw new Error(`speaker ${what} returned ${response.status}: ${await response.text()}`);
     return response.json();
   };
   return {
-    createAgent: async (label: string, agent: string) => Agent.parse(await call("POST", "hosts/agents", { label, agent })),
-    deleteAgent: (id: string) => call("DELETE", `hosts/agents/${id}`),
-    request: async (body: RequestBody) => RequestStatus.parse(await call("POST", "requests", body)),
+    createAgent: async (label: string, agent: string) =>
+      Agent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout))),
+    deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout)),
+    request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout))),
     /** The placeholder speaker issued this agent for a secret it holds (what `/catalog` shows); only the agent's own token can ask. */
     placeholder: async (agentToken: string, secret: string) => {
-      const response = await fetch(`${config.speaker.url}/_speaker/catalog`, {
-        headers: { authorization: `Bearer ${agentToken}` },
-        signal: AbortSignal.timeout(10_000),
-      });
+      const response = await speakerApi(config, agentToken).catalog.$get({}, timeout);
       if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}: ${await response.text()}`);
       const { secrets = {} } = Me.parse(await response.json());
       const placeholder = secrets[secret]?.placeholder;
@@ -116,7 +110,7 @@ export type Speaker = ReturnType<typeof speakerClient>;
 
 /** Speaker's proxy certificate authority: secret hosts are TLS-terminated there, so the guest and bottle's tunnel must trust it. */
 export const speakerCa = async (config: Config) => {
-  const response = await fetch(`${config.speaker.url}/_speaker/proxy/ca.pem`, { signal: AbortSignal.timeout(10_000) });
+  const response = await speakerApi(config)["proxy"]["ca.pem"].$get({}, { init: { signal: AbortSignal.timeout(10_000) } });
   if (!response.ok) throw new Error(`speaker's proxy certificate is unavailable (HTTP ${response.status}); is speaker unlocked?`);
   return response.text();
 };

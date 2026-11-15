@@ -64,23 +64,25 @@ export const startControl = (config: Config, tasks: Tasks) => {
       summary: task.lastMessage,
     }));
 
-  app.get("/api/state", (context) => context.json({ tasks: listTasks() }));
-  app.post(
-    "/api/tasks",
-    validator("json", (body) => NewTask.parse(body)),
-    async (context) => context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
-  );
-  app.post("/api/tasks/:id/close", (context) => {
-    const task = tasks.get(context.req.param("id"));
-    if (closed(task)) throw new StatusError(409, `task ${task.id} is already ${task.state}`);
-    tasks.close(task).catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`)); // the state records it
-    return context.json({ closing: task.id }, 202);
-  });
-
-  app.onError(failure);
+  const routes = app
+    .get("/api/state", (context) => context.json({ tasks: listTasks() }))
+    .post(
+      "/api/tasks",
+      validator("json", (body) => NewTask.parse(body)),
+      async (context) => context.json(await tasks.create(context.req.valid("json")).then(({ id, outputDir }) => ({ id, outputDir }))),
+    )
+    .post("/api/tasks/:id/close", (context) => {
+      const task = tasks.get(context.req.param("id"));
+      if (closed(task)) throw new StatusError(409, `task ${task.id} is already ${task.state}`);
+      tasks.close(task).catch((error: Error) => console.error(`archive of ${task.id} failed: ${error.message}`)); // the state records it
+      return context.json({ closing: task.id }, 202);
+    })
+    .onError(failure);
   serve({ fetch: app.fetch, hostname: config.bindHost, port: config.controlPort });
   console.log(`control  http://${expectedHost}`);
+  return routes;
 };
+export type ControlApi = ReturnType<typeof startControl>;
 
 /** The mapped guest endpoint only accepts a task token and only reports status. */
 export const startGuestListener = (config: Config, tasks: Tasks) => {
