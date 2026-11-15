@@ -10,6 +10,7 @@
   "dependencies": {
     "@clack/prompts": "catalog:",
     "@hono/node-server": "catalog:",
+    "commander": "catalog:",
     "hono": "catalog:",
     "microsandbox": "latest",
     "proxy-chain": "latest",

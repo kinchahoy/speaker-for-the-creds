@@ -173,6 +173,9 @@ catalogs:
     '@types/node':
       specifier: latest
       version: 26.6.6
+    commander:
+      specifier: latest
+      version: 15.1.0
     hono:
       specifier: latest
       version: 4.13.18
@@ -201,6 +204,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.8(hono@4.13.18)
+      commander:
+        specifier: 'catalog:'
+        version: 15.1.0
       hono:
         specifier: 'catalog:'
         version: 4.13.18
@@ -814,6 +820,10 @@ packages:
     resolution: {integrity: sha512-81NlooYbXCbBWL2+p1/ivGyT4AR2+bnfKYlPq/3rCoIPJSuLbdS8G70XYt561wOJnbaYfBS2HQDMENaX5hM2vA==}
     engines: {node: ^20.19.0 || >=22.12.0}
 
+  commander@15.1.0:
+    resolution: {integrity: sha512-cgnQ88TRrWcC7pVq46RzJVRMktu3W2RcbnoidnfBsl1bmDCBwJS/udcIZpKoCrbAYYaCqsz1yZCVIgbIaU3ddQ==}
+    engines: {node: '>=22.12.0'}
+
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
@@ -1354,6 +1364,8 @@ snapshots:
   asn1js@4.0.0:
     dependencies:
       '@peculiar/utils': 4.1.0
+
+  commander@15.1.0: {}
 
   cross-spawn@7.0.6:
     dependencies:

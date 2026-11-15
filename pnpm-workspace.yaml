@@ -7,6 +7,7 @@ packages:
 catalog:
   "@clack/prompts": latest
   "@hono/node-server": latest
+  commander: latest
   hono: latest
   zod: latest
   "@types/node": latest

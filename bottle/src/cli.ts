@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { Command, InvalidArgumentError, Option } from "commander";
 import { attach } from "./sandbox.ts";
 import { registerHost } from "./speaker.ts";
 import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
@@ -29,114 +29,23 @@ const root = resolve(import.meta.dirname, "../..");
 const configPath = configPathFromEnv();
 
 /** Host commands backed by the package's shell scripts; their arguments pass through unchanged. */
-const SCRIPTS = {
-  serve: {
-    script: "start.sh",
-    help: `usage: ${SELF} serve
-
-Runs the bottle service in the foreground. Ctrl-C stops it.`,
-  },
-  build: {
-    script: "guest/build.sh",
-    help: `usage: ${SELF} build [image-tag]
-
-Builds the guest image (default tag bottle-guest) and loads it into microsandbox. Needs config.json from init.`,
-  },
-} as const;
+const SCRIPTS = { serve: "start.sh", build: "guest/build.sh" } as const;
 type Script = keyof typeof SCRIPTS;
 
 const runScript = (name: Script, args: string[]) => {
-  const child = spawn(join(import.meta.dirname, "..", SCRIPTS[name].script), args, { stdio: "inherit" });
+  const child = spawn(join(import.meta.dirname, "..", SCRIPTS[name]), args, { stdio: "inherit" });
   // The terminal's Ctrl-C reaches the script too; stay alive until it has cleaned up, and pass on a TERM.
   process.on("SIGINT", () => {});
   process.on("SIGTERM", () => child.kill("SIGTERM"));
   child.on("error", (error) => {
-    console.error(`error: could not run ${SCRIPTS[name].script}: ${error.message}`);
+    console.error(`error: could not run ${SCRIPTS[name]}: ${error.message}`);
     process.exit(1);
   });
   child.on("exit", (code) => process.exit(code ?? 1));
 };
 
-const COMMANDS = {
-  register: {
-    positional: 0,
-    help: `usage: ${SELF} register [--name NAME]
-
-Registers this host as a speaker sandbox host. Writes its token to the config and learns speaker's proxy and SSH
-ports. Then approve the sandbox host in speaker /admin and start the service.`,
-  },
-  run: {
-    positional: 0,
-    help: `usage: ${SELF} run [--template T] [--name NAME] [--model M] [--prompt TEXT] [--hours H]
-                     [--attended | --unattended]
-
-Starts a task. --template defaults to offline, which asks speaker for nothing at launch. With --prompt, the
-task runs once and archives when Pi writes /output/DONE. --hours sets a wall-clock deadline, in hours from launch.
-
-An attended task expects you at its terminal, where Pi may ask you questions. An unattended task is told
-nobody is watching, so it records assumptions instead of asking. Without --prompt a task is attended; with
---prompt, unattended. A template may fix the mode, and a contradicting flag is refused.`,
-  },
-  ls: {
-    positional: 0,
-    help: `usage: ${SELF} ls
-
-Lists live tasks with state, mode (attended or unattended), pending approvals, age, model, name, and Pi's
-latest message. A state is starting, awaiting-key (a hosted model's key is not granted yet), idle, busy,
-reconfiguring, pi-down (a restart failed), start-failed, closing, or done once Pi wrote /output/DONE. Below the
-tasks are the last five finished ones with their state (archived or failed-archive) and archive folder.`,
-  },
-  attach: {
-    positional: 1,
-    help: `usage: ${SELF} attach <id|name>
-
-Opens Pi's terminal for a task. Ctrl-\\ detaches and leaves Pi running. Ctrl-] leaves the VM shell.`,
-  },
-  stop: {
-    positional: 1,
-    help: `usage: ${SELF} stop <id|name>
-
-Closes a task and archives its artifacts and transcript under the configured output root.`,
-  },
-} as const;
-type Command = keyof typeof COMMANDS;
-
-const usage = `usage: ${SELF} <command> [options]
-
-  run        Start a task
-  ls         List live tasks
-  attach     Open a task's Pi terminal
-  stop       Close a task and archive it
-  register   Register this host as a speaker sandbox host
-
-  serve      Run the bottle service
-  build      Build the guest image
-
-Run \`${SELF} help <command>\` or \`${SELF} <command> --help\` for options.`;
-
-/** A mistake in the command line, reported with exit code 2 instead of a runtime failure. */
-class UsageError extends Error {}
-
-const parseOptions = (args: string[]) => {
-  try {
-    return parseArgs({
-      args,
-      allowPositionals: true,
-      options: {
-        help: { type: "boolean", short: "h" },
-        name: { type: "string" },
-        template: { type: "string" },
-        model: { type: "string" },
-        prompt: { type: "string" },
-        hours: { type: "string" },
-        attended: { type: "boolean" },
-        unattended: { type: "boolean" },
-      },
-    });
-  } catch (error) {
-    throw new UsageError((error as Error).message.split("\n")[0]!);
-  }
-};
+type Values = { name?: string; template?: string; model?: string; prompt?: string; hours?: number; attended?: boolean; unattended?: boolean };
+type Command_ = "register" | "run" | "ls" | "attach" | "stop";
 
 const age = (startedAt: string): string => {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000));
@@ -158,7 +67,7 @@ const loadCliConfig = (): Config => {
   }
 };
 
-async function main(command: Command, values: ReturnType<typeof parseOptions>["values"], positionals: string[]) {
+async function main(command: Command_, values: Values, positionals: string[]) {
   const config = loadCliConfig();
   const control = controlOrigin(config);
 
@@ -183,7 +92,7 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
 
   /** Exact id or name first, then unique id or name prefix. */
   const resolveTask = async (wanted: string): Promise<Task> => {
-    if (!wanted.trim()) throw new UsageError(`${command} expects a task id. See \`${SELF} ls\``);
+    if (!wanted.trim()) throw new Error(`${command} expects a task id. See \`${SELF} ls\``);
     const all = await tasks();
     const exact = all.filter((task) => task.id === wanted || task.name === wanted);
     const matches = exact.length > 0 ? exact : all.filter((task) => task.id.startsWith(wanted) || task.name.startsWith(wanted));
@@ -198,20 +107,14 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
     console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
-    if (values.attended && values.unattended) throw new UsageError("pass at most one of --attended and --unattended");
     const attended = values.attended ? true : values.unattended ? false : undefined;
-    let hoursValue: number | undefined;
-    if (hours !== undefined) {
-      hoursValue = Number(hours);
-      if (!Number.isFinite(hoursValue) || hoursValue <= 0) throw new UsageError(`--hours must be a positive number of hours, got "${hours}"`);
-    }
     const { id, outputDir } = await api<{ id: string; outputDir: string }>("POST", `${control}/api/tasks`, {
       name,
       template,
       model,
       prompt,
       attended,
-      hours: hoursValue,
+      hours,
     });
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
@@ -279,40 +182,59 @@ async function main(command: Command, values: ReturnType<typeof parseOptions>["v
   }
 }
 
-const [first = "", ...rest] = process.argv.slice(2);
-if (first === "" || first === "help" || first === "--help" || first === "-h") {
-  const topic = first === "help" ? rest[0] : undefined;
-  if (topic !== undefined && Object.hasOwn(COMMANDS, topic)) console.log(COMMANDS[topic as Command].help);
-  else if (topic !== undefined && Object.hasOwn(SCRIPTS, topic)) console.log(SCRIPTS[topic as Script].help);
-  else if (topic !== undefined) {
-    console.error(`error: unknown command "${topic}"\n\n${usage}`);
-    process.exitCode = 2;
-  } else if (first === "") {
-    console.error(usage);
-    process.exitCode = 2;
-  } else console.log(usage);
-} else if (Object.hasOwn(SCRIPTS, first)) {
-  if (rest.includes("--help")) console.log(SCRIPTS[first as Script].help);
-  else runScript(first as Script, rest);
-} else {
-  try {
-    if (!Object.hasOwn(COMMANDS, first)) throw new UsageError(`unknown command "${first}"\n\n${usage}`);
-    const command = first as Command;
-    const { values, positionals } = parseOptions(rest);
-    if (values.help) console.log(COMMANDS[command].help);
-    else {
-      const expected = COMMANDS[command].positional;
-      if (positionals.length !== expected)
-        throw new UsageError(
-          expected === 0
-            ? `${command} takes no positional arguments. Pass the prompt with --prompt "..."`
-            : `${command} takes exactly one task id, got ${positionals.length}`,
-        );
-      await main(command, values, positionals);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`error: ${message}`);
-    process.exitCode = error instanceof UsageError ? 2 : 1;
-  }
+const program = new Command(SELF)
+  .description("The owner's terminal client for the bottle service.")
+  .exitOverride((error) => process.exit(error.exitCode === 1 ? 2 : error.exitCode)); // usage errors exit 2
+program
+  .command("run")
+  .description("Start a task")
+  .option("--template <name>", "template; offline asks speaker for nothing at launch", "offline")
+  .option("--name <name>", "task name")
+  .option("--model <id>", "model")
+  .option("--prompt <text>", "run once and archive when Pi writes /output/DONE (implies --unattended)")
+  .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
+    const hours = Number(text);
+    if (!Number.isFinite(hours) || hours <= 0) throw new InvalidArgumentError("a positive number of hours");
+    return hours;
+  })
+  .addOption(new Option("--attended", "expect the owner at the task's terminal, where Pi may ask questions").conflicts("unattended"))
+  .option("--unattended", "tell Pi nobody is watching, so it records assumptions instead of asking")
+  .action((values: Values) => main("run", values, []));
+program
+  .command("ls")
+  .description("List live tasks, and the last finished ones")
+  .action(() => main("ls", {}, []));
+program
+  .command("attach")
+  .description("Open a task's Pi terminal; Ctrl-\\ detaches and leaves Pi running")
+  .argument("<id|name>")
+  .action((task: string) => main("attach", {}, [task]));
+program
+  .command("stop")
+  .description("Close a task and archive its artifacts and transcript")
+  .argument("<id|name>")
+  .action((task: string) => main("stop", {}, [task]));
+program
+  .command("register")
+  .description("Register this host as a speaker sandbox host")
+  .option("--name <name>", "host name (default: this machine's)")
+  .action((values: Values) => main("register", values, []));
+program
+  .command("serve")
+  .description("Run the bottle service in the foreground; Ctrl-C stops it")
+  .allowUnknownOption()
+  .argument("[args...]")
+  .action((args: string[]) => runScript("serve", args));
+program
+  .command("build")
+  .description("Build the guest image (default tag bottle-guest) and load it into microsandbox")
+  .allowUnknownOption()
+  .argument("[args...]")
+  .action((args: string[]) => runScript("build", args));
+
+try {
+  await program.parseAsync();
+} catch (error) {
+  console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
 }
