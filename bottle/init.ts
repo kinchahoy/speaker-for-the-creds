@@ -402,7 +402,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     p.log.warn(`Skipping the smoke test: the guest image "${image}" is not loaded. Build it with: mise run bottle build ${image}`);
   if (!model && !flags["skip-smoke"])
     p.log.info(
-      'Skipping the smoke test: hosted models need a key in speaker first. Enter one on its service in Setup, then run: mise run bottle run --model openrouter/<model> --prompt "..."',
+      'Skipping the smoke test: hosted models need a key in speaker first. Enter one on its service in Setup, then run: bottle run -m openrouter/<model> "..."',
     );
   const smoke =
     !flags["skip-smoke"] &&
@@ -428,7 +428,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     const created = await fetch(`${control}/api/agents`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT }),
+      body: JSON.stringify({ template: "offline", name: "smoke-test", prompt: SMOKE_PROMPT, attended: false }),
     });
     const { id, error } = (await created.json()) as { id?: string; error?: string };
     if (!id) fail(`the smoke-test agent did not start: ${error ?? created.status}`, `read ${logFile}`);
@@ -450,6 +450,6 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
   } else p.log.info("bottle starts on demand with mise run bottle run (or run mise run bottle serve in the foreground)");
   p.outro(
-    `bottle is set up. Launch work with (bottle starts on demand, and stops 10 minutes after its last agent; stop it now with \`mise run bottle down\`): mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
+    `bottle is set up. Launch work with (bottle starts on demand, and stops 10 minutes after its last agent; stop it now with \`mise run bottle down\`): bottle run${model ? "" : " -m openrouter/<model>"} "<prompt>" (add -d to leave it running in the background)`,
   );
 }

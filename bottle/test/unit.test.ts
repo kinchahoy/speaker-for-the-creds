@@ -166,14 +166,14 @@ test("guest configuration mounts no skills, sends no extension config for an MCP
   assert.match(args[args.indexOf("--tools") + 1]!, /mcp__context7__resolve_library_id/);
 });
 
-test("attended defaults to no-prompt launches, follows the launch flag, and a template can force it", () => {
+test("attended by default, follows the launch flag, and a template can force it", () => {
   const free = Template.parse({
     id: "free",
     label: "Free",
     limits: { cpus: 1, memoryMiB: 512, rootfsGiB: 1, workGiB: 1, maxRuntimeHours: 1 },
   });
   assert.equal(attendedFor(free, {}), true);
-  assert.equal(attendedFor(free, { prompt: "do it" }), false);
+  assert.equal(attendedFor(free, { prompt: "do it" }), true);
   assert.equal(attendedFor(free, { prompt: "do it", attended: true }), true);
   assert.equal(attendedFor(free, { attended: false }), false);
   const forced = { ...free, id: "forced", attended: false };

@@ -76,16 +76,19 @@ bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whet
 
 `bottle register` names the host after the machine (`--name` overrides). Registering again from the same machine and name leaves the old entry until you approve the new one, which then replaces it.
 
-From another terminal, launch and inspect an agent:
+To type `bottle` instead of `mise run bottle`, link the CLI onto `PATH` once: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle` (from the repository root). The Herdr mod and the Herdr + menu program below need it.
+
+Launch and inspect an agent:
 {.ai}
 
 ```sh
-mise run bottle run --prompt "Write a greeting to /output/greeting.txt"   # template defaults to offline
-mise run bottle run --template research --attended   # you stay at the terminal; Pi may ask you questions
-mise run bottle ls               # live agents, then the last few finished ones with their archive folders
-mise run bottle attach <id>      # id, unique id prefix, or name
-mise run bottle stop <id>
-mise run bottle help run         # per-command usage (mise intercepts --help after the task name)
+bottle run "Write a greeting to /output/greeting.txt"   # attaches to Pi's terminal; template defaults to offline
+bottle run -d "Write a greeting to /output/greeting.txt"  # detached: prints the attach command and returns
+bottle run -t research -m openrouter/<model>              # no prompt: Pi opens and waits for you to type
+bottle ls               # live agents, then the last few finished ones with their archive folders
+bottle attach [<id>]    # id, unique id prefix, or name; no id attaches the only open agent
+bottle stop [<id>]
+bottle help run         # per-command usage
 ```
 
 Every `mise run bottle <command>` also works as plain `bottle <command>` after `pnpm -C bottle link --global` (run `pnpm setup` once first if pnpm's global bin directory is not on your PATH).
@@ -113,7 +116,7 @@ Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USE
 | State | Meaning |
 | --- | --- |
 | `starting` | The VM is up and Pi is starting |
-| `awaiting-grant` | A `--prompt` agent on a hosted model: Pi has not started and waits for you to approve the model's speaker service |
+| `awaiting-grant` | An agent with a prompt on a hosted model: Pi has not started and waits for you to approve the model's speaker service |
 | `idle`, `busy` | Pi is waiting or working, as the guest reports |
 | `reconfiguring` | Pi is restarting with new MCP servers or extensions |
 | `pi-down` | A restart failed, or Pi exited within 3 seconds of one; the agent keeps its transcript and `stop` still exports it |
@@ -126,10 +129,10 @@ Finished agents are listed below with `archived` or `failed-archive` (the work f
 The control API (`/api/state`, `/api/agents`, `/api/agents/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input or malformed JSON, 401 or 403 `denied` (a wrong guest token, a request not from the CLI), 404 `not_found` for an unknown agent, 409 `conflict` when the agent's state forbids it (stopping an agent already closing, or launching past `maxAgents`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the agents.
 {.ai}
 
-Ctrl-\ detaches from dtach. Ctrl-] leaves the VM terminal. A one-shot agent writes `/output/DONE` only when it is complete.
+Ctrl-\ detaches and leaves Pi running; `run` then prints the attach command and opens a Herdr tab (see In the Herdr app). Ctrl-] leaves the VM terminal. A one-shot agent writes `/output/DONE` only when it is complete; an attached `run` ends when the agent archives and prints where.
 {.ai}
 
-An agent is attended (you are at its terminal) or unattended (nobody is). Without `--prompt`, an agent defaults to attended. With one, it defaults to unattended. `--attended` or `--unattended` overrides the default. A template's `"attended"` fixes the mode, and a flag that contradicts the template is refused.
+An agent is attended (you are at its terminal) or unattended (nobody is). It follows how you launched it: `run` attached is attended, `run -d` (or a run without a terminal) is unattended. `--attended` or `--unattended` overrides that. If you detach from an attended agent and Pi then asks a question, it waits for you; `bottle ls` shows it idle. A template's `"attended"` fixes the mode, and a flag that contradicts the template is refused.
 {.ai}
 
 An attended agent loads the ask-user-question extension (the `ask_user_question` tool) whatever its template says, because the extension adds presence, not access. An unattended agent does not load it, and its system prompt says nobody is watching. The agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which you answer in speaker. Mode does not change archival: an agent with a prompt archives when Pi writes `/output/DONE`, and every agent archives at its deadline.
@@ -137,7 +140,7 @@ An attended agent loads the ask-user-question extension (the `ask_user_question`
 
 ### In the Herdr app
 
-When `hc` (herdr-core) is on the bottle host's `PATH`, each agent opens as a tab in a **bottle** space in the Herdr app on that machine, however it was started: bottle runs `hc run --bg --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. The tab closes when the agent ends. `"herdr": false` in `config.json` turns this off; `"herdr": true` makes a missing `hc` an agent note instead of silence. Herdr names an unnamed space after its first terminal's folder (`outputRoot`), so rename the space to "bottle" once. For another machine, add it from the Mac with `hc machine add <ssh target>`.
+When `hc` (herdr-core) is on the bottle host's `PATH`, a detached agent opens as a tab in a **bottle** space in the Herdr app on that machine: at launch with `run -d`, or when you press Ctrl-\ during an attached `run`. An attached run opens no tab, so Pi does not show twice. The CLI runs `hc run --bg --no-parent --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. The tab closes when the agent ends. The speaker Herdr mod lists open agents too; clicking one focuses its tab, or opens one. `"herdr": false` in `config.json` turns this off; `"herdr": true` makes a missing `hc` an error message instead of silence. Herdr names an unnamed space after its first terminal's folder (`outputRoot`), so rename the space to "bottle" once. For another machine, add it from the Mac with `hc machine add <ssh target>`.
 
 To start a sandboxed Pi from Herdr's + menu, add a program to `~/.config/herdr-app/programs.json` (it needs `bottle` on `PATH`, see Build and run):
 
@@ -230,7 +233,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle 
 A template is the runtime profile bottle owns (VM size, deadline, model-request cap, attended mode) plus what the agent starts with. A group is defined in speaker and names items you approve together. To change what agents start with, edit a template's `want` or the group in speaker. To change how big or how long an agent is, edit the template's limits.
 {.ai}
 
-An agent with a local model starts Pi at once and does not wait for its first request. An agent launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended agent may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
+An agent with a local model starts Pi at once and does not wait for its first request. An agent launched with a prompt that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended agent may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
 - Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the agent." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model's grant arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
@@ -275,7 +278,7 @@ The grant snapshot for a secret carries the secret's hosts, not its value. bottl
 
 ### Hosted model providers
 
-A hosted provider is a speaker service, such as the starter `openrouter`, `anthropic` and `openai` services; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `--model <id>/<model>`. The agent adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the agent's token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why a `--prompt` agent on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
+A hosted provider is a speaker service, such as the starter `openrouter`, `anthropic` and `openai` services; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `-m <id>/<model>`. The agent adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the agent's token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why an agent with a prompt on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
 {.ai}
 
 <!-- author: ai -->

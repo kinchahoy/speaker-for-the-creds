@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { statfs } from "node:fs/promises";
@@ -308,15 +307,6 @@ export class Agents {
     this.#move(agent, awaitGrant ? "wait" : "ready");
     // The grant may have come in a snapshot while the agent was still starting.
     this.#startWhenGranted(agent);
-    // The agent as a Herdr tab: an attach terminal labelled into the "bottle" space; it closes when the agent ends.
-    if (this.config.herdr !== false) {
-      const attach = [process.execPath, `${import.meta.dirname}/cli.ts`, "attach", id];
-      const labels = ["--label", "herdr.space=bottle", "--label", `herdr.tab=${id}`];
-      execFile("hc", ["run", "--bg", "--no-parent", "--name", `pi-${id}`, "--cwd", this.config.outputRoot, ...labels, "--", ...attach], (error) => {
-        // Without hc on PATH and no "herdr": true, Herdr is simply not in use here.
-        if (error && !((error as NodeJS.ErrnoException).code === "ENOENT" && this.config.herdr === undefined)) note(live, `no Herdr tab: ${error.message}`);
-      });
-    }
     if (input.prompt) {
       note(live, `owner launch prompt queued; archival at ${agent.deadline}`);
       // A one-shot agent ends when the agent writes DONE to /output; the archive records it.

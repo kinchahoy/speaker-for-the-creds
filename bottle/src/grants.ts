@@ -72,7 +72,7 @@ export const launchRequest = (template: Template, agentId: string, extra: string
 export const attendedFor = (template: Template, input: { prompt?: string; attended?: boolean }) => {
   if (template.attended !== undefined && input.attended !== undefined && input.attended !== template.attended)
     throw new StatusError(400, `template ${template.id} is always ${template.attended ? "attended" : "unattended"}`);
-  return template.attended ?? input.attended ?? input.prompt === undefined;
+  return template.attended ?? input.attended ?? true;
 };
 
 export const loadTemplates = (path: string) => {

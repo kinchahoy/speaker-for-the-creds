@@ -21,7 +21,7 @@ const NewAgent = z
     model: z.string().optional(),
     /** A one-shot launch: the service submits this prompt once Pi is ready. */
     prompt: z.string().trim().min(1).max(20_000).optional(),
-    /** Whether the owner is at the terminal to answer questions; defaults to attended without a prompt. */
+    /** Whether the owner is at the terminal to answer questions; defaults to attended (the CLI sends false for a detached run). */
     attended: z.boolean().optional(),
     /** Calendar hours until the service archives the agent; the template's maxRuntimeHours caps it. */
     hours: z.number().positive().optional(),

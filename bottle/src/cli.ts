@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,7 +10,7 @@ import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
 import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
-/** The owner's terminal client: `bottle serve | down | build | register | run | ls | attach | stop`. */
+/** The owner's terminal client: `bottle run | ls | attach | stop | down | serve | build | register`. */
 type Agent = {
   id: string;
   name: string;
@@ -46,7 +46,7 @@ const runScript = (name: Script, args: string[]) => {
   child.on("exit", (code) => process.exit(code ?? 1));
 };
 
-type Values = { name?: string; template?: string; model?: string; prompt?: string; hours?: number; attended?: boolean; unattended?: boolean };
+type Values = { name?: string; template?: string; model?: string; hours?: number; detach?: boolean; attended?: boolean; unattended?: boolean };
 type Command_ = "register" | "run" | "ls" | "attach" | "stop" | "down";
 
 const home = bottleHome();
@@ -54,6 +54,33 @@ const logFile = join(home, "bottle.log");
 const pidFile = join(home, "bottle.pid");
 const START_WAIT_MS = 60_000;
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const ATTACHABLE = ["starting", "idle", "busy", "reconfiguring"];
+const CLOSED = ["closing", "archived", "failed-archive"];
+const attachCommand = (id: string) => (SELF === "bottle" ? `bottle attach ${id}` : `cd '${root}' && ${SELF} attach ${id}`);
+
+/** Pi's terminal in the VM, here; resolves when the owner detaches (Ctrl-\\) or Pi's session ends. */
+const attachHere = (agent: Agent) =>
+  new Promise<void>((done, fail) => {
+    console.error(`Attaching to ${agent.name} (${agent.id}). Ctrl-\\ detaches, and Pi keeps running.`);
+    const terminal = attach(agent.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
+    child.on("error", (error) => fail(new Error(`cannot start the terminal: ${error.message}`)));
+    child.on("exit", () => done());
+  });
+
+/** The agent as a Herdr tab in the "bottle" space, named pi-<id> (the Herdr mod looks for that name); it closes when the agent ends. */
+const openTab = (config: Config, id: string) =>
+  new Promise<void>((done) => {
+    if (config.herdr === false) return done();
+    const labels = ["--label", "herdr.space=bottle", "--label", `herdr.tab=${id}`];
+    const command = [process.execPath, `${import.meta.dirname}/cli.ts`, "attach", id];
+    execFile("hc", ["run", "--bg", "--no-parent", "--name", `pi-${id}`, "--cwd", config.outputRoot, ...labels, "--", ...command], (error) => {
+      // Without hc on PATH and no "herdr": true, Herdr is simply not in use here.
+      if (!error) console.log("It has a tab in Herdr's bottle space.");
+      else if (!((error as NodeJS.ErrnoException).code === "ENOENT" && config.herdr === undefined)) console.error(`no Herdr tab: ${error.message}`);
+      done();
+    });
+  });
 
 const isUp = (control: string) =>
   fetch(`${control}/api/state`, { signal: AbortSignal.timeout(2_000) }).then(
@@ -139,10 +166,18 @@ async function main(command: Command_, values: Values, positionals: string[]) {
 
   const agents = async (): Promise<Agent[]> => (await api(controlApi.state.$get())).agents;
 
-  /** Exact id or name first, then unique id or name prefix. */
-  const resolveAgent = async (wanted: string): Promise<Agent> => {
-    if (!wanted.trim()) throw new Error(`${command} expects an agent id. See \`${SELF} ls\``);
+  const byId = async (id: string) => (await agents()).find((agent) => agent.id === id);
+
+  /** No id: the only open agent. Otherwise exact id or name first, then unique id or name prefix. */
+  const resolveAgent = async (wanted = ""): Promise<Agent> => {
     const all = await agents();
+    if (!wanted.trim()) {
+      const open = all.filter((agent) => !CLOSED.includes(agent.state));
+      if (open.length === 1) return open[0]!;
+      throw new Error(
+        `${open.length ? `${open.length} agents are open (${open.map((agent) => agent.id).join(", ")}); name one` : "no agent is open"}. See \`${SELF} ls\``,
+      );
+    }
     const exact = all.filter((agent) => agent.id === wanted || agent.name === wanted);
     const matches = exact.length > 0 ? exact : all.filter((agent) => agent.id.startsWith(wanted) || agent.name.startsWith(wanted));
     if (matches.length === 1) return matches[0]!;
@@ -157,20 +192,39 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     const id = await registerHost(config, configPath, name);
     console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then launch an agent with \`${SELF} run\`.`);
   } else if (command === "run") {
-    const { template = "offline", name, model, prompt, hours } = values;
-    const attended = values.attended ? true : values.unattended ? false : undefined;
+    const { template = "offline", name, model, hours } = values;
+    const prompt = positionals[0];
+    // Attached unless asked otherwise or there is no terminal to attach; an agent nobody watches is unattended.
+    const detach = values.detach || !(process.stdin.isTTY && process.stdout.isTTY);
+    const attended = values.attended ? true : values.unattended || detach ? false : undefined;
     console.log(`Connecting to bottle at ${control} (speaker ${config.speaker.url})`);
     if (!(await isUp(control))) await startBottle(control);
     const { id, outputDir } = await api(controlApi.agents.$post({ json: { name, template, model, prompt, attended, hours } }));
-    const attach = `cd '${root}' && ${SELF} attach ${id}`;
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
     console.log(
-      `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the agent asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
+      `Started ${id} (${template}).${archive} Archive: ${outputDir}\nWhen the agent asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
     );
+    if (detach) {
+      await openTab(config, id);
+      return void console.log(`Attach: ${attachCommand(id)}`);
+    }
+    let agent = await byId(id);
+    if (agent?.state === "awaiting-grant") console.log(`Waiting for you to approve its model at ${config.speaker.url}/admin`);
+    while (agent?.state === "awaiting-grant") {
+      await sleep(2_000);
+      agent = await byId(id);
+    }
+    if (!agent || !ATTACHABLE.includes(agent.state)) throw new Error(`agent ${id} is ${agent?.state ?? "gone"}; see ${SELF} ls`);
+    await attachHere(agent);
+    const after = await byId(id);
+    if (!after || CLOSED.includes(after.state)) return void console.log(`${id} is ${after?.state ?? "archived"}. Archive: ${outputDir}`);
+    console.log(`Detached; ${id} keeps running.`);
+    await openTab(config, id);
+    console.log(`Attach: ${attachCommand(id)}`);
   } else if (command === "ls") {
     const up = await isUp(control);
     const list = up ? await agents() : [];
-    if (list.length === 0) console.log(`${up ? "No live agents" : "bottle is not running, so no live agents"}. Start one with: ${SELF} run --prompt "..."`);
+    if (list.length === 0) console.log(`${up ? "No live agents" : "bottle is not running, so no live agents"}. Start one with: ${SELF} run "<prompt>"`);
     const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
     const rows = list.map((agent) => [
       agent.id,
@@ -211,19 +265,11 @@ async function main(command: Command_, values: Values, positionals: string[]) {
       .slice(0, FINISHED_SHOWN);
     if (finished.length > 0) console.log(`\nLast finished agents (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
-    const agent = await resolveAgent(positionals[0]!);
-    if (!["starting", "idle", "busy", "reconfiguring"].includes(agent.state))
-      throw new Error(`agent ${agent.id} is ${agent.state}, so it has no terminal to attach to`);
-    console.error(`Attaching to ${agent.name} (${agent.id}). Ctrl-\\ detaches, and Pi keeps running.`);
-    const terminal = attach(agent.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
-    const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
-    child.on("error", (error) => {
-      console.error(`error: cannot start the terminal: ${error.message}`);
-      process.exit(1);
-    });
-    child.on("exit", (code) => process.exit(code ?? 1));
+    const agent = await resolveAgent(positionals[0]);
+    if (!ATTACHABLE.includes(agent.state)) throw new Error(`agent ${agent.id} is ${agent.state}, so it has no terminal to attach to`);
+    await attachHere(agent);
   } else if (command === "stop") {
-    const agent = await resolveAgent(positionals[0]!);
+    const agent = await resolveAgent(positionals[0]);
     await api(controlApi.agents[":id"].close.$post({ param: { id: agent.id } }));
     console.log(`Closing ${agent.id} (${agent.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
   }
@@ -234,19 +280,20 @@ const program = new Command(SELF)
   .exitOverride((error) => process.exit(error.exitCode === 1 ? 2 : error.exitCode)); // usage errors exit 2
 program
   .command("run")
-  .description("Start an agent")
-  .option("--template <name>", "template; offline asks speaker for nothing at launch", "offline")
+  .description("Start an agent and attach to its Pi terminal (Ctrl-\\ detaches); with a prompt it runs once and archives when Pi writes /output/DONE")
+  .argument("[prompt]", "what the agent should do; none opens Pi for you to type")
+  .option("-d, --detach", "do not attach: print the attach command and return (the agent is unattended)")
+  .option("-t, --template <name>", "template; offline asks speaker for nothing at launch", "offline")
+  .option("-m, --model <id>", "model")
   .option("--name <name>", "agent name")
-  .option("--model <id>", "model")
-  .option("--prompt <text>", "run once and archive when Pi writes /output/DONE (implies --unattended)")
   .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
     const hours = Number(text);
     if (!Number.isFinite(hours) || hours <= 0) throw new InvalidArgumentError("a positive number of hours");
     return hours;
   })
-  .addOption(new Option("--attended", "expect the owner at the agent's terminal, where Pi may ask questions").conflicts("unattended"))
-  .option("--unattended", "tell Pi nobody is watching, so it records assumptions instead of asking")
-  .action((values: Values) => main("run", values, []));
+  .addOption(new Option("--attended", "Pi may ask questions even when detached").conflicts("unattended"))
+  .option("--unattended", "Pi records assumptions instead of asking, even when attached")
+  .action((prompt: string | undefined, values: Values) => main("run", values, prompt ? [prompt] : []));
 program
   .command("ls")
   .description("List live agents, and the last finished ones")
@@ -254,13 +301,13 @@ program
 program
   .command("attach")
   .description("Open an agent's Pi terminal; Ctrl-\\ detaches and leaves Pi running")
-  .argument("<id|name>")
-  .action((agent: string) => main("attach", {}, [agent]));
+  .argument("[id|name]", "default: the only open agent")
+  .action((agent?: string) => main("attach", {}, agent ? [agent] : []));
 program
   .command("stop")
   .description("Close an agent and archive its artifacts and transcript")
-  .argument("<id|name>")
-  .action((agent: string) => main("stop", {}, [agent]));
+  .argument("[id|name]", "default: the only open agent")
+  .action((agent?: string) => main("stop", {}, agent ? [agent] : []));
 program
   .command("register")
   .description("Register this host as a speaker sandbox host")

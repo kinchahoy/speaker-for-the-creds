@@ -37,7 +37,7 @@ const ConfigFile = z
       models: z.array(model).default([]),
     }),
     hostedProviders: z.array(HostedProviderSchema),
-    // Each agent opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
+    // A detached agent (run -d, or Ctrl-\ during run) gets a tab in the Herdr app's "bottle" space when `hc` is on PATH; false turns that off.
     herdr: z.boolean().optional(),
     // A bottle that `run` started stops itself once no agent has been open for this long; `serve` never does.
     idleStopMinutes: z.number().positive().default(10),

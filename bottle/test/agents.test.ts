@@ -186,7 +186,7 @@ test("an approved grant reaches the agent's live view and is reported to speaker
 
 test("stop asks Pi to quit, exports the transcript, archives the records, closes the VM and ends the speaker agent", async (t) => {
   const f = await fixture(t);
-  const agent = await f.agents.create({ template: "offline", name: "archive me", prompt: "write DONE" });
+  const agent = await f.agents.create({ template: "offline", name: "archive me", prompt: "write DONE", attended: false });
   assert.equal(agent.attended, false);
   await writeFile(`${agent.outputDir}/artifacts/result.txt`, "result\n");
   await f.askModel();
