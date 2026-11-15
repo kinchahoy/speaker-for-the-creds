@@ -9,9 +9,8 @@ const model = z.object({ id: z.string().min(1), label: z.string().min(1) });
 
 const HostedProviderSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, "a provider id uses lowercase letters, digits, and dashes"),
-  baseUrl: z.url().refine((value) => new URL(value).protocol === "https:", "a hosted provider uses https"),
-  host: z.hostname().refine((value) => value === value.toLowerCase(), "a hosted provider host must be lowercase"),
-  credential: z.string().regex(/^[A-Z][A-Z0-9_]*$/, "a credential name uses uppercase letters, digits, and underscores"),
+  // The speaker service that holds the provider's key; the model door sends its calls to $SPEAKER_URL/<service>/.
+  service: z.string().regex(/^[a-zA-Z0-9_-]+$/, "a service id uses letters, digits, dashes, and underscores"),
   models: z.array(model).min(1),
 });
 
@@ -67,10 +66,8 @@ export const validateConfig = (data: unknown): Config => {
   if (config.controlPort === config.guestPort) throw new Error("control and guest ports must be distinct");
   if (new Set(config.hostedProviders.map((provider) => provider.id)).size !== config.hostedProviders.length)
     throw new Error("hosted provider ids must be unique");
-  for (const provider of config.hostedProviders) {
-    if (new URL(provider.baseUrl).hostname !== provider.host) throw new Error(`hosted provider ${provider.id} baseUrl must use ${provider.host}`);
+  for (const provider of config.hostedProviders)
     if (new Set(provider.models.map((entry) => entry.id)).size !== provider.models.length) throw new Error(`hosted provider ${provider.id} repeats a model id`);
-  }
   const [upstreamHost, upstreamPort] = config.localModel.upstream.split(":");
   if (
     !/^[^:]+:\d{1,5}$/.test(config.localModel.upstream) ||

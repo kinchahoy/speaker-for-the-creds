@@ -16,8 +16,7 @@ import { freePorts, setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
 import { Catalog, pi } from "../src/pi.ts";
-import { modelDoor, secretRoute, type Boot, type Guest } from "../src/sandbox.ts";
-import type { Dispatcher } from "undici";
+import { modelDoor, type Boot, type Guest } from "../src/sandbox.ts";
 import { Tasks } from "../src/tasks.ts";
 
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -88,10 +87,10 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
   // The real model door over a stub upstream, wired as boot wires it; a test asks it for model calls.
   const stubs: Server[] = [];
   let askModel = async () => {};
-  const boot: Boot = async (_config, live, _limits, paths) => {
+  const boot: Boot = async (_config, live, _limits, paths, _env, speaker) => {
     const upstream = createServer((req, res) => void req.resume().on("end", () => res.writeHead(200).end("data: {}\n\n")));
     const modelConfig = { ...config, localModel: { ...config.localModel, upstream: "127.0.0.1:0" } };
-    const door = createServer(modelDoor(modelConfig, live, secretRoute(live, { close: async () => {} } as Dispatcher), paths.modelCalls));
+    const door = createServer(modelDoor(modelConfig, live, speaker, paths.modelCalls));
     stubs.push(upstream, door);
     upstream.listen(0, "127.0.0.1");
     door.listen(0, "127.0.0.1");

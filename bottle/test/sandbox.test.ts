@@ -105,7 +105,7 @@ describe("model endpoint", () => {
     const view = live({ maxModelRequests: 2 });
     const modelCalls = join(root, "model-calls.jsonl");
     const socket = join(root, "model.sock");
-    const door = await listen(socket, modelDoor(config, view, secretRoute(view, speakerProxy), modelCalls));
+    const door = await listen(socket, modelDoor(config, view, { url: "http://127.0.0.1:1", agentToken: "t" }, modelCalls));
     const client = new Client("http://model.internal", { socketPath: socket });
     const ask = async () => {
       const response = await client.request({

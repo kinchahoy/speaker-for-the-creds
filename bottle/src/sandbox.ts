@@ -264,20 +264,27 @@ const forward = async (
 };
 
 /**
- * The model endpoint: the local model, or `/hosted/<provider>/...` through speaker's proxy (which holds the key). Each
- * request counts against the task's cap; a refused one gets a 429 that says so.
+ * The model endpoint: the local model, or `/hosted/<provider>/<path>` sent to speaker's `<service>/<path>` as the task's
+ * agent (speaker checks the service grant and adds the provider's key). Each request counts against the task's cap; a
+ * refused one gets a 429 that says so.
  */
 export const modelDoor =
-  (config: Config, live: Live, route: ReturnType<typeof secretRoute>, modelCalls: string): RequestListener =>
+  (config: Config, live: Live, speaker: { url: string; agentToken: string }, modelCalls: string): RequestListener =>
   async (req, res) => {
     const path = req.url ?? "/";
     const provider = config.hostedProviders.find((entry) => path.startsWith(`/hosted/${entry.id}/`));
-    const target = provider ? new URL(path.slice(`/hosted/${provider.id}`.length), provider.baseUrl) : new URL(path, `http://${config.localModel.upstream}`);
-    if (provider && (await route.allow(provider.host)) !== true)
-      return void modelReply(res, 403, `the ${provider.credential} secret is not granted to this task`);
+    const target = provider
+      ? new URL(`/${provider.service}${path.slice(`/hosted/${provider.id}`.length)}`, speaker.url)
+      : new URL(path, `http://${config.localModel.upstream}`);
+    // The agent token goes to speaker's origin only, and only under the provider's service (no `..` out of it).
+    if (provider && (target.origin !== new URL(speaker.url).origin || !target.pathname.startsWith(`/${provider.service}/`)))
+      return void modelReply(res, 400, `a hosted model path stays under /hosted/${provider.id}/`);
     if (!countModelRequest(live)) return void modelReply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
-    const dispatcher = provider ? route.dispatcher(provider.host) : undefined;
-    await forward(req, res, target, { ...(dispatcher ? { dispatcher } : {}), record: { live, file: modelCalls }, fail: modelReply });
+    await forward(req, res, target, {
+      ...(provider ? { headers: { authorization: `Bearer ${speaker.agentToken}` } } : {}),
+      record: { live, file: modelCalls },
+      fail: modelReply,
+    });
   };
 
 /**
@@ -423,7 +430,7 @@ export async function boot(
   const key = await newSshKey(dir);
   const servers = [
     await serveEgress(egress, `${socketDir}/egress.sock`),
-    await listen(`${socketDir}/model.sock`, modelDoor(config, live, route, paths.modelCalls), modelReply),
+    await listen(`${socketDir}/model.sock`, modelDoor(config, live, speaker, paths.modelCalls), modelReply),
     await listen(`${socketDir}/speaker.sock`, speakerDoor(speaker, key.public)),
     await listen(`${socketDir}/control.sock`, (req, res) => forward(req, res, new URL(req.url ?? "/", `http://127.0.0.1:${config.guestPort}`))),
     await serveSsh(`${socketDir}/ssh.sock`, new URL(config.speaker.url).hostname, config.speaker.sshPort),

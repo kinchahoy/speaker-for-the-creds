@@ -25,9 +25,7 @@
   "hostedProviders": [
     {
       "id": "openrouter",
-      "baseUrl": "https://openrouter.ai/api/v1",
-      "host": "openrouter.ai",
-      "credential": "OPENROUTER",
+      "service": "openrouter",
       "models": [
         {
           "id": "moonshotai/kimi-k2",

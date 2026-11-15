@@ -151,7 +151,7 @@ test("guest configuration mounts no skills, sends no extension config for an MCP
     extensions: {},
   });
   const directory = join(config.configRoot, "guest");
-  writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, new Map(), [], ["context7"], []);
+  writeGuestConfig(directory, config, catalog, { name: "smoke", model: "local/qwen", attended: false }, [], ["context7"], []);
   const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
   assert.equal(args.includes("--skill"), false);
   assert.equal(existsSync(join(directory, "skills")), false);
@@ -182,7 +182,7 @@ test("attended mode loads ask-user-question; ext: grants load catalog extensions
   const catalog = Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
   const write = (attended: boolean, extensions: string[], prompt?: string) => {
     const directory = join(config.configRoot, `guest-${attended}-${extensions.join("-")}`);
-    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", prompt, attended }, new Map(), [], [], extensions);
+    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", prompt, attended }, [], [], extensions);
     const args = readFileSync(join(directory, "args"), "utf8").trim().split("\n");
     const loaded = args.flatMap((arg, index) => (args[index - 1] === "-e" ? [arg] : []));
     const tools = args[args.indexOf("--tools") + 1]!.split(",");
@@ -222,8 +222,8 @@ test("a template's want, label and duration become the task's first request", ()
     reason: "launch template dev: Develop things",
     duration: "1d",
   });
-  // A hosted model's key is a speaker secret and joins the same request, without repeating an item.
-  assert.deepEqual(launchRequest(dev, "agent-1", ["secret:OPENROUTER", "site:pypi.org"])?.want, ["group:developer", "site:pypi.org", "secret:OPENROUTER"]);
+  // A hosted model's speaker service joins the same request, without repeating an item.
+  assert.deepEqual(launchRequest(dev, "agent-1", ["openrouter.full", "site:pypi.org"])?.want, ["group:developer", "site:pypi.org", "openrouter.full"]);
   // No want, no request; the default duration is speaker's default.
   const bare = Template.parse({ id: "bare", label: "Bare", limits });
   assert.equal(launchRequest(bare, "agent-1"), undefined);
@@ -328,23 +328,13 @@ test("request_capability answers at once and delivers the decision as one [speak
   );
 });
 
-test("a hosted model's key in models.json is the placeholder speaker issued, never a secret", () => {
+test("a hosted model in models.json points at the model door and holds no key", () => {
   const base = loadConfig(writeConfig());
-  const config = {
-    ...base,
-    hostedProviders: [
-      { id: "openrouter", baseUrl: "https://openrouter.ai/api/v1", host: "openrouter.ai", credential: "OPENROUTER", models: [{ id: "m", label: "M" }] },
-    ],
-  };
-  const catalog = { mcps: {}, extensions: {} };
-  const task = { name: "t", model: "openrouter/m", attended: false };
-  const apiKey = (keys: Map<string, string>, name: string) => {
-    const directory = join(base.configRoot, name);
-    writeGuestConfig(directory, config, catalog, task, keys, [], [], []);
-    return JSON.parse(readFileSync(join(directory, "models.json"), "utf8")).providers.openrouter.apiKey;
-  };
-  assert.equal(apiKey(new Map([["OPENROUTER", "speaker-placeholder-abc"]]), "granted"), "speaker-placeholder-abc");
-  assert.match(apiKey(new Map(), "waiting"), /not-granted-yet/);
+  const config = { ...base, hostedProviders: [{ id: "openrouter", service: "openrouter", models: [{ id: "m", label: "M" }] }] };
+  const directory = join(base.configRoot, "hosted");
+  writeGuestConfig(directory, config, { mcps: {}, extensions: {} }, { name: "t", model: "openrouter/m", attended: false }, [], [], []);
+  const { baseUrl, apiKey } = JSON.parse(readFileSync(join(directory, "models.json"), "utf8")).providers.openrouter;
+  assert.deepEqual([baseUrl, apiKey], [`http://${base.localModel.guestHost}/hosted/openrouter`, "speaker-service"]);
 });
 
 test("the change message lists what loaded, what did not and what was removed", () => {
@@ -382,7 +372,7 @@ test("catalog extensions carry config files that only a task loading the extensi
   });
   const write = (name: string, extIds: string[]) => {
     const directory = join(config.configRoot, name);
-    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", attended: false }, new Map(), [], [], extIds);
+    writeGuestConfig(directory, config, catalog, { name: "t", model: "local/qwen", attended: false }, [], [], extIds);
     return join(directory, "agent-files");
   };
   const withNotes = write("with", ["notes"]);

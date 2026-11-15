@@ -13,15 +13,15 @@ import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, t
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 
 /**
- * A task's lifecycle. `starting` until Pi first runs, or `awaiting-key` while a one-shot task waits for its hosted
- * model's key (Pi has not started); then `idle` and `busy` as the guest reports; `reconfiguring` while Pi restarts with
+ * A task's lifecycle. `starting` until Pi first runs, or `awaiting-grant` while a one-shot task waits for its hosted
+ * model's speaker service grant (Pi has not started); then `idle` and `busy` as the guest reports; `reconfiguring` while Pi restarts with
  * new MCP servers or extensions; `closing` while it is archived. `start-failed` means Pi never started; `pi-down` means
  * a restart failed after Pi had run, so it has a transcript to export. A failed close ends in `failed-archive` with the
  * work tree kept.
  */
 export type TaskState =
   | "starting"
-  | "awaiting-key"
+  | "awaiting-grant"
   | "idle"
   | "busy"
   | "reconfiguring"
@@ -32,8 +32,8 @@ export type TaskState =
   | "failed-archive";
 type TaskEvent = "ready" | "wait" | "start" | "work" | "rest" | "reconfigure" | "fail" | "close" | "archive" | "archiveFailed";
 const taskTable: Table<TaskState, TaskEvent> = {
-  starting: { ready: "idle", wait: "awaiting-key", fail: "start-failed", close: "closing" },
-  "awaiting-key": { start: "starting", close: "closing" },
+  starting: { ready: "idle", wait: "awaiting-grant", fail: "start-failed", close: "closing" },
+  "awaiting-grant": { start: "starting", close: "closing" },
   idle: { work: "busy", rest: "idle", reconfigure: "reconfiguring", close: "closing" },
   busy: { work: "busy", rest: "idle", close: "closing" },
   reconfiguring: { ready: "idle", fail: "pi-down", close: "closing" },
@@ -45,7 +45,7 @@ const taskTable: Table<TaskState, TaskEvent> = {
 };
 export const closed = (task: Pick<Task, "state">) => ["closing", "archived", "failed-archive"].includes(task.state);
 /** Pi never ran in these states, so there is no session to quit or export. */
-const neverRan = (task: Pick<Task, "state">) => task.state === "start-failed" || task.state === "awaiting-key";
+const neverRan = (task: Pick<Task, "state">) => task.state === "start-failed" || task.state === "awaiting-grant";
 
 export type Task = {
   id: string;
@@ -80,8 +80,6 @@ export type Task = {
   extRunning: string[];
   /** The id of the latest grant change written for the guest (see grantChange). */
   changeId: number;
-  /** Placeholders speaker issued for this task's hosted-model key (provider secret name to placeholder). */
-  keys: Map<string, string>;
   live: Live;
   guest: Guest;
 };
@@ -240,7 +238,6 @@ export class Tasks {
       maxModelRequests: template.limits.maxModelRequests,
       modelCapNoted: false,
     };
-    const keys = new Map<string, string>();
     const guestToken = randomBytes(24).toString("hex");
     // The agent's label is the task as the owner would say it: the launch name, else the template's label.
     const agent = await upstream(this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`));
@@ -248,7 +245,7 @@ export class Tasks {
     try {
       // Speaker's proxy certificate, fetched once for the guest's trust store and bottle's own tunnel to the proxy.
       const ca = await upstream(speakerCa(this.config));
-      writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, keys, [], [], []);
+      writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, [], [], []);
       guest = await this.#boot(
         this.config,
         live,
@@ -290,25 +287,26 @@ export class Tasks {
       changeId: 0,
       live,
       guest,
-      keys,
     };
     this.byId.set(id, task);
     this.byGuestToken.set(guestToken, task);
-    // A launch prompt is sent once, to a fresh session: if the hosted model's key were still missing, that first turn
-    // would fail for good. Pi then starts when the key arrives (#fetchProviderKey starts it with the key in place).
-    const awaitKey = Boolean(input.prompt) && this.#providerSecrets(model).length > 0;
+    // A launch prompt is sent once, to a fresh session: if the hosted model's service were not granted yet, that first
+    // turn would fail for good. Pi then starts when the grant arrives (see #startWhenGranted).
+    const awaitGrant = Boolean(input.prompt) && this.#modelService(model).length > 0;
     try {
-      // The template's want list is the task's first request. A hosted model's key is a speaker secret, asked for here too.
-      const first = launchRequest(template, task.agentId, this.#providerSecrets(model));
+      // The template's want list is the task's first request. A hosted model's speaker service is asked for here too.
+      const first = launchRequest(template, task.agentId, this.#modelService(model));
       if (first) await upstream(this.speaker.request({ ...first, ...(guest.sshKey ? { sshKey: guest.sshKey } : {}) }));
-      if (!awaitKey) await pi.start(guest);
+      if (!awaitGrant) await pi.start(guest);
     } catch (error) {
       note(live, `Pi start failed: ${(error as Error).message}`);
       this.#move(task, "fail");
       await this.close(task).catch(() => undefined); // the launch error is the one the owner needs
       throw error;
     }
-    this.#move(task, awaitKey ? "wait" : "ready");
+    this.#move(task, awaitGrant ? "wait" : "ready");
+    // The grant may have come in a snapshot while the task was still starting.
+    this.#startWhenGranted(task);
     // The task as a Herdr tab: an attach terminal labelled into the "bottle" space; it closes when the task ends.
     if (this.config.herdr !== false) {
       const attach = [process.execPath, `${import.meta.dirname}/cli.ts`, "attach", id];
@@ -339,9 +337,9 @@ export class Tasks {
     return task;
   }
 
-  /** A hosted model's key is the speaker secret its provider names; a local model needs none. */
-  #providerSecrets = (model: string) =>
-    this.config.hostedProviders.filter((provider) => provider.id === model.split("/")[0]).map((provider) => `secret:${provider.credential}`);
+  /** A hosted model's calls need its provider's speaker service in full (a chat completion is a POST); a local model needs none. */
+  #modelService = (model: string) =>
+    this.config.hostedProviders.filter((provider) => provider.id === model.split("/")[0]).map((provider) => `${provider.service}.full`);
 
   /** Whether bottle can enforce a grant: speaker's items are checked against the shared grammar, then against what this host offers. */
   #supported = (grant: Grant) => {
@@ -381,7 +379,7 @@ export class Tasks {
       }
       task.grants = mine;
       this.#apply(task);
-      this.#fetchProviderKey(task);
+      this.#startWhenGranted(task);
     }
     this.#reportApplied();
   }
@@ -391,19 +389,10 @@ export class Tasks {
     this.#report(this.list().flatMap((task) => inForce(task.grants, { mcp: task.mcpRunning, ext: task.extRunning })));
   }
 
-  /** Once the task holds its hosted model's secret, asks speaker for the placeholder and (re)starts Pi with it in models.json. */
-  #fetchProviderKey(task: Task) {
-    for (const item of this.#providerSecrets(task.model)) {
-      const secret = item.slice("secret:".length);
-      if (task.keys.has(secret) || !this.#granted(task, "secret").some((grant) => grant.item === item)) continue;
-      void this.speaker
-        .placeholder(task.agentToken, secret)
-        .then((placeholder) => {
-          task.keys.set(secret, placeholder);
-          return this.#restartAtIdle(task);
-        })
-        .catch((error: Error) => note(task.live, `could not set up the model key ${secret}: ${error.message}`));
-    }
+  /** A task awaiting its hosted model's service starts Pi once speaker shows the grant. */
+  #startWhenGranted(task: Task) {
+    const granted = this.#granted(task, "service").map((grant) => grant.item);
+    if (task.state === "awaiting-grant" && this.#modelService(task.model).every((item) => granted.includes(item))) void this.#restartAtIdle(task);
   }
 
   #granted = (task: Task, kind: ItemKind) => unexpired(task.grants).filter((grant) => kindOf(grant.item) === kind);
@@ -440,13 +429,13 @@ export class Tasks {
 
   done = (task: Task) => existsSync(`${task.outputDir}/artifacts/DONE`);
 
-  /** Restarts Pi at the next idle boundary with the current configuration; a task still awaiting its key starts Pi for the first time. */
+  /** Restarts Pi at the next idle boundary with the current configuration; a task still awaiting its model's grant starts Pi for the first time. */
   #restartAtIdle(task: Task) {
     const run =
       task.jobs.restart ??
       (async () => {
         while (task.state === "busy" || task.state === "starting") await delay(250);
-        const first = task.state === "awaiting-key";
+        const first = task.state === "awaiting-grant";
         if (task.state !== "idle" && !first) return;
         this.#move(task, first ? "start" : "reconfigure");
         // A close may begin while Pi restarts; the restart then leaves the state alone.
@@ -454,7 +443,7 @@ export class Tasks {
         const mcpIds = this.#wanted(task, "mcp");
         const extIds = this.#wanted(task, "ext");
         try {
-          writeGuestConfig(task.guestConfigDir, this.config, this.catalog, task, task.keys, task.grants, mcpIds, extIds);
+          writeGuestConfig(task.guestConfigDir, this.config, this.catalog, task, task.grants, mcpIds, extIds);
           const items = (mcp: string[], ext: string[]) => [...mcp.map((id) => `mcp:${id}`), ...ext.map((id) => `ext:${id}`)];
           const change = grantChange(this.catalog, task.changeId + 1, items(task.mcpRunning, task.extRunning), items(mcpIds, extIds));
           if (change.added.length || change.removed.length) {

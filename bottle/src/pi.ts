@@ -103,7 +103,7 @@ export const CLI_TOOLS = `
   .split(/\s+/);
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
 
-/** Hosted providers listed in models.json work once their key, a speaker secret, is granted to the task. */
+/** Hosted providers listed in models.json work once the task holds their speaker service (`<service>.full`). */
 export const availableModels = (config: Config) => [
   ...config.localModel.models.map((model) => ({
     id: `local/${model.id}`,
@@ -119,8 +119,7 @@ export const availableModels = (config: Config) => [
 
 const modelIds = (models: { id: string }[]) => models.map(({ id }) => ({ id }));
 
-/** `keys` holds the placeholder speaker issued for each granted provider secret; until then Pi is told it is missing. */
-const modelsJson = (config: Config, keys: Map<string, string>) => ({
+const modelsJson = (config: Config) => ({
   providers: {
     local: {
       baseUrl: `http://${config.localModel.guestHost}/v1`,
@@ -133,11 +132,11 @@ const modelsJson = (config: Config, keys: Map<string, string>) => ({
       config.hostedProviders.map((provider) => [
         provider.id,
         {
-          // The guest has no route to the provider: its model endpoint forwards /hosted/<id>/... there.
-          baseUrl: `http://${config.localModel.guestHost}/hosted/${provider.id}${new URL(provider.baseUrl).pathname}`,
+          // The guest's model endpoint sends /hosted/<id>/... to the provider's speaker service, with the task's own
+          // agent token in place of this key; speaker adds the real one.
+          baseUrl: `http://${config.localModel.guestHost}/hosted/${provider.id}`,
           api: "openai-completions",
-          // Speaker's proxy swaps this placeholder for the real key in requests to the secret's hosts.
-          apiKey: keys.get(provider.credential) ?? `speaker-secret-${provider.credential}-not-granted-yet`,
+          apiKey: "speaker-service",
           models: modelIds(provider.models),
         },
       ]),
@@ -229,7 +228,6 @@ export const writeGuestConfig = (
   config: Config,
   catalog: Catalog,
   task: { name: string; model: string; prompt?: string; attended: boolean },
-  keys: Map<string, string>,
   grants: Grant[],
   mcpIds: string[],
   extIds: string[],
@@ -241,7 +239,7 @@ export const writeGuestConfig = (
   copyFileSync(`${import.meta.dirname}/../guest/extensions/request-capability.ts`, `${directory}/extensions/request-capability.ts`);
   copyFileSync(`${import.meta.dirname}/../guest/extensions/reply.ts`, `${directory}/extensions/reply.ts`);
   const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
-  writeJson("models.json", modelsJson(config, keys));
+  writeJson("models.json", modelsJson(config));
   writeJson("settings.json", { packages: [], defaultProjectTrust: "never" });
   writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(task, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });

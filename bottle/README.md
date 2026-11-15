@@ -54,6 +54,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 - `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Both are required: until you register, `init bottle` writes placeholders from `config.example.json`, so set them by hand if you skip registering.
 - `localModel.upstream`: one loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
 - `localModel.models`: the served model IDs. Name one with `--model local/<id>`. Local inference is baseline access, independent of speaker grants.
+- `hostedProviders`: each `{ "id", "service", "models" }` names the speaker service that holds a hosted provider's key (see Hosted model providers). Name a model with `--model <id>/<model>`.
 - `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
 
 <!-- author: ai -->
@@ -111,7 +112,7 @@ Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USE
 | State | Meaning |
 | --- | --- |
 | `starting` | The VM is up and Pi is starting |
-| `awaiting-key` | A `--prompt` task on a hosted model: Pi has not started and waits for you to approve the model key |
+| `awaiting-grant` | A `--prompt` task on a hosted model: Pi has not started and waits for you to approve the model's speaker service |
 | `idle`, `busy` | Pi is waiting or working, as the guest reports |
 | `reconfiguring` | Pi is restarting with new MCP servers or extensions |
 | `pi-down` | A restart failed, or Pi exited within 3 seconds of one; the task keeps its transcript and `stop` still exports it |
@@ -206,7 +207,7 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/tasks.ts` (task lifecycle as
 {.ai}
 
 - Egress: one `proxy-chain` server per task decides every request from the live grant view. A host on the task's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the task agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the task launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`.
-- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and appends one line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>/...`. Once the provider's secret is granted, the forwarder sends those requests through speaker's proxy.
+- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the task's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and appends one line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>`. The forwarder sends `/hosted/<id>/<path>` to `<speaker.url>/<service>/<path>` with the task's agent token, and nowhere else.
 - Speaker: the speaker door allows only speaker's agent-facing routes and adds the task's agent token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder.
 - Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
 - Folders: they go over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Folders always come over SSH, so bottle reports every share as not mountable, and speaker delivers each `folder:` grant through its jump server.
@@ -228,10 +229,10 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/tasks.ts` (task lifecycle as
 A template is the runtime profile bottle owns (VM size, deadline, model-request cap, attended mode) plus what the task starts with. A group is defined in speaker and names items you approve together. To change what tasks start with, edit a template's `want` or the group in speaker. To change how big or how long a task is, edit the template's limits.
 {.ai}
 
-A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model key, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
+A task with a local model starts Pi at once and does not wait for its first request. A task launched with `--prompt` that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended task may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended templates such as `loop`.
 {.ai}
 
-- Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the task." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model key arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
+- Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the task." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model's grant arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
 - Pi-alive check: after every Pi start or restart, bottle waits 3 seconds and checks that Pi is still running. If it exited (a bad extension path or a crashing extension), the task goes to `pi-down` with the tail of Pi's stderr (`/run/pi.err` in the guest) in its events, and the `mcp:` and `ext:` grants are not reported to speaker as in force. A failed first start is `start-failed`. This needs the guest image rebuilt for the stderr capture; without it the note says no stderr was captured.
 - VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends a task at its deadline. The optional `maxModelRequests` caps the model request count.
 - `workGiB` is a launch-time free-space check. Enforce work and output quotas through the host filesystem before unattended tasks share a disk with other services.
@@ -273,7 +274,7 @@ The grant snapshot for a secret carries the secret's hosts, not its value. bottl
 
 ### Hosted model providers
 
-A hosted provider's key is a speaker secret like any other. In `config.json`, set `hostedProviders[].credential` to the secret's name, and add the provider's API host as one of the secret's allowed hosts in speaker's Setup. Launch with `--model <provider>/<model>`. The task adds `secret:<credential>` to its first request. Once you grant it, bottle asks speaker for the task's placeholder, writes it into `models.json`, and restarts Pi at idle. The VM holds only the placeholder; speaker's proxy replaces it with the key. Until then, Pi's key reads `speaker-secret-<NAME>-not-granted-yet`. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
+A hosted provider is a speaker service, such as the starter `openrouter` service; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `--model <id>/<model>`. The task adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the task's agent token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why a `--prompt` task on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
 {.ai}
 
 <!-- author: ai -->
@@ -329,8 +330,8 @@ VMs are named `bottle-<id>`; at startup the service removes any left behind by a
 
 | Credential path | What the guest sees | Who holds the real value |
 | --- | --- | --- |
-| A speaker secret (`secret:<NAME>`, including a hosted model provider's key) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle never has it |
-| Remote MCP server | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
+| A speaker secret (`secret:<NAME>`) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle never has it |
+| Remote MCP server or hosted model provider | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
 | Agent token | A per-task placeholder (`SPEAKER_TOKEN`) | bottle, which created the agent; the speaker door adds it only to requests to speaker. It is bound to this host's address |
 | Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
 | stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |

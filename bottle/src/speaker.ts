@@ -94,18 +94,8 @@ export const speakerClient = (config: Config, hostToken: string) => {
       Agent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout))),
     deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout)),
     request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout))),
-    /** The placeholder speaker issued this agent for a secret it holds (what `/catalog` shows); only the agent's own token can ask. */
-    placeholder: async (agentToken: string, secret: string) => {
-      const response = await speakerApi(config, agentToken).catalog.$get({}, timeout);
-      if (!response.ok) throw new Error(`speaker GET catalog returned ${response.status}: ${await response.text()}`);
-      const { secrets = {} } = Me.parse(await response.json());
-      const placeholder = secrets[secret]?.placeholder;
-      if (!placeholder) throw new Error(`speaker shows no active grant of secret ${secret} for this task`);
-      return placeholder;
-    },
   };
 };
-const Me = z.object({ secrets: z.record(z.string(), z.object({ placeholder: z.string() })).optional() });
 export type Speaker = ReturnType<typeof speakerClient>;
 
 /** Speaker's proxy certificate authority: secret hosts are TLS-terminated there, so the guest and bottle's tunnel must trust it. */

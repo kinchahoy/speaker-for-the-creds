@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
-import type { Server } from "node:http";
+import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
@@ -20,7 +20,7 @@ import { createApp, readConfig } from "../../speaker/server.ts";
 import * as x509 from "../../speaker/node_modules/@peculiar/x509/build/index.js";
 import { setOwnerPassword } from "../../speaker/test/owner.ts";
 import type { Config } from "../src/config.ts";
-import { secretRoute } from "../src/sandbox.ts";
+import { modelDoor, secretRoute, type Live } from "../src/sandbox.ts";
 import { launchRequest, Template } from "../src/grants.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
 import { hostApproved, registerHost, SPEAKER_LIMITS, type Snapshot, speakerClient, speakerCa, speakerProxy, watchGrants as watch } from "../src/speaker.ts";
@@ -398,9 +398,9 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
 
   // What the agent is told: the variable to set to a placeholder, and no proxy settings (the sandbox route is built in).
   const me = (await (await fetch(`${f.url}/_speaker/catalog`, { headers: { authorization: `Bearer ${agent.agentToken}` } })).json()) as {
-    secrets: Record<string, { environment: Record<string, string>; hosts: string[] }>;
+    secrets: Record<string, { placeholder: string; environment: Record<string, string>; hosts: string[] }>;
   };
-  const placeholder = await speaker.placeholder(agent.agentToken, "GITHUB_TOKEN");
+  const { placeholder } = me.secrets.GITHUB_TOKEN;
   assert.match(placeholder, /^speaker-placeholder-[0-9a-f]{48}$/);
   assert.deepEqual(me.secrets.GITHUB_TOKEN.environment, { GH_TOKEN: placeholder });
 
@@ -432,7 +432,6 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
     { ...f.config, localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] }, hostedProviders: [] } as Config,
     Catalog.parse({ mcps: {}, extensions: {} }),
     { name: "t", model: "local/m", attended: false },
-    new Map(),
     grants,
     [],
     [],
@@ -458,4 +457,66 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   assert.equal(await route.allow("localhost"), undefined);
   assert.equal(route.dispatcher("localhost"), undefined);
   assert.equal(seen.length, 1);
+});
+
+test("a hosted model call through the model door reaches the provider's speaker service as the task's agent", async (t) => {
+  const f = await fixture(t);
+  const seen: { url?: string; authorization?: string }[] = [];
+  const provider = createHttpServer((req, res) => {
+    seen.push({ url: req.url, authorization: req.headers.authorization });
+    req.resume().on("end", () => res.setHeader("content-type", "application/json").end('{"choices":[]}'));
+  }).listen(0, "127.0.0.1");
+  await once(provider, "listening");
+  t.after(() => {
+    provider.closeAllConnections();
+    provider.close();
+  });
+  await f.ownerForm("/services/save", {
+    id: "llm",
+    baseUrl: `http://127.0.0.1:${port(provider)}/api/v1`,
+    authType: "bearer",
+    secret: "real-provider-key",
+    read: "ask",
+    write: "ask",
+  });
+  const { speaker } = await f.host(["secret"]);
+  const agent = await speaker.createAgent("pi", "Test LLM · Pi on test");
+
+  const config = {
+    ...f.config,
+    localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [] },
+    hostedProviders: [{ id: "hosted", service: "llm", models: [] }],
+  } as unknown as Config;
+  const live: Live = { hosts: [], secretHosts: [], shares: new Map(), events: [], modelRequests: 0, modelCapNoted: false };
+  const modelCalls = join(await mkdtemp(join(tmpdir(), "bottle-model-")), "model-calls.jsonl");
+  const door = createHttpServer(modelDoor(config, live, { url: f.url, agentToken: agent.agentToken }, modelCalls)).listen(0, "127.0.0.1");
+  await once(door, "listening");
+  t.after(() => door.close());
+  // Pi sends its dummy key; the door replaces it with the task's agent token, and speaker with the provider's key.
+  const ask = () =>
+    fetch(`http://127.0.0.1:${port(door)}/hosted/hosted/chat/completions`, {
+      method: "POST",
+      headers: { authorization: "Bearer speaker-service" },
+      body: '{"model":"m"}',
+    });
+
+  // Without the service grant speaker refuses, and nothing reaches the provider.
+  assert.equal((await ask()).status, 403);
+  assert.equal(seen.length, 0);
+  // A path that would climb out of the service never leaves the door (sent raw: fetch would resolve the dots itself).
+  const climb = httpRequest({ host: "127.0.0.1", port: port(door), path: "/hosted/hosted/../../_speaker/catalog" }).end();
+  const [climbed] = (await once(climb, "response")) as [IncomingMessage];
+  climbed.resume();
+  assert.equal(climbed.statusCode, 400);
+
+  const request = await speaker.request({ agentId: agent.id, want: ["llm.full"], reason: "run the task's model", duration: "30m" });
+  await f.approve(request.id, ["llm.full"]);
+  const reply = await ask();
+  assert.deepEqual([reply.status, await reply.text()], [200, '{"choices":[]}']);
+  assert.deepEqual(seen, [{ url: "/api/v1/chat/completions", authorization: "Bearer real-provider-key" }]);
+  // Each call counts and is recorded; the real key is in neither record.
+  assert.equal(live.modelRequests, 2);
+  const record = readFileSync(modelCalls, "utf8");
+  assert.equal(record.trim().split("\n").length, 2);
+  assert.ok(!record.includes("real-provider-key") && !JSON.stringify(live).includes("real-provider-key"));
 });
