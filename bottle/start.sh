@@ -30,6 +30,9 @@ node -e '
 
 setsid node "$root/src/server.ts" &
 service=$!
+# `bottle down` stops whichever start.sh wrote this, detached or in the foreground.
+echo $$ > "$home/bottle.pid"
+trap 'rm -f "$home/bottle.pid"' EXIT
 stop() {
 	trap - INT TERM
 	kill -TERM "$service" 2>/dev/null || true

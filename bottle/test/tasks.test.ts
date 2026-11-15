@@ -66,6 +66,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
     controlPort: 1,
     guestPort: 2,
     maxTasks: 2,
+    idleStopMinutes: 10,
     guestImage: "test",
     speaker: { url, proxyPort: 1, sshPort: 2 },
     localModel: { guestHost: "model.internal", upstream: "127.0.0.1:1", models: [{ id: "m", label: "M" }] },

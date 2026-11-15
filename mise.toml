@@ -44,7 +44,7 @@ dir = "speaker"
 run = "node --watch --env-file-if-exists=.env server.ts"
 
 [tasks.bottle]
-description = "Run bottle: mise run bottle serve|build|register|run|ls|attach|stop (mise run bottle help)"
+description = "Run bottle: mise run bottle run|ls|attach|stop|down|serve|build|register (mise run bottle help)"
 dir = "bottle"
 run = "node src/cli.ts"
 
@@ -52,24 +52,6 @@ run = "node src/cli.ts"
 description = "Build and run speaker in its hardened container (needs speaker/.env)"
 dir = "speaker"
 run = "docker compose up -d --build"
-
-[tasks."bottle:up"]
-description = "Start bottle detached; output goes to ~/.bottle/bottle.log (stop: mise run bottle:down)"
-dir = "bottle"
-run = '''
-home="${BOTTLE_HOME:-$HOME/.bottle}"
-if kill -0 "$(cat "$home/bottle.pid" 2>/dev/null)" 2>/dev/null; then echo "bottle is already running"; exit 0; fi
-setsid nohup ./start.sh >> "$home/bottle.log" 2>&1 < /dev/null &
-echo $! > "$home/bottle.pid"
-echo "bottle started (pid $!); log: $home/bottle.log"
-'''
-
-[tasks."bottle:down"]
-description = "Stop the detached bottle"
-run = '''
-pid="${BOTTLE_HOME:-$HOME/.bottle}/bottle.pid"
-if kill "$(cat "$pid" 2>/dev/null)" 2>/dev/null; then rm "$pid"; echo "bottle stopped"; else echo "bottle was not running"; fi
-'''
 
 [tasks."bottle:logs"]
 description = "Follow bottle's log"

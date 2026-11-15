@@ -266,7 +266,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
           (r) => (r.ok ? `bottle is running on port ${running}` : undefined),
           () => undefined,
         ),
-      "stop it (kill the start.sh process, or Ctrl-C where you ran mise run bottle serve)",
+      "stop it (mise run bottle down)",
       yes,
     );
   const controlPort = await pickPort(flags["control-port"], yes, "Control", "bottle's own API", "control-port", previous?.controlPort ?? 7001, [], "127.0.0.1");
@@ -412,7 +412,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     (yes || answered(await p.confirm({ message: "Start bottle and run one small test task to check it all works?", initialValue: true })));
   if (smoke) {
     const logFile = join(home, "bottle.log");
-    const server = startDetached(logFile, env);
+    const server = startDetached(logFile, { ...env, BOTTLE_AUTOSTART: "1" });
     let exited: number | null | undefined;
     server.once("exit", (code) => (exited = code));
     const control = `http://127.0.0.1:${controlPort}`;
@@ -424,7 +424,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
             () => false,
           ),
     );
-    p.log.info(`bottle runs in the background (pid ${server.pid}). Stop it with: kill ${server.pid}`);
+    p.log.info(`bottle runs in the background (pid ${server.pid}) and stops 10 minutes after its last task. Stop it now with: mise run bottle down`);
     const created = await fetch(`${control}/api/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -448,8 +448,8 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     const result = join(outputRoot, archive, "artifacts", "hello.txt");
     if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
-  } else p.log.info("Start it with: mise run bottle:up (detached; or mise run bottle serve in the foreground)");
+  } else p.log.info("bottle starts on demand with mise run bottle run (or run mise run bottle serve in the foreground)");
   p.outro(
-    `bottle is set up. Start it with \`mise run bottle:up\` (stop: \`mise run bottle:down\`), then launch work with: mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
+    `bottle is set up. Launch work with (bottle starts on demand, and stops 10 minutes after its last task; stop it now with \`mise run bottle down\`): mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
   );
 }

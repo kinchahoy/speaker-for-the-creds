@@ -39,6 +39,8 @@ const ConfigFile = z
     hostedProviders: z.array(HostedProviderSchema),
     // Each task opens as a tab in the Herdr app (a "bottle" space) when `hc` is on PATH; false turns that off.
     herdr: z.boolean().optional(),
+    // A bottle that `run` started stops itself once no task has been open for this long; `serve` never does.
+    idleStopMinutes: z.number().positive().default(10),
   })
   .strict();
 

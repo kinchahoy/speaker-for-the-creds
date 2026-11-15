@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { hc as honoClient } from "hono/client";
@@ -8,9 +8,9 @@ import { Command, InvalidArgumentError, Option } from "commander";
 import { attach } from "./sandbox.ts";
 import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
-import { configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
+import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, type Config } from "./config.ts";
 
-/** The owner's terminal client: `bottle serve | build | register | run | ls | attach | stop`. */
+/** The owner's terminal client: `bottle serve | down | build | register | run | ls | attach | stop`. */
 type Task = {
   id: string;
   name: string;
@@ -47,7 +47,57 @@ const runScript = (name: Script, args: string[]) => {
 };
 
 type Values = { name?: string; template?: string; model?: string; prompt?: string; hours?: number; attended?: boolean; unattended?: boolean };
-type Command_ = "register" | "run" | "ls" | "attach" | "stop";
+type Command_ = "register" | "run" | "ls" | "attach" | "stop" | "down";
+
+const home = bottleHome();
+const logFile = join(home, "bottle.log");
+const pidFile = join(home, "bottle.pid");
+const START_WAIT_MS = 60_000;
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+const isUp = (control: string) =>
+  fetch(`${control}/api/state`, { signal: AbortSignal.timeout(2_000) }).then(
+    (response) => response.ok,
+    () => false,
+  );
+
+/** Starts start.sh detached (it outlives this terminal, Herdr panes included) and waits until the control API answers. */
+const startBottle = async (control: string) => {
+  console.log(`Starting bottle (log ${logFile})`);
+  const logStart = existsSync(logFile) ? statSync(logFile).size : 0;
+  const out = openSync(logFile, "a", 0o600);
+  const child = spawn(join(import.meta.dirname, "..", SCRIPTS.serve), [], {
+    detached: true,
+    stdio: ["ignore", out, out],
+    env: { ...process.env, BOTTLE_AUTOSTART: "1" },
+  });
+  child.unref();
+  closeSync(out);
+  let exited: number | null | undefined;
+  child.once("exit", (code) => (exited = code));
+  for (const deadline = Date.now() + START_WAIT_MS; !(await isUp(control)); await sleep(1_000))
+    if (exited !== undefined || Date.now() > deadline) {
+      const tail = readFileSync(logFile, "utf8").slice(logStart).trimEnd().split("\n").slice(-20).join("\n");
+      throw new Error(`bottle ${exited !== undefined ? `exited (code ${exited})` : "did not answer within a minute"}. From ${logFile}:\n${tail}`);
+    }
+};
+
+/** Stops the bottle that start.sh recorded; its shutdown archives open tasks first. */
+const stopBottle = async () => {
+  const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : undefined;
+  const alive = () => {
+    try {
+      return process.kill(pid!, 0);
+    } catch {
+      return false;
+    }
+  };
+  if (!pid || !alive()) return void console.log("bottle was not running");
+  process.kill(pid, "SIGTERM");
+  console.log(`Stopping bottle (pid ${pid}); open tasks are archived first`);
+  while (alive()) await sleep(500);
+  console.log("bottle stopped");
+};
 
 const age = (startedAt: string): string => {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(startedAt)) / 1000));
@@ -80,7 +130,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
       response = await request;
     } catch (error) {
       const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
-      throw new Error(`cannot reach ${control} (${cause}). Is bottle running? Config: ${configPath}`);
+      throw new Error(`cannot reach bottle at ${control} (${cause}); it is not running. \`${SELF} run\` starts it. Config: ${configPath}`);
     }
     const payload = (await response.json().catch(() => ({}))) as { message?: string; next?: string };
     if (!response.ok) throw new Error([payload.message ?? `HTTP ${response.status} from ${control}`, payload.next].filter(Boolean).join(". "));
@@ -100,13 +150,17 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     throw new Error(`"${wanted}" matches ${matches.length} tasks (${matches.map((task) => task.id).join(", ")}). Use a longer id`);
   };
 
-  if (command === "register") {
+  if (command === "down") {
+    await stopBottle();
+  } else if (command === "register") {
     const name = values.name ?? hostname();
     const id = await registerHost(config, configPath, name);
-    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then start bottle.`);
+    console.log(`Registered sandbox host "${name}". Approve it at ${config.speaker.url}/admin#host-${id}, then launch a task with \`${SELF} run\`.`);
   } else if (command === "run") {
     const { template = "offline", name, model, prompt, hours } = values;
     const attended = values.attended ? true : values.unattended ? false : undefined;
+    console.log(`Connecting to bottle at ${control} (speaker ${config.speaker.url})`);
+    if (!(await isUp(control))) await startBottle(control);
     const { id, outputDir } = await api(controlApi.tasks.$post({ json: { name, template, model, prompt, attended, hours } }));
     const attach = `cd '${root}' && ${SELF} attach ${id}`;
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
@@ -114,8 +168,9 @@ async function main(command: Command_, values: Values, positionals: string[]) {
       `Started ${id} (${template}).${archive} Attach: ${attach}\nThe archive will be written to ${outputDir}\nWhen the task asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
     );
   } else if (command === "ls") {
-    const list = await tasks();
-    if (list.length === 0) console.log(`No live tasks. Start one with: ${SELF} run --prompt "..."`);
+    const up = await isUp(control);
+    const list = up ? await tasks() : [];
+    if (list.length === 0) console.log(`${up ? "No live tasks" : "bottle is not running, so no live tasks"}. Start one with: ${SELF} run --prompt "..."`);
     const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
     const rows = list.map((task) => [
       task.id,
@@ -217,6 +272,10 @@ program
   .allowUnknownOption()
   .argument("[args...]")
   .action((args: string[]) => runScript("serve", args));
+program
+  .command("down")
+  .description("Stop bottle; its open tasks are archived first")
+  .action(() => main("down", {}, []));
 program
   .command("build")
   .description("Build the guest image (default tag bottle-guest) and load it into microsandbox")

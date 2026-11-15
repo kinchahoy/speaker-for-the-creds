@@ -148,6 +148,18 @@ if (import.meta.main) {
     }
   });
 
+  // Started on demand by `bottle run` (BOTTLE_AUTOSTART): stop through the normal shutdown once idle long enough.
+  if (process.env.BOTTLE_AUTOSTART) {
+    let idleSince = Date.now();
+    setInterval(() => {
+      if (tasks.list().some((task) => !closed(task))) idleSince = Date.now();
+      else if (Date.now() - idleSince >= config.idleStopMinutes * 60_000) {
+        console.log(`no open tasks for ${config.idleStopMinutes} minutes; stopping`);
+        process.kill(process.pid, "SIGTERM");
+      }
+    }, 30_000).unref();
+  }
+
   let shuttingDown = false;
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.on(signal, async () => {
