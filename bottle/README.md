@@ -68,7 +68,7 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 ```sh
 mise run bottle build bottle-guest
 mise run bottle register   # prints the approve link; approve the sandbox host in speaker /admin
-mise run bottle serve
+mise run bottle serve       # foreground; or mise run bottle:up to run it detached (bottle:down stops it)
 ```
 
 bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whether the host is approved: 200 means approved, 401 means pending or unknown. `init` waits on it, and a lost connection to speaker uses it to tell a rejected token (fatal) from an outage (retried).
