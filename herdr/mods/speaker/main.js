@@ -1,6 +1,6 @@
 // Speaker's approvals in Herdr. A bottom bar ("speaker · 2 waiting (oldest 4m)") polls speaker's owner API every 10 s,
 // posts a toast per new request, and opens the inbox (this mod again, as a dialog with props { inbox: true }, polling
-// every 2 s): approve as asked, deny, revoke, or open the card in the browser. The inbox also has bottle's open agents
+// every 10 s): approve as asked, deny, revoke, or open the card in the browser. The inbox also has bottle's open agents
 // (Stop; click one to focus its terminal pi-<id>, or its pending request card), the last few finished ones (click opens
 // their archive folder in a new tab), a Start section (templates and models from `bottle templates --json`), and Settings
 // (speaker URL, bottle URL: Herdr's shared state "speaker.settings"). The owner password is typed once per Herdr start;
@@ -26,8 +26,11 @@ async function api(path, body) {
   return response.status === 204 ? null : response.json();
 }
 // Runs a program; a failure throws its stderr (or stdout) so the inbox shows it.
-const must = async (command, args) => {
-  const r = await exec(command, args);
+// bottle runs on the machine named in Settings (a Herdr machine from `hc machine ls`), or here when it is empty.
+const machine = () => settings()?.machine || undefined;
+const onMachine = () => (machine() ? ["--on", machine()] : []); // for hc run
+const must = async (command, args, on) => {
+  const r = await exec(command, args, { on });
   if (r.code !== 0) throw new Error(r.stderr.trim() || r.stdout.trim() || `${command} exited ${r.code}`);
   return r;
 };
@@ -68,14 +71,15 @@ export default class Speaker extends View {
         this.password.set_value("");
       }));
       this.urlInput = field("Speaker URL, e.g. http://localhost:3000", settings()?.url);
-      this.bottleInput = field("Bottle URL, e.g. http://127.0.0.1:7001", settings()?.bottle);
+      this.bottleInput = field("Bottle URL for listing agents (empty: http://127.0.0.1:7001 when bottle is local)", settings()?.bottle);
+      this.machineInput = field("Bottle machine from hc machine ls, e.g. wsl (empty: this computer)", settings()?.machine);
       this.prompt = InputState.new({ placeholder: "Prompt for the new agent (optional)" });
       this.folders = InputState.new({ placeholder: "Extra folders, comma-separated: ~/code/proj:rw, ~/docs (optional)" });
       (settings()?.url ? this.password : this.urlInput).focus();
       this.loadTemplates(cx);
     } else cx.spawn(async (cx) => { for (;;) if ((await nextCommand()) === "open") openInbox(); });
     this.refresh(cx);
-    cx.timer.every(this.inbox ? 2_000 : 10_000, (cx) => this.refresh(cx));
+    cx.timer.every(10_000, (cx) => this.refresh(cx));
   }
 
   // Runs an action, then shows the inbox as speaker and bottle now have it (or the error).
@@ -102,10 +106,10 @@ export default class Speaker extends View {
   }
 
   async loadAgents() {
-    const bottle = settings()?.bottle;
+    const bottle = settings()?.bottle || (machine() ? undefined : "http://127.0.0.1:7001"); // a local bottle needs no URL
     this.agents = [];
     this.finished = [];
-    this.agentsNote = bottle ? "" : "Set the Bottle URL in Settings to list bottle agents";
+    this.agentsNote = bottle ? "" : "Set the Bottle URL in Settings to list agents on a bottle machine";
     if (bottle)
       try {
         const state = await (await fetch(`${bottle}/api/state`)).json();
@@ -120,7 +124,7 @@ export default class Speaker extends View {
   loadTemplates(cx) {
     cx.spawn(async (cx) => {
       try {
-        ({ templates: this.templates, models: this.models } = JSON.parse((await must("bottle", ["templates", "--json"])).stdout));
+        ({ templates: this.templates, models: this.models } = JSON.parse((await must("bottle", ["templates", "--json"], machine())).stdout));
         this.startNote = "";
       } catch (error) {
         this.startNote = `bottle templates: ${error.message}`;
@@ -132,7 +136,7 @@ export default class Speaker extends View {
   save(cx) {
     this.act(cx, async () => {
       const clean = (input) => input.value().trim().replace(/\/$/, "");
-      const next = { url: clean(this.urlInput), bottle: clean(this.bottleInput) };
+      const next = { url: clean(this.urlInput), bottle: clean(this.bottleInput), machine: clean(this.machineInput) };
       if (!next.url) throw new Error("Speaker URL is required");
       if (next.url !== settings()?.url) {
         token = undefined;
@@ -140,6 +144,7 @@ export default class Speaker extends View {
         this.grants = [];
       }
       setShared("speaker.settings", next);
+      this.loadTemplates(cx);
     });
   }
 
@@ -148,8 +153,8 @@ export default class Speaker extends View {
     this.act(cx, async () => {
       const find = () => terminals().find((t) => t.name === `pi-${id}`);
       if (!find()) {
-        await exec("hc", ["run", "--bg", "--no-parent", "--name", `pi-${id}`, "--label", "herdr.space=bottle", "--label", `herdr.tab=${id}`, "--", "bottle", "attach", id]);
-        for (let i = 0; i < 10 && !find(); i++) await exec("sleep", ["0.3"]);
+        await exec("hc", ["run", ...onMachine(), "--bg", "--no-parent", "--name", `pi-${id}`, "--label", "herdr.space=bottle", "--label", `herdr.tab=${id}`, "--", "bottle", "attach", id]);
+        for (let i = 0; i < 10 && !find(); i++) await exec("sleep", ["0.3"], { on: machine() }); // Windows has no sleep; the bottle machine does
       }
       if (!find()) throw new Error(`terminal pi-${id} did not appear`);
       run("pane.focus", { terminal: find().address });
@@ -162,7 +167,7 @@ export default class Speaker extends View {
       const name = `start-${template}`;
       const prompt = this.prompt.value().trim();
       const folders = this.folders.value().split(",").map((f) => f.trim()).filter(Boolean).flatMap((f) => ["-f", f]);
-      await must("hc", ["run", "--bg", "--rm", "--no-parent", "--name", name, "--label", "herdr.space=bottle", "--label", `herdr.tab=${name}`,
+      await must("hc", ["run", ...onMachine(), "--bg", "--rm", "--no-parent", "--name", name, "--label", "herdr.space=bottle", "--label", `herdr.tab=${name}`,
         "--", "sh", "-c", startScript, "sh", "run", "-d", "-t", template, "-m", alias, ...folders, ...(prompt ? ["--", prompt] : [])]);
       this.prompt.set_value("");
       this.folders.set_value("");
@@ -223,7 +228,7 @@ export default class Speaker extends View {
         }).child(waits(a) ? "waiting for approval" : a.state))
       .child(div().text_color(t.dim).child(`${a.model} · ${since(a.startedAt)}`))
       .child(div().flex_1().truncate().text_color(t.dim).child((a.summary ?? "").slice(0, 60)))
-      .child(button(`stop-${a.id}`, "Stop", false, (_e, cx) => this.act(cx, () => must("bottle", ["stop", a.id]))));
+      .child(button(`stop-${a.id}`, "Stop", false, (_e, cx) => this.act(cx, () => must("bottle", ["stop", a.id], machine()))));
     const finished = (a) => h_flex().id(`fin-${a.id}`).gap(8).py(3).cursor_pointer().hover((s) => s.bg(t.hover))
       .on_click(() => { run("tab.new", { folder: a.outputDir, name: a.name }); closeOverlay(props().overlay); })
       .child(div().truncate().child(a.name)).child(div().text_color(t.muted).child(a.state))
@@ -261,6 +266,7 @@ export default class Speaker extends View {
       .child(heading("Settings"))
       .child(field(this.urlInput))
       .child(field(this.bottleInput))
+      .child(field(this.machineInput))
       .child(h_flex().gap(8)
         .child(button("save", "Save", true, (_e, cx) => this.save(cx)))
         .when(ready, (el) => el.child(button("admin", "Open in browser", false, browser("")))));
