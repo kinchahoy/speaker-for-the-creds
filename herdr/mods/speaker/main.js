@@ -3,8 +3,8 @@
 // every 10 s): approve as asked, deny, revoke, or open the card in the browser. The inbox also has bottle's open agents
 // (Stop; click one to focus its terminal pi-<id>, or its pending request card), the last few finished ones (click opens
 // their archive folder in a new tab), a Start section (templates and models from `bottle templates --json`), and Settings
-// (speaker URL, bottle URL: Herdr's shared state "speaker.settings"). The owner password is typed once per Herdr start;
-// the token stays in this module's memory, never on disk. Bind a key in keys.json: "alt-s": "speaker.open".
+// (speaker URL, bottle URL, bottle machine: Herdr's shared state "speaker.settings"). The owner password is typed once per Herdr start;
+// the token stays in this module's memory, never on disk. Bind a key in keys.json: "alt-s": "mod.open:speaker".
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { closeOverlay, exec, nextCommand, notify, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
