@@ -43,7 +43,7 @@ const startScript = 'bottle "$@" || { echo; echo "bottle run failed; press Enter
 
 export default class Speaker extends View {
   init(_props, cx) {
-    this.inbox = Boolean(props()?.inbox);
+    this.inbox = Boolean(props()?.inbox || props()?.overlay); // any overlay copy (mod.open, the palette) is the inbox; only the docked copy is the bar
     this.pending = [];
     this.grants = [];
     this.agents = []; // bottle's open agents

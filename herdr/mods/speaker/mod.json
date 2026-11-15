@@ -1,1 +1,1 @@
-{ "place": "bottom", "size": 26 }
+{ "place": "bottom", "size": 26, "overlay": { "width": 520, "height": 640 } }
