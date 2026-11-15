@@ -31,50 +31,8 @@ import { catalogView } from './catalog.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
 
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
-  const {
-    skill,
-    config,
-    services,
-    groups,
-    hosts,
-    agents,
-    grants,
-    connections,
-    agentById,
-    agentByToken,
-    resolveAgent,
-    jump,
-    ownerSecrets,
-    lockNotice,
-    credentialOf,
-    audit,
-    rid,
-    live,
-    push,
-    syncJump,
-    snapshot,
-    serviceItem,
-    coverFor,
-    certificateAuthority,
-    useOf,
-    lockedUntil,
-    retryAfter,
-    notify,
-    createRequest,
-    mcpAccess,
-    upstreamUrl,
-    applyCredential,
-    hostOf,
-    saveHosts,
-    sourceOf,
-    baseOf,
-    enforcementOf,
-    endAgent,
-    tally,
-    requests,
-  } = core
-  const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${baseOf(c)}/admin#${anchor}`
-  const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', baseOf(c))
+  const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${core.baseOf(c)}/admin#${anchor}`
+  const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', core.baseOf(c))
   // Every agent-facing 401 names the next step and points at the skill.
   const unauthorized = (
     c: Context,
@@ -89,7 +47,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Until the owner has set a password and signed in (after every restart too), every agent, sandbox-host and proxy
   // call is refused: the same rule (lockNotice) gates the proxy and the certificate route.
   const locked: MiddlewareHandler<Env> = async (c, next) => {
-    const notice = lockNotice(baseOf(c))
+    const notice = core.lockNotice(core.baseOf(c))
     if (notice)
       return agentError(c, 503, 'locked', notice.message, {
         next: 'Wait until the owner has signed in, then repeat the call',
@@ -111,8 +69,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         next: `Send Authorization: Bearer <token>. ${enrollNext}`,
       })
     const digest = hash(token)
-    const host = [...hosts.values()].find((item) => same(item.tokenHash, digest))
-    if (host && host.source !== sourceOf(c))
+    const host = [...core.hosts.values()].find((item) => same(item.tokenHash, digest))
+    if (host && host.source !== core.sourceOf(c))
       return unauthorized(c, 'register', 'This sandbox host token was registered from another address', {
         next: 'Register again: bottle register',
       })
@@ -122,7 +80,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         tell_user: tellUser(c, `host-${host.id}`),
       })
     else {
-      const found = resolveAgent(token, sourceOf(c))
+      const found = core.resolveAgent(token, core.sourceOf(c))
       if ('agent' in found) c.set('caller', { role: 'agent', agent: found.agent })
       else if (found.refused === 'revoked') return revokedReply(c)
       else return unauthorized(c, 'enroll', 'This token is not enrolled for this address', { next: enrollNext })
@@ -149,14 +107,14 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const allowedKinds = (agent: Agent): string[] => [
     'service',
     'group',
-    ...(config.PROXY_PORT ? ['secret'] : []),
+    ...(core.config.PROXY_PORT ? ['secret'] : []),
     'ssh',
     'folder',
-    ...(hostOf(agent)?.kinds ?? []),
+    ...(core.hostOf(agent)?.kinds ?? []),
   ]
   // A group is offered only if every member is a kind the agent can use.
   const offered = (agent: Agent) =>
-    Object.entries(groups).filter(([, group]) =>
+    Object.entries(core.groups).filter(([, group]) =>
       group.items.every((item) => allowedKinds(agent).includes(kindOf(item) ?? '')),
     )
   const catalogHint = 'GET /_speaker/catalog'
@@ -164,7 +122,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Expands groups, adds the sites of each extension (and which extension brought them), and refuses any name this agent may not ask for: the whole call
   // fails with the names it may use (never shares or targets), before anything reaches the owner.
   function resolveItems(want: string[], agent: Agent) {
-    const catalog = connections.get(agent.host ?? '')?.catalog
+    const catalog = core.connections.get(agent.host ?? '')?.catalog
     const items = want.flatMap((item) => {
       if (kindOf(item) !== 'group') return [item]
       const group = offered(agent).find(([name]) => `group:${name}` === item)
@@ -191,18 +149,18 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       const kind = kindOf(item) ?? ''
       if (!allowedKinds(agent).includes(kind))
         throw invalid(`${item} is not available to this agent`, itemForms, 400, catalogHint)
-      const target = serviceItem(item)
-      if (target && (!Object.hasOwn(services, target.id) || credentialOf(target.id) === undefined))
+      const target = core.serviceItem(item)
+      if (target && (!Object.hasOwn(core.services, target.id) || core.credentialOf(target.id) === undefined))
         throw refuse(
           item,
-          Object.keys(services)
-            .filter((id) => credentialOf(id) !== undefined)
+          Object.keys(core.services)
+            .filter((id) => core.credentialOf(id) !== undefined)
             .flatMap((id) => [`${id}.read`, `${id}.full`]),
           'Services',
           'none',
         )
       if (kind === 'secret') {
-        const names = Object.keys(ownerSecrets())
+        const names = Object.keys(core.ownerSecrets())
         if (!names.includes(item.slice('secret:'.length))) throw refuse(item, names, 'Secrets', 'none')
       }
       if (kind === 'ext' && !catalog?.extensions.some(({ id }) => `ext:${id}` === item))
@@ -219,7 +177,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           'MCP servers',
           'none',
         )
-      const unknown = jump.unknownName(item)
+      const unknown = core.jump.unknownName(item)
       if (unknown)
         throw invalid(
           unknown,
@@ -240,15 +198,15 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
   const applying = (request: Request) =>
     request.grantIds.flatMap((id) => {
-      const grant = grants.get(id)
-      return grant && live(grant) && enforcementOf(grant) !== 'enforced' ? [grant.item] : []
+      const grant = core.grants.get(id)
+      return grant && core.live(grant) && core.enforcementOf(grant) !== 'enforced' ? [grant.item] : []
     })
   // A request as the agent sees it: per-item outcome, and what to do next.
   const outcome = (c: Context, request: Request) => {
     const status = statusOf(request),
       granted = itemsWhere(request, 'granted'),
       denied = itemsWhere(request, 'denied')
-    const retry = retryAfter(request.agentId, denied)
+    const retry = core.retryAfter(request.agentId, denied)
     const waiting = applying(request)
     return {
       id: request.id,
@@ -280,12 +238,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       // A newer key replaces the older one.
       if (input.sshKey) {
         agent.sshKey = input.sshKey
-        syncJump()
+        core.syncJump()
       }
       // A folder the agent's sandbox mounts needs no key (and Pi cannot send one); every other ssh: or folder: item does.
       if (
         !agent.sshKey &&
-        items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !jump.mounted(agent.id, item))
+        items.some((item) => ['ssh', 'folder'].includes(kindOf(item) ?? '') && !core.jump.mounted(agent.id, item))
       )
         throw invalid(
           'ssh: and folder: items need "sshKey": one throwaway public key of yours (ssh-ed25519 …)',
@@ -295,10 +253,10 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         )
     } catch (error) {
       // Turned away before the owner saw anything: the owner's page counts it.
-      if (error instanceof HTTPException) tally(agent, 'refused', error.message)
+      if (error instanceof HTTPException) core.tally(agent, 'refused', error.message)
       throw error
     }
-    const request = createRequest(agent, items, input.want, input.reason, input.duration, undefined, bundled)
+    const request = core.createRequest(agent, items, input.want, input.reason, input.duration, undefined, bundled)
     await hold(c, () => settled(request))
     return outcome(c, request)
   }
@@ -321,35 +279,35 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   })
   app.get('/_speaker/health', (c) => c.json({ ok: true }))
   // The proxy's public certificate: agents trust it for the hosts of their secrets.
-  if (config.PROXY_PORT)
+  if (core.config.PROXY_PORT)
     app.get('/_speaker/proxy/ca.pem', locked, async (c) =>
-      c.text((await certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
+      c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
     )
   // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
   app.use('/skill.md', etag())
   app.use('/_speaker/help', etag())
-  app.get('/skill.md', (c) => c.text(withAddress(c, skill), 200, markdown))
-  app.get('/_speaker/help', (c) => c.text(withAddress(c, skill), 200, markdown))
+  app.get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
+  app.get('/_speaker/help', (c) => c.text(withAddress(c, core.skill), 200, markdown))
   app.get('/', (c) =>
     c.req.header('accept')?.includes('text/html')
       ? c.html(
           '<!doctype html><meta charset="utf-8"><title>Speaker</title><p>Speaker gives AI agents owner-approved access to homelab APIs; agents never see the keys.</p><p>Owner: approve requests at <a href="/admin">/admin</a>.</p><p>Agents: <a href="/skill.md">/skill.md</a>.</p>',
         )
-      : c.text(withAddress(c, skill), 200, markdown),
+      : c.text(withAddress(c, core.skill), 200, markdown),
   )
   app.post('/_speaker/agents', locked, enrollmentLimit, async (c) => {
     const { tokenHash, want, reason, duration, sshKey, ...identity } = enrollSchema.parse(await c.req.json())
-    let agent = agentByToken(tokenHash)
+    let agent = core.agentByToken(tokenHash)
     // A revoked token stays dead; asking again means a new token, which reaches the owner as a new agent.
     if (agent?.status === 'revoked') return revokedReply(c)
-    const source = sourceOf(c)
+    const source = core.sourceOf(c)
     if (agent && agent.source !== source)
       throw invalid('This token is already enrolled from another address. Make a new token and enroll again')
     const created = !agent
     if (!agent) {
       const enrolling: Agent = {
-        id: rid(),
+        id: core.rid(),
         tokenHash,
         status: 'enrolled',
         ...identity,
@@ -363,8 +321,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       // Refuse unknown names before enrolling, so a bad first request leaves no token behind.
       if (want.length) resolveItems(want, enrolling)
       agent = enrolling
-      agents.set(agent.id, agent)
-      audit('agent_enrolled', { agent: agent.id, source })
+      core.agents.set(agent.id, agent)
+      core.audit('agent_enrolled', { agent: agent.id, source })
     }
     const result = want.length ? await ask(c, agent, { want, reason: reason ?? '', duration, sshKey }) : undefined
     if (!result && sshKey) agent.sshKey = sshKey
@@ -375,13 +333,22 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   })
   app.post('/_speaker/hosts', locked, enrollmentLimit, async (c) => {
     const input = hostSchema.pick({ name: true, kinds: true, tokenHash: true }).parse(await c.req.json())
-    const host: Host = { id: rid(), ...input, status: 'pending', source: sourceOf(c), registeredAt: Date.now() }
-    hosts.set(host.id, host)
-    await saveHosts()
-    audit('host_registered', { host: host.id, name: host.name })
-    void notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
+    const host: Host = {
+      id: core.rid(),
+      ...input,
+      status: 'pending',
+      source: core.sourceOf(c),
+      registeredAt: Date.now(),
+    }
+    core.hosts.set(host.id, host)
+    await core.saveHosts()
+    core.audit('host_registered', { host: host.id, name: host.name })
+    void core.notify(`Sandbox host ${host.name} wants to register`, `host-${host.id}`)
     // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
-    return c.json({ id: host.id, status: host.status, proxyPort: config.PROXY_PORT, sshPort: config.SSH_PORT }, 201)
+    return c.json(
+      { id: host.id, status: host.status, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
+      201,
+    )
   })
   app.all('/_demo-upstream/*', async (c) => {
     if (c.req.header('authorization') !== `Bearer ${demoSecret}`)
@@ -407,12 +374,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       const id = hostCaller(c).id
       return {
         onOpen: (_event, ws) => {
-          connections.get(id)?.ws.close(1000, 'replaced')
-          connections.set(id, { ws, applied: new Set(), shares: [] })
-          ws.send(JSON.stringify(snapshot(id)))
+          core.connections.get(id)?.ws.close(1000, 'replaced')
+          core.connections.set(id, { ws, applied: new Set(), shares: [] })
+          ws.send(JSON.stringify(core.snapshot(id)))
         },
         onMessage: (event, ws) => {
-          const connection = connections.get(id)
+          const connection = core.connections.get(id)
           if (connection?.ws !== ws) return
           const message = z
             .discriminatedUnion('type', [
@@ -439,15 +406,15 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             .parse(JSON.parse(String(event.data)))
           if (message.type === 'shares') {
             connection.shares = message.shares
-            audit('host_shares', { host: id, shares: message.shares })
-            push() // a share's delivery (VM mount or over SSH) follows this report
+            core.audit('host_shares', { host: id, shares: message.shares })
+            core.push() // a share's delivery (VM mount or over SSH) follows this report
           } else if (message.type === 'catalog') {
             connection.catalog = { mcps: message.mcps, extensions: message.extensions }
-            audit('host_catalog', { host: id, mcps: message.mcps.length, extensions: message.extensions.length })
+            core.audit('host_catalog', { host: id, mcps: message.mcps.length, extensions: message.extensions.length })
           } else connection.applied = new Set(message.grantIds)
         },
         onClose: (_event, ws) => {
-          if (connections.get(id)?.ws === ws) connections.delete(id)
+          if (core.connections.get(id)?.ws === ws) core.connections.delete(id)
         },
       }
     }),
@@ -464,11 +431,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const token = randomBytes(32).toString('base64url')
     // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
     const agent: Agent = {
-      id: rid(),
+      id: core.rid(),
       tokenHash: hash(token),
       status: 'enrolled',
       ...identity,
-      source: sourceOf(c),
+      source: core.sourceOf(c),
       host: host.id,
       createdAt: Date.now(),
       lastSeen: Date.now(),
@@ -476,14 +443,14 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       lastUsedAt: null,
       counts: noCounts(),
     }
-    agents.set(agent.id, agent)
-    audit('agent_created', { agent: agent.id, host: host.id })
+    core.agents.set(agent.id, agent)
+    core.audit('agent_created', { agent: agent.id, host: host.id })
     return c.json({ id: agent.id, token }, 201)
   })
   app.delete('/_speaker/hosts/agents/:id', (c) => {
     const id = c.req.param('id')
-    if (agentById(id)?.host !== hostCaller(c).id) throw invalid('Agent not found', undefined, 404)
-    endAgent(id)
+    if (core.agentById(id)?.host !== hostCaller(c).id) throw invalid('Agent not found', undefined, 404)
+    core.endAgent(id)
     return c.json({ ok: true })
   })
   app.get('/_speaker/catalog', (c) =>
@@ -494,7 +461,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const input = requestSchema.extend({ agentId: idSchema.optional() }).parse(await c.req.json())
     let agent: Agent | undefined
     if (caller.role === 'host') {
-      agent = input.agentId ? agentById(input.agentId) : undefined
+      agent = input.agentId ? core.agentById(input.agentId) : undefined
       if (agent?.host !== caller.host.id) throw invalid('Agent not found', undefined, 404)
     } else {
       if (input.agentId && input.agentId !== caller.agent.id) throw invalid('An agent requests only for itself')
@@ -507,11 +474,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // new one, even after it was decided.
   app.get('/_speaker/requests/:id', async (c) => {
     const caller = c.get('caller')
-    const request = requests.get(c.req.param('id'))
+    const request = core.requests.get(c.req.param('id'))
     const mine =
       request !== undefined &&
       (caller.role === 'host'
-        ? agentById(request.agentId)?.host === caller.host.id
+        ? core.agentById(request.agentId)?.host === caller.host.id
         : request.agentId === caller.agent.id)
     if (!request || !mine)
       throw invalid('No such request (decided requests are kept for a day)', undefined, 404, 'POST /_speaker/requests')
@@ -523,14 +490,14 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   app.get('/_speaker/help/:name', (c) => {
     const agent = agentCaller(c)
     const name = c.req.param('name')
-    if (!Object.hasOwn(services, name)) throw invalid('Unknown service', undefined, 404)
-    const service = services[name]
+    if (!Object.hasOwn(core.services, name)) throw invalid('Unknown service', undefined, 404)
+    const service = core.services[name]
     const until = (expiresAt: string | null) => (expiresAt === null ? 'with no end' : `until ${expiresAt} (UTC)`)
     const access = (write: boolean) => {
       const rule = write ? service.write : service.read
       if (rule === 'open') return 'open: needs no grant.'
       if (rule === 'never') return 'never granted by the owner. Do not ask for it.'
-      const grant = coverFor(agent.id, name, write)
+      const grant = core.coverFor(agent.id, name, write)
       return grant
         ? `granted ${until(grant.expiresAt)}.`
         : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
@@ -538,13 +505,13 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const lines = [
       `# ${name}`,
       '',
-      `- Call \`${baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
+      `- Call \`${core.baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
       `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
       `- Everything else (\`${name}.full\`): ${access(true)}`,
       '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`). Speaker asks the owner and answers the call once they decide. Without that header, the call answers at once. `denied` is final.',
       ...(service.mcp
         ? [
-            `- MCP server (streamable HTTP) at \`${baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
+            `- MCP server (streamable HTTP) at \`${core.baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
           ]
         : []),
       service.notes
@@ -559,9 +526,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   app.all('*', async (c) => {
     const incoming = new URL(c.req.url),
       [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
-    if (!Object.hasOwn(services, serviceId))
+    if (!Object.hasOwn(core.services, serviceId))
       return agentError(c, 404, 'not_found', 'Unknown service', { next: 'GET /_speaker/catalog' })
-    const service = services[serviceId],
+    const service = core.services[serviceId],
       agent = agentCaller(c),
       method = c.req.method,
       path = `/${parts.join('/')}`
@@ -579,26 +546,26 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       if (Buffer.byteLength(text) > 1_048_576)
         return agentError(c, 413, 'invalid', 'MCP body too large', { next: 'Send a smaller MCP request' })
       body = text
-      ;({ write, detail } = await mcpAccess(serviceId, text))
+      ;({ write, detail } = await core.mcpAccess(serviceId, text))
     }
     const item = `${serviceId}.${write ? 'full' : 'read'}`
     const rule = write ? service.write : service.read
     if (rule === 'never') {
-      tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
+      core.tally(agent, 'blocked', `${method} ${serviceId}: the owner blocks ${item}`)
       return agentError(c, 403, 'denied', `The owner blocks ${item}`, {
         item,
         next: 'Stop: the owner blocks this; do not request it.',
       })
     }
-    const secret = credentialOf(serviceId)
+    const secret = core.credentialOf(serviceId)
     if (secret === undefined)
       return agentError(c, 503, 'no_key', `${serviceId} has no key configured yet`, {
-        tell_user: `The owner adds a key for ${serviceId} at ${baseOf(c)}/admin?section=services`,
+        tell_user: `The owner adds a key for ${serviceId} at ${core.baseOf(c)}/admin?section=services`,
       })
-    if (rule === 'ask' && !coverFor(agent.id, serviceId, write)) {
-      const until = lockedUntil(agent.id, item)
+    if (rule === 'ask' && !core.coverFor(agent.id, serviceId, write)) {
+      const until = core.lockedUntil(agent.id, item)
       if (until !== undefined) {
-        tally(
+        core.tally(
           agent,
           'blocked',
           `${method} ${serviceId}: ${item} denied by the owner, locked until ${new Date(until).toISOString()}`,
@@ -610,7 +577,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         })
       }
       // A call files a request for exactly the item its method implies.
-      const request = createRequest(
+      const request = core.createRequest(
         agent,
         [item],
         [item],
@@ -619,8 +586,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         `${method} ${detail ? `${path} · ${detail}` : path}`,
       )
       await hold(c, () => statusOf(request) !== 'pending')
-      if (!coverFor(agent.id, serviceId, write)) {
-        tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
+      if (!core.coverFor(agent.id, serviceId, write)) {
+        core.tally(agent, 'blocked', `${method} ${serviceId}: no grant for ${item}`)
         if (statusOf(request) === 'decided')
           return agentError(c, 403, 'denied', `The owner denied ${item}`, {
             item,
@@ -635,11 +602,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         })
       }
     }
-    const grant = rule === 'ask' ? coverFor(agent.id, serviceId, write) : undefined
-    const target = upstreamUrl(service, secret, parts, incoming.search)
+    const grant = rule === 'ask' ? core.coverFor(agent.id, serviceId, write) : undefined
+    const target = core.upstreamUrl(service, secret, parts, incoming.search)
     if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
-    if (grant) useOf(grant)
-    useOf(agent)
+    if (grant) core.useOf(grant)
+    core.useOf(agent)
     const headers = new Headers(c.req.raw.headers)
     const hopHeaders = [
       'connection',
@@ -665,7 +632,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       )
         headers.delete(name)
     headers.set('accept-encoding', 'identity')
-    applyCredential(service, secret, headers)
+    core.applyCredential(service, secret, headers)
     const start = Date.now()
     const upstream = await fetch(target, {
       method,
@@ -675,10 +642,10 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       redirect: 'manual',
       signal: c.req.raw.signal,
     } as RequestInit).catch((error: Error) => {
-      audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
+      core.audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
       return undefined
     })
-    audit('proxy', {
+    core.audit('proxy', {
       agent: agent.id,
       service: serviceId,
       method,

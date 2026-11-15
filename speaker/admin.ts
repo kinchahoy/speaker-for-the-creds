@@ -24,37 +24,6 @@ import { WrongPassword } from './store.ts'
 import { active, icons, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
 
 export function adminApp(core: Core) {
-  const {
-    config,
-    services,
-    groups,
-    hosts,
-    enrolled,
-    grants,
-    requests,
-    connections,
-    sessions,
-    readLog,
-    mcpTools,
-    jump,
-    unlocked,
-    createOwnerStore,
-    signIn,
-    checkPassword,
-    audit,
-    rid,
-    push,
-    revokeGrants,
-    decide,
-    listMcpTools,
-    saveHosts,
-    saveServices,
-    saveGroups,
-    sourceOf,
-    baseOf,
-    view,
-    endAgent,
-  } = core
   const admin = new Hono()
   admin.use(
     '*',
@@ -77,7 +46,7 @@ export function adminApp(core: Core) {
   })
   // Form posts and JSON clients alike must send an Origin matching PUBLIC_URL. Fetch Metadata identifies browser
   // same-origin requests even when TLS ends at a reverse proxy. Hono's csrf below stays as the backstop.
-  const publicOrigin = new URL(config.PUBLIC_URL).origin
+  const publicOrigin = new URL(core.config.PUBLIC_URL).origin
   admin.use('*', async (c, next) => {
     const origin = c.req.header('origin')
     const form = /^(application\/x-www-form-urlencoded|multipart\/form-data|text\/plain)/i.test(
@@ -88,7 +57,7 @@ export function adminApp(core: Core) {
       (origin ? origin !== publicOrigin : form) &&
       c.req.header('sec-fetch-site') !== 'same-origin'
     )
-      return c.text(`Cross-origin form post blocked: send an Origin header matching ${config.PUBLIC_URL}.`, 403)
+      return c.text(`Cross-origin form post blocked: send an Origin header matching ${core.config.PUBLIC_URL}.`, 403)
     await next()
   })
   admin.use('*', csrf({ origin: publicOrigin }))
@@ -113,7 +82,7 @@ export function adminApp(core: Core) {
   const sessionCookie = 'speaker_session'
   const signedIn = (c: Context) => {
     const id = getCookie(c, sessionCookie)
-    return id !== undefined && (sessions.get(id) ?? 0) > Date.now()
+    return id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
   }
   // Sign-in is the only way in: the first visit sets the owner password, later visits sign in with it.
   const signInLimit = rateLimiter({
@@ -121,21 +90,21 @@ export function adminApp(core: Core) {
     limit: 5,
     standardHeaders: 'draft-7',
     skipSuccessfulRequests: true,
-    keyGenerator: (c) => sourceOf(c),
+    keyGenerator: (c) => core.sourceOf(c),
     message: 'Too many failed attempts; wait a few minutes.',
   })
   const authPage = (c: Context, error?: string, status: 200 | 400 | 401 = 200) => {
     // Plain HTTP from another machine sends the password in clear.
-    const exposed = !baseOf(c).startsWith('https:') && !/^(127\.|::1$)/.test(sourceOf(c))
+    const exposed = !core.baseOf(c).startsWith('https:') && !/^(127\.|::1$)/.test(core.sourceOf(c))
     return c.html(core.vault.state !== 'unset' ? signInPage(exposed, error) : setPasswordPage(exposed, error), status)
   }
   const startSession = (c: Context) => {
-    const id = rid()
-    sessions.set(id, Date.now() + sessionLife)
+    const id = core.rid()
+    core.sessions.set(id, Date.now() + sessionLife)
     setCookie(c, sessionCookie, id, {
       httpOnly: true,
       sameSite: 'Strict',
-      secure: baseOf(c).startsWith('https:'),
+      secure: core.baseOf(c).startsWith('https:'),
       path: '/admin',
       maxAge: sessionLife / 1000,
     })
@@ -144,21 +113,21 @@ export function adminApp(core: Core) {
   admin.post('/setup', signInLimit, async (c) => {
     const input = newPasswordSchema.safeParse(await c.req.parseBody())
     if (!input.success) return authPage(c, input.error.issues[0].message, 400)
-    await createOwnerStore(input.data.password)
-    audit('owner_password_set')
+    await core.createOwnerStore(input.data.password)
+    core.audit('owner_password_set')
     return startSession(c)
   })
   admin.post('/signin', signInLimit, async (c) => {
     if (core.vault.state === 'unset') return c.redirect('/admin', 303)
     const { password } = z.object({ password: z.string() }).parse(await c.req.parseBody())
     try {
-      await signIn(password)
+      await core.signIn(password)
     } catch (error) {
       if (!(error instanceof WrongPassword)) throw error
-      audit('signin_failed', { source: sourceOf(c) })
+      core.audit('signin_failed', { source: core.sourceOf(c) })
       return authPage(c, 'Wrong password.', 401)
     }
-    audit('owner_signed_in')
+    core.audit('owner_signed_in')
     return startSession(c)
   })
   admin.use('*', async (c, next) => {
@@ -172,7 +141,7 @@ export function adminApp(core: Core) {
     const query = c.req.query()
     const { grant, agent, service, target, share } = query
     const text = query.q?.trim().toLowerCase()
-    const matches = (await readLog()).filter(
+    const matches = (await core.readLog()).filter(
       (e) =>
         (!text || JSON.stringify(e).toLowerCase().includes(text)) &&
         (!grant || e.grant === grant) &&
@@ -183,8 +152,8 @@ export function adminApp(core: Core) {
           e.service === service ||
           (Array.isArray(e.items) && e.items.some((i) => String(i).startsWith(`${service}.`)))),
     )
-    const now = view(),
-      ssh = jump.setup()
+    const now = core.view(),
+      ssh = core.jump.setup()
     const ids = (record: object) => Object.keys(record).map((id): [string, string] => [id, id])
     return c.html(
       layout(
@@ -193,7 +162,7 @@ export function adminApp(core: Core) {
         log(matches.slice(0, 500), matches.length, query, {
           agent: now.agents.map((a) => [a.id, a.label]),
           grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
-          service: ids(services),
+          service: ids(core.services),
           target: ids(ssh.targets),
           share: ids(ssh.shares),
         }),
@@ -201,29 +170,29 @@ export function adminApp(core: Core) {
     )
   })
   const panels = {
-    inbox: () => inbox(view(), groups, unlocked().vault.secrets),
-    active: () => active(view()),
+    inbox: () => inbox(core.view(), core.groups, core.unlocked().vault.secrets),
+    active: () => active(core.view()),
   }
   admin.get('/', (c) => {
     const section = c.req.query('section') ?? (c.req.query('service') ? 'services' : 'approvals')
     const nonce = c.get('secureHeadersNonce')
     if (section === 'services' || section === 'groups') {
       const mcp = Object.fromEntries(
-        [...mcpTools].map(([id, { tools }]) => {
+        [...core.mcpTools].map(([id, { tools }]) => {
           const list = [...tools.values()]
           const read = list.filter((tool) => tool.readOnly).length
           return [id, { read, write: list.length - read, unannotated: list.filter((tool) => !tool.annotated).length }]
         }),
       )
       const owned = Object.fromEntries(
-        Object.entries(unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
+        Object.entries(core.unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
       )
-      const ssh = jump.setup(c.req.query('sshError'))
+      const ssh = core.jump.setup(c.req.query('sshError'))
       const data = {
-        services,
-        secrets: unlocked().vault.services,
+        services: core.services,
+        secrets: core.unlocked().vault.services,
         owned,
-        groups,
+        groups: core.groups,
         ssh,
         mcp,
         selected: c.req.query('service'),
@@ -275,24 +244,24 @@ export function adminApp(core: Core) {
       if (/[\r\n]/.test(input.secret)) throw new HTTPException(400, { message: 'Credential must be a single line' })
       if (input.authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(input.secret))
         throw new HTTPException(400, { message: 'A path credential must be one URL path segment' })
-      unlocked().vault.services[input.id] = input.secret
-      await unlocked().save()
+      core.unlocked().vault.services[input.id] = input.secret
+      await core.unlocked().save()
     }
-    if (input.authType === 'none' && Object.hasOwn(unlocked().vault.services, input.id)) {
-      delete unlocked().vault.services[input.id]
-      await unlocked().save()
+    if (input.authType === 'none' && Object.hasOwn(core.unlocked().vault.services, input.id)) {
+      delete core.unlocked().vault.services[input.id]
+      await core.unlocked().save()
     }
-    services[input.id] = service
-    mcpTools.delete(input.id)
-    await saveServices()
-    audit('service_saved', { service: input.id })
+    core.services[input.id] = service
+    core.mcpTools.delete(input.id)
+    await core.saveServices()
+    core.audit('service_saved', { service: input.id })
     return c.redirect('/admin?section=services', 303)
   })
   // Lists an MCP service's tools now, so the editor shows how they classify (read-only vs write).
   admin.post('/services/tools', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
-    const ok = await listMcpTools(id).then(
+    if (!core.services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
+    const ok = await core.listMcpTools(id).then(
       () => true,
       () => false,
     )
@@ -300,40 +269,40 @@ export function adminApp(core: Core) {
   })
   admin.post('/services/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!Object.hasOwn(services, id)) throw new HTTPException(404, { message: 'Unknown service' })
-    delete services[id]
-    delete unlocked().vault.services[id]
-    await saveServices()
-    await unlocked().save()
-    revokeGrants((grant) => grant.item.startsWith(`${id}.`))
-    for (const [key, request] of requests)
-      if (itemsWhere(request, 'pending').some((item) => item.startsWith(`${id}.`))) requests.delete(key)
-    audit('service_deleted', { service: id })
+    if (!Object.hasOwn(core.services, id)) throw new HTTPException(404, { message: 'Unknown service' })
+    delete core.services[id]
+    delete core.unlocked().vault.services[id]
+    await core.saveServices()
+    await core.unlocked().save()
+    core.revokeGrants((grant) => grant.item.startsWith(`${id}.`))
+    for (const [key, request] of core.requests)
+      if (itemsWhere(request, 'pending').some((item) => item.startsWith(`${id}.`))) core.requests.delete(key)
+    core.audit('service_deleted', { service: id })
     return c.redirect('/admin?section=services', 303)
   })
   // Secrets agents may use without seeing them (inserted by the secrets proxy). A blank value keeps
   // the stored one.
   admin.post('/secrets/save', async (c) => {
     const input = ownerSecretSchema.parse(await fields(c))
-    const { vault } = unlocked()
+    const { vault } = core.unlocked()
     const value = input.value || vault.secrets[input.name]?.value
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
     // Grants read the hosts live, so a newly allowed host would quietly widen every grant already given: end them.
     const before = vault.secrets[input.name]?.hosts ?? []
     if (input.hosts.some((host) => !before.includes(host)))
-      revokeGrants((grant) => grant.item === `secret:${input.name}`)
+      core.revokeGrants((grant) => grant.item === `secret:${input.name}`)
     vault.secrets[input.name] = { value, hosts: input.hosts, env: input.env }
-    await unlocked().save()
-    audit('secret_saved', { secret: input.name })
+    await core.unlocked().save()
+    core.audit('secret_saved', { secret: input.name })
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/secrets/delete', async (c) => {
     const { name } = ownerSecretSchema.pick({ name: true }).parse(await fields(c))
-    const { vault } = unlocked()
+    const { vault } = core.unlocked()
     if (!Object.hasOwn(vault.secrets, name)) throw new HTTPException(404, { message: 'Unknown secret' })
     delete vault.secrets[name]
-    await unlocked().save()
-    audit('secret_deleted', { secret: name })
+    await core.unlocked().save()
+    core.audit('secret_deleted', { secret: name })
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/password', async (c) => {
@@ -342,13 +311,13 @@ export function adminApp(core: Core) {
       .and(newPasswordSchema)
       .parse(await fields(c))
     try {
-      await checkPassword(current)
+      await core.checkPassword(current)
     } catch (error) {
       if (error instanceof WrongPassword) throw new HTTPException(400, { message: 'The current password is wrong' })
       throw error
     }
-    await unlocked().setPassword(next.password)
-    audit('owner_password_changed')
+    await core.unlocked().setPassword(next.password)
+    core.audit('owner_password_changed')
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/groups/save', async (c) => {
@@ -365,91 +334,91 @@ export function adminApp(core: Core) {
     if (!lines.length) return back('empty')
     const parsed = groupItemsSchema.safeParse(lines)
     if (!parsed.success) return back('line')
-    groups[input.data.id] = { ...(description.data ? { description: description.data } : {}), items: parsed.data }
-    await saveGroups()
-    audit('group_saved', { group: input.data.id })
+    core.groups[input.data.id] = { ...(description.data ? { description: description.data } : {}), items: parsed.data }
+    await core.saveGroups()
+    core.audit('group_saved', { group: input.data.id })
     return c.redirect('/admin?section=groups', 303)
   })
   admin.post('/groups/delete', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!Object.hasOwn(groups, id)) throw new HTTPException(404, { message: 'Unknown group' })
-    delete groups[id]
-    await saveGroups()
-    audit('group_deleted', { group: id })
+    if (!Object.hasOwn(core.groups, id)) throw new HTTPException(404, { message: 'Unknown group' })
+    delete core.groups[id]
+    await core.saveGroups()
+    core.audit('group_deleted', { group: id })
     return c.redirect('/admin?section=groups', 303)
   })
   const hostById = (id: string) => {
-    const host = hosts.get(id)
+    const host = core.hosts.get(id)
     if (!host) throw new HTTPException(404, { message: 'Unknown sandbox host' })
     return host
   }
   const removeHost = (host: Host) => {
-    for (const agent of enrolled()) if (agent.host === host.id) endAgent(agent.id)
-    connections.get(host.id)?.ws.close(1008, 'removed')
-    hosts.delete(host.id)
+    for (const agent of core.enrolled()) if (agent.host === host.id) core.endAgent(agent.id)
+    core.connections.get(host.id)?.ws.close(1008, 'removed')
+    core.hosts.delete(host.id)
   }
   admin.post('/hosts/:id/approve', async (c) => {
     const host = hostById(c.req.param('id'))
     host.status = transition('host', hostTable, host.status, 'approve')
-    audit('host_approved', { host: host.id })
+    core.audit('host_approved', { host: host.id })
     // A host registering again from the same address under the same name is the same machine: its older entries
     // (their tokens are bound to that address and are unusable now) go, with their agents.
-    for (const old of hosts.values())
+    for (const old of core.hosts.values())
       if (old.id !== host.id && old.name === host.name && old.source === host.source) {
         removeHost(old)
-        audit('host_replaced', { host: old.id, by: host.id, name: old.name })
+        core.audit('host_replaced', { host: old.id, by: host.id, name: old.name })
       }
-    await saveHosts()
+    await core.saveHosts()
     return redirect(c)
   })
   // Removing a host (pending or approved) also ends its agents; its tokens stop working.
   admin.post('/hosts/:id/remove', async (c) => {
     const host = hostById(c.req.param('id'))
     removeHost(host)
-    audit('host_removed', { host: host.id })
-    await saveHosts()
+    core.audit('host_removed', { host: host.id })
+    await core.saveHosts()
     return redirect(c)
   })
   admin.post('/agents/:id/revoke', (c) => {
-    endAgent(c.req.param('id'))
+    core.endAgent(c.req.param('id'))
     return redirect(c)
   })
   // Extending moves the end to max(current end, now) + the span the owner originally granted.
   admin.post('/grants/extend', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    const grant = grants.get(id)
+    const grant = core.grants.get(id)
     if (!grant) throw new HTTPException(404, { message: 'Grant not found' })
     if (grant.expiresAt === null || grant.grantedMs === undefined)
       throw new HTTPException(409, { message: 'Nothing to extend' })
     const end = Math.max(Date.parse(grant.expiresAt), Date.now()) + grant.grantedMs
     grant.expiresAt = new Date(end).toISOString()
-    for (const site of grants.values()) if (site.with?.includes(id)) site.expiresAt = grant.expiresAt
-    for (const request of requests.values())
+    for (const site of core.grants.values()) if (site.with?.includes(id)) site.expiresAt = grant.expiresAt
+    for (const request of core.requests.values())
       if (request.grantIds.includes(id) && (request.expiresAt ?? 0) < end) request.expiresAt = end
-    push()
-    audit('grant_extended', { grant: id, agent: grant.agentId, expiresAt: grant.expiresAt })
+    core.push()
+    core.audit('grant_extended', { grant: id, agent: grant.agentId, expiresAt: grant.expiresAt })
     return redirect(c)
   })
   admin.post('/requests/:id/approve', async (c) => {
     const { duration, items, shown } = decisionSchema.parse(await fields(c))
-    await decide(c.req.param('id'), items, shown, duration)
+    await core.decide(c.req.param('id'), items, shown, duration)
     return redirect(c)
   })
   admin.post('/requests/:id/deny', async (c) => {
     const { shown } = decisionSchema.pick({ shown: true }).parse(await fields(c))
-    await decide(c.req.param('id'), [], shown, '2h')
+    await core.decide(c.req.param('id'), [], shown, '2h')
     return redirect(c)
   })
   admin.post('/grants/revoke', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
-    if (!grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
-    revokeGrants((grant) => grant.id === id)
+    if (!core.grants.has(id)) throw new HTTPException(404, { message: 'Grant not found' })
+    core.revokeGrants((grant) => grant.id === id)
     return redirect(c)
   })
   // Targets, shares and open sessions; a target or share that goes takes its grants with it.
-  jump.routes(admin, fields, () =>
-    revokeGrants(
-      (grant) => /^(ssh|folder):/.test(grant.item) && jump.unavailable(grant.agentId, grant.item) !== undefined,
+  core.jump.routes(admin, fields, () =>
+    core.revokeGrants(
+      (grant) => /^(ssh|folder):/.test(grant.item) && core.jump.unavailable(grant.agentId, grant.item) !== undefined,
     ),
   )
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))

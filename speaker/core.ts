@@ -449,7 +449,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     agent.counts[field]++
     agent.counts.lastRefusal = message
   }
-  let version = 0
   const rid = () => randomBytes(16).toString('hex')
   const live = (grant: { expiresAt: string | null }) =>
     grant.expiresAt === null || Date.parse(grant.expiresAt) > Date.now()
@@ -629,7 +628,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   // grant is between the agent and the relay alone.
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
-    version,
     grants: [...grants.values()]
       .filter(
         (grant) =>
@@ -658,7 +656,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       })),
   })
   function push() {
-    version++
     syncJump()
     for (const [id, { ws }] of connections) ws.send(JSON.stringify(snapshot(id)))
   }
@@ -1030,9 +1027,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     proxy,
     get vault() {
       return vault
-    },
-    get version() {
-      return version
     },
     unlocked,
     ownerSecrets,
