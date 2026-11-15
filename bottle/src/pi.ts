@@ -148,7 +148,12 @@ const modelsJson = (config: Config) => ({
   },
 });
 
-export const systemNote = (agent: { name: string; prompt?: string; attended: boolean }, grants: Grant[], catalog: Catalog, extIds: string[]) => {
+export const systemNote = (
+  agent: { name: string; prompt?: string; attended: boolean; folders?: string[] },
+  grants: Grant[],
+  catalog: Catalog,
+  extIds: string[],
+) => {
   const rows = unexpired(grants).map((grant) => `${grant.item} (${grant.expiresAt ? `expires ${grant.expiresAt}` : "permanent"})`);
   const notes = extIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
@@ -159,7 +164,8 @@ export const systemNote = (agent: { name: string; prompt?: string; attended: boo
     "",
     "You run inside a disposable micro-VM.",
     "",
-    "- `/space/<share>` holds read-write shared folders that outlive this agent (other agents may read them later). `/input/<share>` holds read-only folders the owner granted you.",
+    "- `/space/<name>` holds read-write folders of the owner's that outlive this agent (other agents may use them too). `/input/<name>` holds read-only ones.",
+    ...(agent.folders?.length ? [`- The owner gave you these folders at launch: ${agent.folders.map((mount) => `\`${mount}\``).join(", ")}.`] : []),
     "- `/work` is your scratch space. It holds this session. The owner destroys it when the task closes.",
     "- `/output` is permanent. Write everything the owner should keep there.",
     "- Work directly on the owner's goal. Keep updates concise.",
@@ -231,7 +237,7 @@ export const writeGuestConfig = (
   directory: string,
   config: Config,
   catalog: Catalog,
-  agent: { name: string; model: string; prompt?: string; attended: boolean },
+  agent: { name: string; model: string; prompt?: string; attended: boolean; folders?: string[] },
   grants: Grant[],
   mcpIds: string[],
   extIds: string[],

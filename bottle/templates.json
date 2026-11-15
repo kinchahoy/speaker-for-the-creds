@@ -1,7 +1,7 @@
 [
   {
     "id": "sealed",
-    "label": "Sealed: the shared agent space, no network",
+    "label": "Sealed: the agent space, no network",
     "model": "qwen",
     "limits": {
       "cpus": 2,
@@ -10,8 +10,9 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "want": ["folder:bottle-agent-space:rw", "ext:subagent", "ext:pi-cc-monitor", "ext:pi-cc-loop"],
-    "duration": "1d"
+    "want": ["ext:subagent", "ext:pi-cc-monitor", "ext:pi-cc-loop"],
+    "duration": "1d",
+    "folders": ["~/agent-space:rw"]
   },
   {
     "id": "builder",
@@ -26,7 +27,6 @@
       "maxModelRequests": 1500
     },
     "want": [
-      "folder:bottle-agent-space:rw",
       "ext:subagent",
       "ext:pi-cc-monitor",
       "ext:pi-cc-loop",
@@ -45,7 +45,8 @@
       "site:arxiv.org",
       "site:export.arxiv.org"
     ],
-    "duration": "1d"
+    "duration": "1d",
+    "folders": ["~/agent-space:rw"]
   },
   {
     "id": "trusted",
@@ -59,7 +60,6 @@
       "maxRuntimeHours": 24
     },
     "want": [
-      "folder:bottle-agent-space:rw",
       "ext:subagent",
       "ext:pi-cc-monitor",
       "ext:pi-cc-loop",
@@ -81,6 +81,7 @@
       "obsidian.read",
       "karakeep.read"
     ],
-    "duration": "1d"
+    "duration": "1d",
+    "folders": ["~/agent-space:rw"]
   }
 ]

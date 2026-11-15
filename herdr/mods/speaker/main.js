@@ -70,6 +70,7 @@ export default class Speaker extends View {
       this.urlInput = field("Speaker URL, e.g. http://localhost:3000", settings()?.url);
       this.bottleInput = field("Bottle URL, e.g. http://127.0.0.1:7001", settings()?.bottle);
       this.prompt = InputState.new({ placeholder: "Prompt for the new agent (optional)" });
+      this.folders = InputState.new({ placeholder: "Extra folders, comma-separated: ~/code/proj:rw, ~/docs (optional)" });
       (settings()?.url ? this.password : this.urlInput).focus();
       this.loadTemplates(cx);
     } else cx.spawn(async (cx) => { for (;;) if ((await nextCommand()) === "open") openInbox(); });
@@ -160,9 +161,11 @@ export default class Speaker extends View {
     this.act(cx, async () => {
       const name = `start-${template}`;
       const prompt = this.prompt.value().trim();
+      const folders = this.folders.value().split(",").map((f) => f.trim()).filter(Boolean).flatMap((f) => ["-f", f]);
       await must("hc", ["run", "--bg", "--rm", "--no-parent", "--name", name, "--label", "herdr.space=bottle", "--label", `herdr.tab=${name}`,
-        "--", "sh", "-c", startScript, "sh", "run", "-d", "-t", template, "-m", alias, ...(prompt ? ["--", prompt] : [])]);
+        "--", "sh", "-c", startScript, "sh", "run", "-d", "-t", template, "-m", alias, ...folders, ...(prompt ? ["--", prompt] : [])]);
       this.prompt.set_value("");
+      this.folders.set_value("");
       this.startNote = `Starting ${template} on ${alias}; its tab ${name} in the bottle space shows progress and any error`;
     });
   }
@@ -246,6 +249,7 @@ export default class Speaker extends View {
         .when(this.finished.length > 0, (el) => el.child(heading("Recently finished")).children(this.finished.map(finished)))
         .child(heading("Start an agent"))
         .child(field(this.prompt))
+        .child(field(this.folders))
         .children(this.templates.map(template))
         .when(Boolean(this.startNote), (el) => el.child(div().text_color(t.dim).child(this.startNote))))
       .when(Boolean(token), (el) => el

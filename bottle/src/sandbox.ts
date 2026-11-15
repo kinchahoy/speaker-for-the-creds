@@ -412,13 +412,13 @@ export const listen = async (path: string, handler: RequestListener, fail: Reply
 /**
  * Starts one VM for an agent: deny-by-default egress decided by `live` (hosts, secret hosts routed through `proxy`, the
  * model-request cap), folders from `live.shares` mounted under /input or /space and following later changes, `paths` mounted at
- * /work, /output and /etc/bottle, and model calls appended to `paths.modelCalls`. Grant changes need no VM call: the doors re-read `live` on every use.
+ * /work, /output and /etc/bottle plus the launch folders (bound directly from the host), and model calls appended to `paths.modelCalls`. Grant changes need no VM call: the doors re-read `live` on every use.
  */
 export async function boot(
   config: Config,
   live: Live,
   limits: { cpus: number; memoryMiB: number; rootfsGiB: number },
-  paths: { work: string; artifacts: string; guestConfig: string; modelCalls: string },
+  paths: { work: string; artifacts: string; guestConfig: string; modelCalls: string; folders: { path: string; writable: boolean; mount: string }[] },
   env: Record<string, string>,
   speaker: { url: string; agentToken: string; ca: string },
   proxy: Dispatcher,
@@ -501,6 +501,8 @@ export async function boot(
       .volume("/work", (mount) => mount.bind(paths.work))
       .volume("/output", (mount) => mount.bind(paths.artifacts))
       .volume("/etc/bottle", (mount) => mount.bind(paths.guestConfig).readonly());
+    for (const folder of paths.folders)
+      builder = builder.volume(folder.mount, (mount) => (folder.writable ? mount.bind(folder.path) : mount.bind(folder.path).readonly()));
     for (const [door, [port]] of Object.entries(DOORS)) builder = builder.vsock(`${socketDir}/${door}.sock`, port);
     if (key) builder = builder.vsock(`${socketDir}/ssh.sock`, SSH_VSOCK);
     for (const [key, value] of Object.entries(guestEnv)) builder = builder.env(key, value);

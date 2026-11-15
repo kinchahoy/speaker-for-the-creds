@@ -228,17 +228,20 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle 
 
 <sub>AI-written</sub>
 
-`templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `model`, the template's default model (an id or alias). `want` lists items (`site:pypi.org`, `ext:subagent`, `notes.read`) and may list `group:` items when speaker has a `groups.json`. `label` and `duration` are the agent's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the agent's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing. Duplicate IDs fail validation.
+`templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `model`, the template's default model (an id or alias), and `folders`, host folders bottle mounts into every agent from it (see Launch folders). `want` lists items (`site:pypi.org`, `ext:subagent`, `notes.read`) and may list `group:` items when speaker has a `groups.json`. `label` and `duration` are the agent's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the agent's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing. Duplicate IDs fail validation.
 
 _AI-drafted_ The file ships three risk tiers, each a superset of the one before. Writes (GitHub write, `ssh:`, `.full` services) are in no template; the agent asks mid-run.
 
 | Template | Default model | Adds |
 | --- | --- | --- |
-| `sealed` | `qwen` | The shared agent space (`folder:bottle-agent-space:rw`, at `/space/bottle-agent-space`) and the `subagent`, `pi-cc-monitor`, `pi-cc-loop` extensions. No network. |
+| `sealed` | `qwen` | The agent space `~/agent-space` (a launch folder, at `/space/agent-space`) and the `subagent`, `pi-cc-monitor`, `pi-cc-loop` extensions. No network. |
 | `builder` | `deepseek` | Package registries, public GitHub, `context7.read`, web search, Wikipedia and arXiv. Up to 72 hours and 1500 model requests. |
 | `trusted` | `deepseek` | `secret:GITHUB_READ` for private GitHub, plus `obsidian.read` and `karakeep.read`. |
 
 `bottle run` defaults to `builder`. Model resolution is `-m`, then the template's `model`, then the first configured model. `bottle templates [--json]` prints the templates and the models with their aliases, and shows whether the local model server answers; it reads the files directly and does not need bottle running.
+{.ai}
+
+_AI-drafted_ **Launch folders.** `bottle run -f <path>[:rw]` (repeatable) and a template's `folders` mount folders of the bottle host straight into the VM, with no speaker grant or SSH: naming them at launch is the owner's approval, and the archive's `policy-events.jsonl` records each one. Read-only folders appear at `/input/<folder name>`, `:rw` ones at `/space/<folder name>`. Paths are absolute or start with `~/`; the CLI resolves relative ones against the current directory. A missing folder, or two folders with the same name, fails the launch. Folders on other machines, or ones an agent asks for mid-run, stay speaker shares (`folder:<share>`). The shipped templates mount `~/agent-space` read-write, a scratch space every agent on this host shares; create it once with `mkdir -p ~/agent-space`.
 {.ai}
 
 A template is the runtime profile bottle owns (VM size, deadline, model-request cap, attended mode) plus what the agent starts with. A group is defined in speaker and names items you approve together. To change what agents start with, edit a template's `want` or the group in speaker. To change how big or how long an agent is, edit the template's limits.

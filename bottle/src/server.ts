@@ -25,6 +25,8 @@ const NewAgent = z
     attended: z.boolean().optional(),
     /** Calendar hours until the service archives the agent; the template's maxRuntimeHours caps it. */
     hours: z.number().positive().optional(),
+    /** Host folders to mount, `<absolute path>[:rw]`; the CLI resolves relative paths before sending. */
+    folders: z.array(z.string().min(1)).max(10).optional(),
   })
   .strict();
 

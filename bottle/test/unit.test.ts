@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
+import { launchFolders, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce, resolveModel } from "../src/agents.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
 import {
@@ -439,4 +439,22 @@ test("the catalog is checked against the guest image's plugin manifest, and a mi
 
 test("the shipped catalog parses", () => {
   Catalog.parse(JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")));
+});
+
+test("launch folders: read-only under /input, :rw under /space, ~ is home, a missing folder or a clash fails", () => {
+  const dir = mkdtempSync(join(tmpdir(), "folders-"));
+  mkdirSync(join(dir, "a", "docs"), { recursive: true });
+  mkdirSync(join(dir, "b", "docs"), { recursive: true });
+  try {
+    assert.deepEqual(launchFolders([join(dir, "a", "docs"), `${join(dir, "b")}:rw`]), [
+      { path: join(dir, "a", "docs"), writable: false, mount: "/input/docs" },
+      { path: join(dir, "b"), writable: true, mount: "/space/b" },
+    ]);
+    assert.equal(launchFolders(["~"])[0]!.path, homedir());
+    assert.throws(() => launchFolders(["relative/path"]), /absolute path or start with ~\//);
+    assert.throws(() => launchFolders([join(dir, "missing")]), /does not exist; create it/);
+    assert.throws(() => launchFolders([join(dir, "a", "docs"), join(dir, "b", "docs")]), /both mount at \/input\/docs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

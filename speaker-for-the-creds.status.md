@@ -14,7 +14,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 ## 2026-11-15 21:10 · paused
 
 **Next**
-- Owner: on the new server, create speaker share `bottle-agent-space` (Setup: a target for the server itself plus the share). sealed and builder ask for `folder:bottle-agent-space:rw` at launch; trusted also needs secret `GITHUB_READ` and the obsidian/karakeep services.
+- trusted needs secret `GITHUB_READ` and the obsidian/karakeep services in speaker.
 - Owner: re-point bottle at the new speaker (`mise run init bottle`), `bottle register`, approve the host. Fresh server lacks openrouter/anthropic/openai services (old volume): add them or wipe the volume.
 - Owner: link the Herdr mod (`ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`), set URLs in the inbox's Settings, optionally `"global": {"alt-s": "speaker.open"}` in keys.json. Then try Start (template x model), Stop, waiting-agent highlight, Recently finished.
 
@@ -24,6 +24,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - Herdr's built-in agents sidebar needs OSC 7501 status from `bottle attach`; the payload format is undocumented, parked.
 
 **Settled**
+- Launch folders (option 1): `bottle run -f <path>[:rw]` and template `folders` bind host folders into the VM without speaker (the launch is the approval; recorded in policy-events.jsonl). All three templates mount `~/agent-space:rw` at `/space/agent-space`; the `bottle-agent-space` speaker share is dropped. Speaker-approved local folders mid-run (option 2) not built.
 - Local model: llama.cpp router at 192.168.0.83:8080, preset `qwen27b` (Qwen 3.8 27B Q8_0), alias `qwen`. The router loads models on demand, so a cold first call is slow.
 - Three templates: sealed (agent space, no network, default qwen), builder (space plus public network, default deepseek, 72 h, 1500 requests), trusted (builder plus GITHUB_READ, obsidian.read, karakeep.read up front). Writes, SSH and notes otherwise are always mid-run cards; no ceilings. Template `attended` removed.
 - Model aliases (`-m qwen`); a down local model server fails `run` at once. `bottle templates [--json]` works without the service.

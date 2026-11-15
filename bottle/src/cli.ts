@@ -48,7 +48,17 @@ const runScript = (name: Script, args: string[]) => {
   child.on("exit", (code) => process.exit(code ?? 1));
 };
 
-type Values = { json?: boolean; name?: string; template?: string; model?: string; hours?: number; detach?: boolean; attended?: boolean; unattended?: boolean };
+type Values = {
+  folder?: string[];
+  json?: boolean;
+  name?: string;
+  template?: string;
+  model?: string;
+  hours?: number;
+  detach?: boolean;
+  attended?: boolean;
+  unattended?: boolean;
+};
 type Command_ = "templates" | "register" | "run" | "ls" | "attach" | "stop" | "down";
 
 const home = bottleHome();
@@ -229,7 +239,9 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     const attended = values.attended ? true : values.unattended || detach ? false : undefined;
     console.log(`Connecting to bottle at ${control} (speaker ${config.speaker.url})`);
     if (!(await isUp(control))) await startBottle(control);
-    const { id, outputDir } = await api(controlApi.agents.$post({ json: { name, template, model, prompt, attended, hours } }));
+    // Relative folder paths are this shell's; the service needs absolute ones.
+    const folders = values.folder?.map((spec) => (spec.startsWith("~") || spec.startsWith("/") ? spec : resolve(spec)));
+    const { id, outputDir } = await api(controlApi.agents.$post({ json: { name, template, model, prompt, attended, hours, folders } }));
     const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
     console.log(
       `Started ${id} (${template}).${archive} Archive: ${outputDir}\nWhen the agent asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
@@ -303,6 +315,11 @@ program
   .option("-d, --detach", "do not attach: print the attach command and return (the agent is unattended)")
   .option("-t, --template <name>", "template (see `templates`): sealed, builder, or trusted", "builder")
   .option("-m, --model <id|alias>", "model id or alias; default: the template's model")
+  .option(
+    "-f, --folder <path[:rw]>",
+    "mount a host folder (repeatable): read-only at /input/<name>, with :rw at /space/<name>",
+    (spec: string, all: string[] = []) => [...all, spec],
+  )
   .option("--name <name>", "agent name")
   .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
     const hours = Number(text);

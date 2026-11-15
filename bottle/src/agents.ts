@@ -8,7 +8,7 @@ import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
 import { localModelUp, type Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
-import { launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
+import { launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 
@@ -230,7 +230,15 @@ export class Agents {
     if (agent.state === "idle" || agent.state === "busy") this.#move(agent, busy ? "work" : "rest");
   };
 
-  async create(input: { name?: string; template: string; model?: string; prompt?: string; attended?: boolean; hours?: number }): Promise<Agent> {
+  async create(input: {
+    name?: string;
+    template: string;
+    model?: string;
+    prompt?: string;
+    attended?: boolean;
+    hours?: number;
+    folders?: string[];
+  }): Promise<Agent> {
     // Closed and failed-archive agents stay listed for the owner but no longer hold a slot.
     if (this.list().filter((agent) => !closed(agent)).length >= this.config.maxAgents)
       throw new StatusError(409, `already running ${this.config.maxAgents} agents`);
@@ -241,6 +249,7 @@ export class Agents {
     const model = resolveModel(this.config, input.model ?? template.model);
     if (model.startsWith("local/") && !(await localModelUp(this.config.localModel.upstream!)))
       throw new StatusError(400, `the local model server ${this.config.localModel.upstream} is not answering; start it or pick another model with -m`);
+    const folders = launchFolders([...template.folders, ...(input.folders ?? [])]);
     const hours = input.hours ?? template.limits.maxRuntimeHours;
     if (hours > template.limits.maxRuntimeHours)
       throw new StatusError(400, `template ${template.id} limits an agent to ${template.limits.maxRuntimeHours} hours`);
@@ -258,7 +267,13 @@ export class Agents {
     const guestConfigDir = `${this.config.stateRoot}/agents/${id}/guest-config`;
     const outputDir = `${this.config.outputRoot}/${stamp(new Date())}--${slug}--${id}`;
     for (const dir of [`${workDir}/.pi-session`, `${outputDir}/artifacts`, `${outputDir}/_control`]) mkdirSync(dir, { recursive: true });
-    const events = [{ at: new Date().toISOString(), text: `agent launched ${attended ? "attended" : "unattended"} from template ${template.id}` }];
+    const events = [
+      { at: new Date().toISOString(), text: `agent launched ${attended ? "attended" : "unattended"} from template ${template.id}` },
+      ...folders.map((folder) => ({
+        at: new Date().toISOString(),
+        text: `mounted ${folder.path} at ${folder.mount} ${folder.writable ? "read-write" : "read-only"}`,
+      })),
+    ];
     const live: Live = {
       hosts: [],
       secretHosts: [],
@@ -275,12 +290,20 @@ export class Agents {
     try {
       // Speaker's proxy certificate, fetched once for the guest's trust store and bottle's own tunnel to the proxy.
       const ca = await upstream(speakerCa(this.config));
-      writeGuestConfig(guestConfigDir, this.config, this.catalog, { name, model, prompt: input.prompt, attended }, [], [], []);
+      writeGuestConfig(
+        guestConfigDir,
+        this.config,
+        this.catalog,
+        { name, model, prompt: input.prompt, attended, folders: folders.map((folder) => folder.mount) },
+        [],
+        [],
+        [],
+      );
       guest = await this.#boot(
         this.config,
         live,
         template.limits,
-        { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, modelCalls: `${outputDir}/_control/model-calls.jsonl` },
+        { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, modelCalls: `${outputDir}/_control/model-calls.jsonl`, folders },
         { BOTTLE_TOKEN: guestToken, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
         { url: this.config.speaker.url, agentToken: speakerAgent.agentToken, ca },
         speakerProxy(this.config, speakerAgent.agentToken, ca),

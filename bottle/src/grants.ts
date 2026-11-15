@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { durationNames, type ErrorCode } from "../../speaker/items.ts";
 
@@ -29,6 +31,8 @@ export const Template = z
     model: z.string().min(1).optional(),
     /** Items and groups the agent asks for at launch (for example `group:developer`, `site:pypi.org`, `notes.read`). */
     want: z.array(z.string().trim().min(1)).max(50).default([]),
+    /** Host folders bottle mounts into every agent from this template, as `<path>[:rw]` (`~` is the owner's home); see `launchFolders`. */
+    folders: z.array(z.string().min(1)).max(10).default([]),
     /** How long the first request asks for. */
     duration: z.enum(durationNames).default("2h"),
   })
@@ -102,4 +106,22 @@ export const speakerRequestAllowed = (speaker: URL, url: URL, method: string, mo
     );
   const service = /^\/([a-zA-Z0-9_-]+)(?:\/|$)/.exec(path)?.[1];
   return service !== undefined && service !== "admin" && !modelServices.includes(service) && !path.startsWith("/_");
+};
+
+/**
+ * Host folders the owner names at launch (`<absolute path or ~/…>[:rw]`), bind-mounted by bottle without speaker: the launch
+ * itself is the owner's approval. Read-write ones appear at /space/<folder name>, read-only ones at /input/<folder name>.
+ */
+export const launchFolders = (specs: string[]) => {
+  const folders = specs.map((spec) => {
+    const writable = spec.endsWith(":rw");
+    const raw = writable ? spec.slice(0, -3) : spec;
+    const path = raw === "~" || raw.startsWith("~/") ? homedir() + raw.slice(1) : raw;
+    if (!isAbsolute(path)) throw new StatusError(400, `folder ${spec} must be an absolute path or start with ~/`);
+    if (!statSync(path, { throwIfNoEntry: false })?.isDirectory()) throw new StatusError(400, `folder ${path} does not exist; create it (mkdir -p ${path})`);
+    return { path, writable, mount: `${writable ? "/space" : "/input"}/${basename(path)}` };
+  });
+  const clash = folders.find((folder, index) => folders.findIndex((other) => other.mount === folder.mount) !== index);
+  if (clash) throw new StatusError(400, `two folders would both mount at ${clash.mount}; rename one`);
+  return folders;
 };
