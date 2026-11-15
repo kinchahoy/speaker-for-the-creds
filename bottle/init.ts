@@ -449,5 +449,7 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     if (!existsSync(result)) fail(`the task archived without /output/hello.txt`, `read the transcript in ${join(outputRoot, archive)}`);
     ok(`Smoke test passed: hello.txt contains "${readFileSync(result, "utf8").trim()}" (${result}).`);
   } else p.log.info("Start it with: mise run bottle serve");
-  p.outro('bottle is set up. Launch work with: mise run bottle run --template offline --prompt "..."');
+  p.outro(
+    `bottle is set up. Keep \`mise run bottle serve\` running, then launch work with: mise run bottle run --template offline${model ? "" : " --model openrouter/<model>"} --prompt "..."`,
+  );
 }
