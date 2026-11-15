@@ -25,3 +25,19 @@
 - microsandbox refuses a storage folder that other accounts could write; its storage must be mode 700.
 - The egress gateway is a high-value host process and needs the same care as speaker's proxy.
 - Not yet verified: macOS (entitlements and FUSE in the guest kernel), `sshfs` throughput over vsock, many concurrent VMs, terminal resize.
+
+**Later: pre-warmed snapshots (idea, 2026-11-15).** A launch takes a few seconds: the VM boots in about 2 s, then Pi loads from a cold guest disk (it runs as `node-MainThread` until loaded). microsandbox 0.7.15 can restore a full snapshot (memory included) with `Sandbox.restore()`, rebinding host folders, and can copy a running VM with `fork()`; `cowMemory()` lets restored VMs share unchanged memory pages (an idle agent holds about 410 MiB today).
+{.ai}
+
+Order the boot so Pi is warm before anything agent-specific arrives:
+{.ai}
+
+1. Snapshot once per guest image: boot, guest setup (doors, `/etc/hosts`), then start a generic Pi with the always-on extensions and let it load. The snapshot then holds Pi's loaded code and a warm page cache.
+2. Per agent: restore with `cowMemory()`, rebinding `/work`, `/output`, `/etc/bottle` and launch folders to the agent's own, and the vsock door sockets to its own.
+3. Write the agent's config (model, system note, prompt, opt-in extensions as `-e`) and restart Pi. Pi reads these only at start, so a restart is needed, but it loads from the warm cache in well under a second. Opt-in extensions add their own load time.
+4. Things Pi never reads at start come last and need no restart: the SSH key and `sshfs` shares (mounted as grants arrive, as today), the speaker CA for tools, and grants (the doors read them live).
+{.ai}
+
+Open points: Pi's process environment carries the agent's token variables, so they would move to a file Pi's extensions read, or come with the restart in step 3. Estimated at a few hundred lines on a young API. Worth it if launches still feel slow, or memory limits how many agents run at once.
+{.ai}
+

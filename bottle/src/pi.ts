@@ -317,25 +317,40 @@ const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
 /**
  * True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone
  * would wait forever. Pi names itself `pi` only once loaded; on a cold disk it runs for a while as node with
- * /usr/local/bin/pi in its arguments, so either counts (the `[i]` keeps this shell's own command line from matching).
+ * /usr/local/bin/pi in its arguments, and before that pi-launch is still copying its config; all three count (the `[i]` keeps
+ * this shell's own command line from matching).
  */
-const alive = "ps -eo stat=,comm=,args= | grep -v '^Z' | grep -qE '^[^ ]+ +pi |/usr/local/bin/p[i] '";
+const alive = "ps -eo stat=,comm=,args= | grep -v '^Z' | grep -qE '^[^ ]+ +pi |/usr/local/bin/p[i]( |-launch)'";
 /** pi-launch sends Pi's stderr here, since dtach's terminal is gone once Pi exits. */
 const stderrLog = "/run/pi.err";
 const running = async (guest: Guest) => (await guest.exec(alive)).exitCode === 0;
-/** A Pi that dies right after launch (a bad extension path, a crashing extension) still leaves dtach's exit code 0, so watch it for a moment. */
+/** True once Pi has loaded: it renames its process `pi` then (a zombie does not count). */
+const loadedCheck = "ps -C pi -o stat= | grep -qv '^Z'";
+/**
+ * Waits for a new Pi to load, then watches it briefly: a Pi that dies right after launch (a bad extension path, a crashing
+ * extension) still leaves dtach's exit code 0. Loading takes as long as the guest's disk needs, so only the short watch is fixed.
+ */
 const settled = async (operation: string, guest: Guest) => {
+  const died = async () => {
+    const log = (await guest.exec(`tail -c 1500 ${stderrLog} 2>/dev/null`)).stdout.trim();
+    return new Error(`${operation}: Pi exited right after launch${log ? `: ${log}` : " (no stderr was captured)"}`);
+  };
+  const deadline = Date.now() + pi.loadMs;
+  while ((await guest.exec(loadedCheck)).exitCode !== 0) {
+    if (!(await running(guest))) throw await died();
+    if (Date.now() > deadline) throw new Error(`${operation}: Pi did not finish loading within ${pi.loadMs / 1000} s`);
+    await delay(100);
+  }
   for (let waited = 0; waited < pi.settleMs; waited += 250) {
     await delay(Math.min(250, pi.settleMs - waited));
-    if (!(await running(guest))) {
-      const log = (await guest.exec(`tail -c 1500 ${stderrLog} 2>/dev/null`)).stdout.trim();
-      throw new Error(`${operation}: Pi exited right after launch${log ? `: ${log}` : " (no stderr was captured)"}`);
-    }
+    if (!(await running(guest))) throw await died();
   }
 };
 export const pi = {
-  /** How long a new Pi must stay up before a start or restart counts. */
-  settleMs: 3_000,
+  /** How long a new Pi may take to load (a cold guest disk is slow). */
+  loadMs: 60_000,
+  /** How long a loaded Pi must then stay up before a start or restart counts. */
+  settleMs: 1_000,
   start: async (guest: Guest) => {
     await checked("Pi start", guest.exec("dtach -n /run/pi.dtach /usr/local/bin/pi-launch"));
     await settled("Pi start", guest);

@@ -119,7 +119,7 @@ async function fixture(t: TestContext, catalog: unknown = { mcps: {}, extensions
         // Pi is up from a dtach launch until a quit or kill (or, when the test says so, it dies at once); a restart fails when the test says so.
         if (command.includes("dtach -n")) piUp = !piDies;
         else if (command.includes("/quit") || command.startsWith("pkill -x pi || true")) piUp = false;
-        if (command.startsWith("ps -eo stat=,comm=,args=")) return { exitCode: piUp ? 0 : 1, stdout: "", stderr: "" };
+        if (command.startsWith("ps -eo stat=,comm=,args=") || command.startsWith("ps -C pi")) return { exitCode: piUp ? 0 : 1, stdout: "", stderr: "" };
         if (command.startsWith("tail ")) return { exitCode: 0, stdout: "Error: cannot load /opt/notes", stderr: "" };
         return { exitCode: restartFails && command.startsWith("pkill -x pi;") ? 1 : 0, stdout: "", stderr: "" };
       },
