@@ -19,11 +19,13 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - Owner: link the Herdr mod (`ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`), set URLs in the inbox's Settings, optionally `"global": {"alt-s": "speaker.open"}` in keys.json. Then try Start (template x model), Stop, waiting-agent highlight, Recently finished.
 
 **Open**
+- A `-m deepseek` launch on the laptop speaker timed out at the launch request (no request_created in audit; agent left failed-archive). Likely the missing openrouter service there; not investigated.
 - Nothing in the Herdr mod was clicked live (Start via `hc run --bg --rm`, `tab.new` for archives, highlight). The mod passes `herdr-app check`.
 - Qwen consulting DeepSeek via the subagent extension: not started; the model door serves one model per VM today.
 - Herdr's built-in agents sidebar needs OSC 7501 status from `bottle attach`; the payload format is undocumented, parked.
 
 **Settled**
+- Pi liveness: Pi runs as `node-MainThread` until loaded, so `ps -C pi` failed every cold launch ("Pi exited right after launch", also the 18:08 run). Now matched by comm or args. Verified live: sealed on local Qwen starts, `/space/agent-space` writes reach the host.
 - Launch folders (option 1): `bottle run -f <path>[:rw]` and template `folders` bind host folders into the VM without speaker (the launch is the approval; recorded in policy-events.jsonl). All three templates mount `~/agent-space:rw` at `/space/agent-space`; the `bottle-agent-space` speaker share is dropped. Speaker-approved local folders mid-run (option 2) not built.
 - Local model: llama.cpp router at 192.168.0.83:8080, preset `qwen27b` (Qwen 3.8 27B Q8_0), alias `qwen`. The router loads models on demand, so a cold first call is slow.
 - Three templates: sealed (agent space, no network, default qwen), builder (space plus public network, default deepseek, 72 h, 1500 requests), trusted (builder plus GITHUB_READ, obsidian.read, karakeep.read up front). Writes, SSH and notes otherwise are always mid-run cards; no ceilings. Template `attended` removed.
