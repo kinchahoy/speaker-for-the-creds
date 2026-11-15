@@ -84,16 +84,17 @@ export const hostApproved = async (config: Config) => {
 
 export const speakerClient = (config: Config, hostToken: string) => {
   const api = speakerApi(config, hostToken);
-  const timeout = { init: { signal: AbortSignal.timeout(10_000) } };
+  // A fresh signal per call: one shared AbortSignal.timeout fires once and then aborts every later call at once.
+  const timeout = () => ({ init: { signal: AbortSignal.timeout(10_000) } });
   const check = async (what: string, response: Pick<Response, "ok" | "status" | "text" | "json">) => {
     if (!response.ok) throw new Error(`speaker ${what} returned ${response.status}: ${await response.text()}`);
     return response.json();
   };
   return {
     createAgent: async (label: string, agent: string) =>
-      SpeakerAgent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout))),
-    deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout)),
-    request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout))),
+      SpeakerAgent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout()))),
+    deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout())),
+    request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout()))),
   };
 };
 export type Speaker = ReturnType<typeof speakerClient>;
