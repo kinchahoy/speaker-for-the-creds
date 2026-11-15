@@ -11,6 +11,7 @@ import {
   type ServerResponse,
   STATUS_CODES,
 } from 'node:http'
+import { createPrivateKey, KeyObject } from 'node:crypto'
 import { createServer as createHttpsServer, request as httpsRequest } from 'node:https'
 import { isIP, type Socket } from 'node:net'
 import 'reflect-metadata'
@@ -19,12 +20,7 @@ import { coversAny } from './items.ts'
 
 const { subtle } = globalThis.crypto
 const algorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' }
-const pem = (label: string, der: ArrayBuffer) =>
-  `-----BEGIN ${label}-----\n${Buffer.from(der)
-    .toString('base64')
-    .match(/.{1,64}/g)
-    ?.join('\n')}\n-----END ${label}-----\n`
-const exportKey = async (key: CryptoKey) => pem('PRIVATE KEY', await subtle.exportKey('pkcs8', key))
+const exportKey = (key: CryptoKey) => KeyObject.from(key).export({ type: 'pkcs8', format: 'pem' }) as string
 const year = 365 * 86_400_000
 
 export type Ca = { cert: string; key: string }
@@ -59,7 +55,7 @@ export async function createCa(): Promise<Ca> {
       new x509.KeyUsagesExtension(x509.KeyUsageFlags.keyCertSign | x509.KeyUsageFlags.cRLSign, true),
     ],
   })
-  return { cert: cert.toString('pem'), key: await exportKey(keys.privateKey) }
+  return { cert: cert.toString('pem'), key: exportKey(keys.privateKey) }
 }
 
 const swap = (text: string, secrets: ProxySecret[]) =>
@@ -87,15 +83,9 @@ export function createProxy(hooks: ProxyHooks): Server {
     let made = leaves.get(host)
     if (!made) {
       made = (async () => {
-        signer ??= hooks.ca().then(async ({ cert, key }) => ({
+        signer ??= hooks.ca().then(({ cert, key }) => ({
           ca: new x509.X509Certificate(cert),
-          key: await subtle.importKey(
-            'pkcs8',
-            Buffer.from(key.replace(/-----[A-Z ]+-----|\s/g, ''), 'base64'),
-            algorithm,
-            false,
-            ['sign'],
-          ),
+          key: createPrivateKey(key).toCryptoKey(algorithm, false, ['sign']) as CryptoKey,
         }))
         const { ca, key } = await signer.catch((error) => {
           signer = undefined
@@ -118,7 +108,7 @@ export function createProxy(hooks: ProxyHooks): Server {
             new x509.SubjectAlternativeNameExtension([{ type: isIP(host) ? 'ip' : 'dns', value: host }]),
           ],
         })
-        return { key: await exportKey(keys.privateKey), cert: cert.toString('pem') }
+        return { key: exportKey(keys.privateKey), cert: cert.toString('pem') }
       })()
       leaves.set(host, made)
       made.catch(() => leaves.delete(host))
