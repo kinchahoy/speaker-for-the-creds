@@ -2,7 +2,7 @@
 
 # Plan: a smaller speaker-for-the-creds, with Herdr as a place to work
 
-<sub>AI-written, 2026-11-14. Nothing here is built yet. Line counts are estimates.</sub>
+<sub>AI-written, 2026-11-14. Steps 0 to 4 are built (see the status log); step 5 is not. Line counts are estimates.</sub>
 
 ## Intent
 
