@@ -131,8 +131,9 @@ export const catalogReport = (catalog: Catalog) => ({
 export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, retryMs: 5_000, maxBackoffMs: 30_000, dropMs: 30_000 };
 
 /**
- * Classifies why speaker can't be used: an auth answer (401/403) is fatal — the token is unknown (speaker data reset or a
- * different speaker), not yet approved, or denied — while anything else (network error, 5xx) may clear up.
+ * Classifies why speaker can't be used: a 401 is fatal when the token is unknown (speaker data reset or a different
+ * speaker); a host speaker knows but the owner has not approved (again) yet is `pending`, which clears up when the owner
+ * approves, whenever that is; anything else (network error, 5xx, locked) may clear up too.
  */
 const probeSpeaker = async (config: Config, hostToken: string) => {
   try {
@@ -140,14 +141,15 @@ const probeSpeaker = async (config: Config, hostToken: string) => {
       headers: { authorization: `Bearer ${hostToken}` },
       signal: AbortSignal.timeout(5_000),
     });
+    if (response.status === 401 && ((await response.json()) as { error?: string }).error === "approval_required")
+      return { fatal: false, pending: true, message: `speaker is waiting for the owner to approve this sandbox host in /admin` };
     await response.body?.cancel();
     if (response.status === 401)
       return {
         fatal: true,
         message:
-          `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it is not ` +
-          `approved yet, was removed, or speaker's data was reset. Approve the sandbox host in speaker /admin, or run ` +
-          `"mise run bottle register" again.`,
+          `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it was removed, ` +
+          `or speaker's data was reset. Run "mise run bottle register" again.`,
       };
     return { fatal: false, message: response.ok ? "speaker answered but the connection failed" : `speaker answered HTTP ${response.status}` };
   } catch (error) {
@@ -203,7 +205,7 @@ export const watchGrants = (
     if (probe.fatal) return fail(probe.message);
     const down = Date.now() - outage.since;
     const reached = outage.state === "stale" ? outage.was !== "connecting" : outage.state === "down";
-    if (down >= (reached ? limits.outageMs : limits.firstConnectMs))
+    if (!("pending" in probe) && down >= (reached ? limits.outageMs : limits.firstConnectMs))
       return fail(
         `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
           `Check that speaker is running and that speaker.url is right in the bottle config.json.`,

@@ -3,7 +3,6 @@
 import { createHash } from 'node:crypto'
 import { html, raw } from 'hono/html'
 import type { Group, LogEntry, Service, View } from './core.ts'
-import type { Card } from './engine.ts'
 import type { SshSetup } from './jump.ts'
 import type { OwnerSecret } from './store.ts'
 
@@ -21,7 +20,6 @@ export type Setup = {
   error?: string
 }
 
-// Open Props (colours, shadows, borders, sizes, fonts) is served separately; the colour roles below pick from its palette per scheme.
 const css = `
 :root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);caret-color:var(--accent);
 --bg:light-dark(var(--gray-0),oklch(17% .012 262));--surface:light-dark(#fff,oklch(22% .015 262));--surface-2:light-dark(var(--gray-1),oklch(26% .016 262));--ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),oklch(32% .015 262));
@@ -83,7 +81,6 @@ dialog{max-width:440px;width:calc(100% - 32px);padding:20px;border:1px solid var
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 `
 
-// Each kind of item: its Lucide icon and colour hue; admin.ts builds the served sprite from these (symbol ids become i-<kind>).
 export const icons: Record<string, [icon: string, hue: number]> = {
   brand: ['key-round', 268],
   service: ['key-round', 70],
@@ -202,7 +199,6 @@ const htmxConfig = JSON.stringify({
   includeIndicatorStyles: false,
   allowEval: false,
   allowScriptTags: false,
-  // Every answer is shown (a refused form shows its message) except 204, which means the panel is unchanged.
   responseHandling: [
     { code: '204', swap: false },
     { code: '.*', swap: true },
@@ -227,7 +223,6 @@ const kinds = {
   mcp: 'MCP',
   ext: 'Extensions',
 }
-// Kind chips and a text box that narrow the cards and rows of the live panels (see pageScript).
 const filterBar = html`<div class="chips" role="search" hidden><input type="text" name="q" placeholder="Filter by name or item" aria-label="Search"><label><input type="radio" name="kind" value="" checked>All</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${mark(k)}${text}</label>`)}</div>`
 const filterEmpty = html`<div id="filter-empty" class="panel" hidden><p>No items match this filter.</p><button type="button" class="secondary" data-clear-filter>Clear filter</button></div>`
 const intros: Record<Section, string> = {
@@ -243,7 +238,6 @@ export const layout = (nonce: string | undefined, section: Section, body: Html |
     ([id, label, href]) => html`<a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}</a>`,
   )}</nav></div></header><main><p><small>${intros[section]}</small></p>${section === 'approvals' || section === 'active' ? html`${filterBar}${filterEmpty}` : ''}${typeof body === 'string' ? raw(body) : body}</main>${confirmDialog}</body></html>`
 
-// Sign-in and first-run pages: centered card with brand lockup.
 const authPage = (
   heading: string,
   intro: string,
@@ -291,15 +285,12 @@ const select = (name: string, label: string, values: readonly string[], chosen =
   html`<label>${label}<select name="${name}">${values.map((value) => html`<option value="${value}" ${raw(value === chosen ? 'selected' : '')}>${labels[value] ?? value}</option>`)}</select></label>`
 const area = (name: string, label: string, value = '', rows = 2) =>
   html`<label>${label}<textarea name="${name}" rows="${rows}">${value}</textarea></label>`
-// One button posting `fields`; with `confirm`, htmx asks first (via #confirm-dialog when JS is running).
 const button = (action: string, fields: Html | string, label: string, confirm = '', kind = 'secondary') =>
   html`<form method="post" action="${action}" ${raw(confirm ? `hx-confirm="${String(html`${confirm}`)}"` : '')}>${fields}<button class="${kind}">${label}</button></form>`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16)
-// A time the page rewrites into the viewer's zone (UTC until the script runs); `countdown` adds the time left.
 const local = (ms: number, countdown = false) =>
   html`<time datetime="${new Date(ms).toISOString()}" data-local ${raw(countdown ? 'data-left' : '')}>${time(ms)} UTC</time>`
-// Where and when a sandbox host registered: told apart in the lists by address and time.
 const registered = (h: { source: string; registeredAt?: number }) =>
   html`from ${h.source || 'unknown address'} · registered ${h.registeredAt ? local(h.registeredAt) : 'at an unknown time'}`
 const empty = (text: string) => html`<p><small>${text}</small></p>`
@@ -311,7 +302,6 @@ export const live = (id: string, inner: string) =>
   `<section id="${id}" class="panel${id === 'inbox' ? ' region' : ''}" hx-get="/admin/panel/${id}?h=${digest(inner)}" hx-trigger="every 5s" hx-swap="outerHTML">${inner}</section>`
 export const unchanged = (inner: string, hash?: string) => hash === digest(inner)
 
-// --- Inbox: one card per request waiting for the owner (sandbox host registrations included), built by the engine ---
 export function inbox({ agents, cards }: View, groups: Record<string, Group>) {
   const byId = new Map(agents.map((a) => [a.id, a]))
   // An agent whose identity (same label and agent string) enrolled in the 30 minutes before it.
@@ -330,15 +320,15 @@ export function inbox({ agents, cards }: View, groups: Record<string, Group>) {
       ? html` <mark>same agent enrolled ${Math.round((a.createdAt - Math.max(...earlier.map((o) => o.createdAt))) / 60_000)} min earlier</mark>`
       : ''
   }
-  const pick = (i: Card['items'][number]) =>
+  const pick = (i: View['cards'][number]['items'][number]) =>
     html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" checked>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark>${i.warning}</mark>` : ''}</span></label>`
-  const meta = ({ who, type, subject }: Card) =>
+  const meta = ({ who, type, subject }: View['cards'][number]) =>
     type === 'host'
       ? html`<small class="card-meta" id="host-${subject}">${registered({ source: who.source, registeredAt: who.at })}</small>`
       : who.says !== undefined
         ? html`<small class="card-meta">says it is ${who.says}${who.via ? ` · via ${who.via}` : ''} · from ${who.source} · key <code>${who.key}</code>${twin(byId.get(subject))}</small>`
         : ''
-  const cardHtml = (r: Card) => {
+  const cardHtml = (r: View['cards'][number]) => {
     const pending = r.items.map((i) => i.item)
     // The groups the request asked for, each with the members still pending, then the items asked for on their own.
     const asked = r.want
@@ -361,11 +351,9 @@ export function inbox({ agents, cards }: View, groups: Record<string, Group>) {
   )
 }
 
-// --- Active: agents with live grants/sessions first, idle agents below, and approved sandbox hosts ---
 const chips = { enforced: '', sent: 'granted, not yet applied', 'host-offline': 'waiting for sandbox host' }
 const uses = (n: number, query: string) =>
   n ? html`<a href="/admin/log?${query}">${plural(n, 'use', 'uses')}</a>` : 'unused'
-// One line of counts: what the agent asked, what was decided, and what speaker turned away (warned when non-zero).
 const tallies = ({ counts: c }: View['agents'][number]) => {
   const warn = (n: number, word: string) => (n ? html`<span class="warn">${n} ${word}</span>` : `${n} ${word}`)
   return html`<br><small title="${c.lastRefusal ?? ''}">${c.requests} ${c.requests === 1 ? 'request' : 'requests'} · ${c.granted} granted · ${c.denied} denied · ${warn(c.refused, 'refused')} · ${warn(c.blocked, 'blocked')}</small>`
@@ -403,7 +391,6 @@ export function active({ hosts, agents, grants, sessions }: View) {
   )
 }
 
-// --- Setup: services, secrets, groups, SSH targets and shares, the owner password ---
 const groupErrors: Record<string, string> = {
   empty: 'Group not saved: list at least one item, one per line.',
   line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
@@ -449,7 +436,6 @@ export function setup({ services, secrets, owned, groups, ssh, mcp, selected, er
   return html`${jumpNav}<section class="panel" id="setup-services"><h2>Services</h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}<ul class="rows">${serviceRows.length ? serviceRows : empty('No services configured. Add a service to let agents request access to an upstream API.')}</ul>${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2>Secrets</h2><ul class="rows">${secretRows.length ? secretRows : empty('No secrets. A secret is a token speaker inserts into an agent’s requests to the hosts you allow; the agent never sees it.')}</ul><details><summary>Add or change a secret</summary><form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)')}${input('value', 'Value (never shown again; blank keeps the current one)', 'password')}${area('hosts', 'Allowed hosts, one per line (adding a host ends the grants already given for this secret)')}${input('env', 'Environment variable the agent sees')}<button>Save secret</button></form></details></section><section class="panel" id="groups"><h2>Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}<ul class="rows">${groupRows.length ? groupRows : empty('No groups. A group collects items so an agent can request them with one approval.')}</ul><details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>A group is what an agent may ask for; a bottle template sets the VM size and attended mode and names the group to request at launch. Changes apply to new requests; requests already pending keep their items.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner password</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section><p><small>Credentials stay on this server.</small></p>`
 }
 
-// --- Log: newest first, narrowed by the filters in the address ---
 const s = (value: unknown) => String(value ?? '')
 const what = (e: LogEntry): Html | '' => {
   if (e.event === 'ssh_file') return html`<code>${s(e.op)} ${s(e.path)}</code> <small>${s(e.share ?? e.target)}</small>`

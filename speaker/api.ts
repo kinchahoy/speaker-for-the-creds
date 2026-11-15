@@ -34,7 +34,6 @@ export type SpeakerApi = ReturnType<typeof agentApi>
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${core.baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', core.baseOf(c))
-  // Every agent-facing 401 names the next step and points at the skill.
   const unauthorized = (
     c: Context,
     error: 'enroll' | 'register' | 'approval_required',
@@ -104,7 +103,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
     while (!(await core.engine.serial(settled)) && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
-  // A group is offered only if every member is a kind the agent can use.
   const offered = (agent: Agent) =>
     Object.entries(core.groups).filter(([, group]) =>
       group.items.every((item) => core.allowedKinds(agent).includes(kindOf(item) ?? '')),
@@ -147,13 +145,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           if (!items.includes(`site:${host}`)) bundled[`site:${host}`] ??= item
     return { items: union(items, Object.keys(bundled)), bundled }
   }
-  // Granted items its sandbox host has not yet reported in force: they count as granted for the agent only once it has.
   const applying = (request: Request) =>
     core.engine
       .outcomeOf(request)
       .approved.filter((grant) => core.engine.live(grant) && core.enforcementOf(grant) !== 'enforced')
       .map((grant) => grant.item)
-  // A request as the agent sees it: per-item outcome, and what to do next.
   const outcome = (c: Context, request: Request) => {
     const status = core.engine.statusOf(request),
       { granted, denied, expiresAt } = core.engine.outcomeOf(request)
@@ -181,12 +177,10 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               : {}),
     }
   }
-  // Files the request, holds for the owner when asked to, and answers with the per-item outcome.
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
     let items: string[], bundled: Record<string, string>
     try {
       ;({ items, bundled } = resolveItems(input.want, agent))
-      // A newer key replaces the older one.
       if (input.sshKey) {
         agent.sshKey = input.sshKey
         core.syncJump()
@@ -267,7 +261,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   }
   // Enrollment and registration are unauthenticated: one shared budget caps how many identities anyone can create.
   // Behind a reverse proxy every client shares one address anyway, so a per-address key would add nothing.
-  // Declares a route's JSON body type for the typed client; the handler still parses it itself.
   const json =
     <T>(): MiddlewareHandler<Env, string, { in: { json: T } }> =>
     (_c, next) =>
@@ -286,15 +279,12 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     },
   })
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
-  // The routes are one chain so that `SpeakerApi` carries their paths to bottle's typed client.
   return (
     app
       .get('/_speaker/health', (c) => c.json({ ok: true }))
-      // The proxy's public certificate: agents trust it for the hosts of their secrets.
       .get('/_speaker/proxy/ca.pem', locked, async (c) =>
         c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
       )
-      // Public discovery: what speaker is and where the instructions are. Services and groups stay behind auth.
       .use('/skill.md', etag())
       .use('/_speaker/help', etag())
       .get('/skill.md', (c) => c.text(withAddress(c, core.skill), 200, markdown))
@@ -346,7 +336,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const host: Host = { id: core.rid(), ...input, source: core.sourceOf(c), registeredAt: Date.now() }
         core.audit('host_registered', { host: host.id, name: host.name })
         core.registerHost(host)
-        // The ports let the sandbox host find the proxy and jump server without the owner copying them over.
         return c.json(
           { id: host.id, status: 'pending' as const, proxyPort: core.config.PROXY_PORT, sshPort: core.config.SSH_PORT },
           201,
@@ -419,7 +408,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           }
         }),
       )
-      // A sandbox host checking that speaker has approved it (the auth middleware has already refused unapproved ones).
       .get('/_speaker/hosts/self', (c) => {
         const caller = c.get('caller')
         if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
@@ -429,7 +417,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const host = hostCaller(c)
         const identity = identitySchema.parse(await c.req.json())
         const token = randomBytes(32).toString('base64url')
-        // The agent's token works only from the sandbox host's address, so a token leaked from a VM is useless elsewhere.
         const agent: Agent = {
           id: core.rid(),
           tokenHash: hash(token),
@@ -491,7 +478,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const result = outcome(c, request)
         return c.json(result, result.status === 'pending' ? 202 : 200)
       })
-      // Notes and the caller's current state for one service.
       .get('/_speaker/help/:name', (c) => {
         const agent = agentCaller(c)
         const name = c.req.param('name')
@@ -537,7 +523,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           agent = agentCaller(c),
           method = c.req.method,
           path = `/${parts.join('/')}`
-        // MCP POST bodies are buffered (bounded) so speaker can classify them; other bodies stream through.
         let body: ReadableStream<Uint8Array> | string | null = ['GET', 'HEAD'].includes(method) ? null : c.req.raw.body
         const trimmed = (p: string) => p.replace(/\/+$/, '')
         const readPost = method === 'POST' && service.readPaths?.some((p) => trimmed(p) === trimmed(path))
@@ -553,7 +538,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           body = text
           ;({ write, detail } = await core.mcpAccess(serviceId, text))
         }
-        // A call needs exactly the item its method implies; `.full` also covers a read.
         const item = `${serviceId}.${write ? 'full' : 'read'}`
         const secret = core.credentialOf(serviceId)
         if (secret === undefined)
@@ -589,7 +573,6 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             headers.delete(name)
         core.applyCredential(service, secret, headers)
         const start = Date.now()
-        // proxy() validates a malformed Connection header (400), drops response hop-by-hop headers and content-encoding.
         const upstream = await proxy(target, {
           raw: c.req.raw,
           strictConnectionProcessing: true,

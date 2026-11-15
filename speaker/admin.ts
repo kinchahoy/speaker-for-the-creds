@@ -59,8 +59,6 @@ export function adminApp(core: Core) {
     await next()
   })
   admin.use('*', csrf({ origin: publicOrigin }))
-  // Assets from the installed packages: htmx, Open Props' colour, shadow, border, size and font tokens, and the Lucide
-  // sprite cut down to the icons in ui.ts.
   const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
   const cached = (type: string, body: string) => (c: Context) =>
     c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
@@ -75,7 +73,6 @@ export function adminApp(core: Core) {
   admin.get('/assets/htmx.js', cached('text/javascript', asset('htmx.org/dist/htmx.min.js')))
   admin.get('/assets/open-props.css', cached('text/css', props))
   admin.get('/assets/icons.svg', cached('image/svg+xml', sprite))
-  // Owner sessions live in memory only: a restart signs the owner out.
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'
   const current = (id: string | undefined) => id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
@@ -91,7 +88,6 @@ export function adminApp(core: Core) {
     core.sessions.set(id, Date.now() + sessionLife)
     return id
   }
-  // Sign-in is the only way in: the first visit sets the owner password, later visits sign in with it.
   const signInLimit = rateLimiter({
     windowMs: 15 * 60_000,
     limit: 5,
@@ -101,7 +97,6 @@ export function adminApp(core: Core) {
     message: 'Too many failed attempts; wait a few minutes.',
   })
   const passwordBody = z.object({ password: z.string() })
-  // One password check for the form and the API: same audit lines, and it unlocks speaker after a restart.
   const signIn = async (c: Context, password: string) => {
     try {
       await core.signIn(password)
@@ -158,9 +153,7 @@ export function adminApp(core: Core) {
     if (current(token) && apiTokens.has(token as string)) return await next()
     return apiError(c, 401, 'Sign in with POST /admin/api/signin and send Authorization: Bearer <token>')
   })
-  // The same cards the Inbox shows, built by the approval engine (sandbox host registrations included).
   admin.get('/api/pending', (c) => c.json({ pending: core.engine.cards() }))
-  // Every live grant, a sandbox host's approval included (revoking that removes the host).
   admin.get('/api/active', (c) =>
     c.json({
       grants: core.engine.grants().map((g) => ({
@@ -172,7 +165,6 @@ export function adminApp(core: Core) {
       })),
     }),
   )
-  // Approve as asked: every item still pending on the card.
   const pendingOf = (id: string) => {
     const request = core.engine.requests.get(id)
     return request ? core.engine.outcomeOf(request).pending : []
@@ -197,8 +189,6 @@ export function adminApp(core: Core) {
     if (c.req.method !== 'GET') return c.text('Sign in at /admin', 401)
     return c.req.path === '/admin' ? authPage(c) : c.redirect('/admin', 303)
   })
-  // Newest entries first from audit.jsonl, optionally narrowed to one grant, agent, service, target or share, or to
-  // entries containing some text. The page shows the newest 500 matches.
   admin.get('/log', async (c) => {
     const query = c.req.query()
     const { grant, agent, service, target, share } = query
@@ -266,7 +256,6 @@ export function adminApp(core: Core) {
       return c.html(layout(nonce, 'active', live('active', panels.active())))
     return c.html(layout(nonce, 'approvals', live('inbox', panels.inbox())))
   })
-  // A live panel again, or 204 when it shows the same as the hash the page holds.
   admin.get('/panel/:name{inbox|active}', (c) => {
     const name = c.req.param('name') as keyof typeof panels
     const inner = panels[name]()
@@ -320,7 +309,6 @@ export function adminApp(core: Core) {
     core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
-  // Lists an MCP service's tools now, so the editor shows how they classify (read-only vs write).
   admin.post('/services/tools', async (c) => {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
     if (!core.services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
@@ -341,8 +329,6 @@ export function adminApp(core: Core) {
     core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
-  // Secrets agents may use without seeing them (inserted by the secrets proxy). A blank value keeps
-  // the stored one.
   admin.post('/secrets/save', async (c) => {
     const input = ownerSecretSchema.parse(await fields(c))
     const { vault } = core.unlocked()
@@ -408,7 +394,6 @@ export function adminApp(core: Core) {
     core.audit('group_deleted', { group: id })
     return c.redirect('/admin?section=groups', 303)
   })
-  // A sandbox host's registration is a card like any other; these are the form routes its card and Active row use.
   const hostById = (id: string) => {
     const host = core.hosts.get(id)
     if (!host) throw new HTTPException(404, { message: 'Unknown sandbox host' })
@@ -424,7 +409,6 @@ export function adminApp(core: Core) {
     await core.engine.decide(request.id, items, items, 'permanent')
     return redirect(c)
   })
-  // Removing a host (pending or approved) also ends its agents; its tokens stop working.
   admin.post('/hosts/:id/remove', (c) => {
     core.engine.endSubject(hostById(c.req.param('id')).id)
     return redirect(c)
@@ -451,7 +435,6 @@ export function adminApp(core: Core) {
     core.engine.revoke(z.object({ id: idSchema }).parse(await fields(c)).id)
     return redirect(c)
   })
-  // Targets, shares and open sessions; a target or share that goes takes its grants and pending requests with it.
   core.jump.routes(admin, fields, core.engine.reconcile)
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   return admin

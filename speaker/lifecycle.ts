@@ -15,13 +15,14 @@ export function transition<S extends string, E extends string>(machine: string, 
   return to
 }
 
-// One approval: waiting for the owner, then granted or denied. A pending one expires when nobody decides in time, or is
-// revoked when what it asks for goes away; a granted one expires at its end, is extended by the owner, or is revoked.
-export const approvalStates = ['pending', 'granted', 'denied', 'expired', 'revoked'] as const
+// One approval: waiting for the owner, then granted or denied. The rules may answer at once: open (an open read, not a
+// grant) or denied. A pending one expires or is revoked; a granted one expires, is extended, or is revoked.
+export const approvalStates = ['pending', 'open', 'granted', 'denied', 'expired', 'revoked'] as const
 export type ApprovalState = (typeof approvalStates)[number]
-export type ApprovalEvent = 'grant' | 'deny' | 'extend' | 'expire' | 'revoke'
+export type ApprovalEvent = 'open' | 'grant' | 'deny' | 'extend' | 'expire' | 'revoke'
 export const approvalTable: Table<ApprovalState, ApprovalEvent> = {
-  pending: { grant: 'granted', deny: 'denied', expire: 'expired', revoke: 'revoked' },
+  pending: { open: 'open', grant: 'granted', deny: 'denied', expire: 'expired', revoke: 'revoked' },
+  open: {},
   granted: { extend: 'granted', expire: 'expired', revoke: 'revoked' },
   denied: {},
   expired: {},

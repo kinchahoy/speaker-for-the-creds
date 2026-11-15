@@ -18,7 +18,7 @@ test('every table target is a known state and terminal states accept no event', 
     for (const moves of Object.values(table))
       for (const to of Object.values(moves)) assert.ok(states.includes(to ?? ''))
   }
-  for (const end of ['denied', 'expired', 'revoked'] as const) assert.deepEqual(approvalTable[end], {})
+  for (const end of ['open', 'denied', 'expired', 'revoked'] as const) assert.deepEqual(approvalTable[end], {})
 })
 
 test('transitions: legal moves land on the table state, illegal moves throw', () => {

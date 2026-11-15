@@ -11,9 +11,9 @@ import writeFile from 'write-file-atomic'
 import { z } from 'zod'
 import {
   type Approval,
-  type Card,
   createEngine,
   type Description,
+  type Engine,
   type Kind,
   type Refusal as Refused,
 } from './engine.ts'
@@ -114,8 +114,6 @@ export const hostSchema = z.object({
   name: z.string().trim().min(1).max(100),
   kinds: z.array(z.enum(hostKinds)).max(hostKinds.length),
   tokenHash: hashSchema,
-  // Kept on disk so an approval survives a restart; in memory the approval engine holds it.
-  status: z.enum(['pending', 'approved']),
   // The address it registered from: like an agent token, a host token only works from there. A host saved before
   // this field matches no address and is told to register again.
   source: z.string().default(''),
@@ -174,11 +172,8 @@ export const decisionSchema = z.object({
 
 export type Service = z.infer<typeof serviceSchema>
 export type Group = z.infer<typeof groupsSchema>[string]
-// A sandbox host in memory; whether the owner approved it is its approval in the engine (`status` is kept on disk).
-export type Host = Omit<z.infer<typeof hostSchema>, 'status'>
+export type Host = z.infer<typeof hostSchema>
 type Usage = { uses: number; lastUsedAt: number | null }
-// What the owner sees at a glance: requests that reached them, items decided, and what speaker turned away (a request
-// refused before the owner saw it, a call blocked for lack of a grant), with the latest such message.
 type Counts = {
   requests: number
   granted: number
@@ -228,14 +223,10 @@ export type Connection = {
 type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
 type AgentView = Agent & { sandboxHost?: string; grants: number }
 export type View = {
-  // Sandbox hosts, each with its approval's grant once the owner approved it.
   hosts: (Host & { grant?: string })[]
   agents: AgentView[]
-  // The cards waiting for the owner.
-  cards: Card[]
-  // Live grants of agents.
+  cards: ReturnType<Engine['cards']>
   grants: GrantView[]
-  // Open SSH sessions.
   sessions: { id: string; agent: string; what: string; started: number }[]
 }
 export type LogEntry = { time: string; event: string; agent?: string; label?: string; [field: string]: unknown }
@@ -317,18 +308,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const groups = groupsSchema.parse(JSON.parse((await optionalFile(groupsFile)) ?? '{}'))
   const hostsFile = file('hosts.json')
   const storedHosts = z.array(hostSchema).parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
-  const hosts = new Map<string, Host>(storedHosts.map(({ status: _, ...host }) => [host.id, host]))
-  // Synchronous, so the approval engine's effects (approve, replace, remove) are on disk when they return.
-  const saveHosts = () =>
-    writeFile.sync(
-      hostsFile,
-      JSON.stringify(
-        [...hosts.values()].map((host) => ({ ...host, status: hostGrant(host.id) ? 'approved' : 'pending' })),
-        null,
-        2,
-      ),
-      { mode: 0o600 },
-    )
+  const hosts = new Map<string, Host>(storedHosts.map((host) => [host.id, host]))
+  // The records only: a restarted speaker asks the owner to approve every known host again.
+  const saveHosts = () => writeFile.sync(hostsFile, JSON.stringify([...hosts.values()], null, 2), { mode: 0o600 })
   // Keys and sign-in. The store appears when the owner first sets a password; after every restart speaker is locked
   // until the owner signs in, which unwraps the data key. Sessions live in memory only. Until the owner has set a
   // password and unlocked, speaker serves no agent, sandbox host or proxy call (see lockNotice).
@@ -338,7 +320,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (vault.state !== 'unlocked') throw new Error('Speaker is locked')
     return vault.store
   }
-  // What the owner has stored, empty until unlocked.
   const ownerSecrets = (): Vault['secrets'] => (vault.state === 'unlocked' ? vault.store.vault.secrets : {})
   const unlock = async (opened: Store) => {
     vault = { state: 'unlocked', store: opened }
@@ -366,15 +347,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return created
   }
   const sessions = new Map<string, number>()
-  // Agents, approvals and requests live in memory only: a restart starts them empty (sandbox hosts come back from disk).
   const agents = new Map<string, Agent>()
   const agentById = (id: string) => {
     const agent = agents.get(id)
     return agent?.status === 'enrolled' ? agent : undefined
   }
   const enrolled = () => [...agents.values()].filter((agent) => agent.status === 'enrolled')
-  // The one agent token check, for the API and the proxy: the agent behind a token, or why there is none. Every
-  // agent token only works from the address it enrolled from. (The lock is checked by each caller before this.)
   const resolveAgent = (
     token: string,
     source: string | undefined,
@@ -427,7 +405,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     expire: () => sweep(),
   })
   const syncJump = () => void jump.sync().catch(() => undefined)
-  // Applies clock-driven transitions before every HTTP request: expired grants and requests, idle agents.
   function sweep() {
     const now = Date.now()
     for (const [id, end] of sessions) if (end <= now) sessions.delete(id)
@@ -471,7 +448,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   })
   type McpTool = { readOnly: boolean; destructive: boolean; annotated: boolean }
   const mcpTools = new Map<string, { at: number; tools: Map<string, McpTool> }>()
-  // Lists an MCP service's tools with speaker's own credentialed session through the official MCP client.
   async function listMcpTools(id: string) {
     const service = services[id],
       secret = credentialOf(id)
@@ -556,7 +532,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const hostItem = (id: string) => `host:${id}`
   const hostGrant = (id: string) => engine.held(id, [hostItem(id)])
 
-  // --- The kinds: what each item means, in one registry the approval engine reads (see Kind in engine.ts). ---
   const refuse = (item: string, real: string[], what: string): Refused => ({
     message: `${item} is not something you can ask for. ${what} you can ask for: ${real.length ? real.join(', ') : 'none'}.`,
     next: 'GET /_speaker/catalog',
@@ -575,7 +550,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     granted: () => undefined,
     ended: () => undefined,
   }
-  // SSH targets and shares live in jump.ts; the jump server follows the grants, and is listening before "granted".
   const overSsh: Omit<Kind, 'where'> = {
     ...base,
     validate(item) {
@@ -675,7 +649,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       }),
     },
     ssh: { ...overSsh, where: 'speaker' },
-    // The sandbox host also hears folder grants: it mounts its agents' shares with sshfs.
     folder: { ...overSsh, where: 'both' },
     mcp: {
       ...base,
@@ -745,7 +718,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const engine = createEngine({
     kinds,
-    // Every item reaching the engine has passed the item schema, so it has a kind.
     kindOf: (item) => kindOf(item) as string,
     audit,
     changed: () => push(),
@@ -773,7 +745,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           if (agent) agent.counts[field] += n
         },
       },
-      // A sandbox host's approval lasts until the owner removes it, and its registration waits for the owner.
       host: {
         durations: ['permanent'],
         wait: Number.POSITIVE_INFINITY,
@@ -787,17 +758,14 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       },
     },
   })
-  // Registers a sandbox host: one card for the owner.
   const registerHost = (host: Host) => {
     hosts.set(host.id, host)
     engine.request('host', host.id, [hostItem(host.id)], { reason: '', duration: 'permanent' })
     saveHosts()
   }
-  for (const { status, ...host } of storedHosts)
-    if (status === 'approved') engine.restore('host', host.id, hostItem(host.id))
-    else engine.request('host', host.id, [hostItem(host.id)], { reason: '', duration: 'permanent' })
+  for (const host of hosts.values())
+    engine.request('host', host.id, [hostItem(host.id)], { reason: '', duration: 'permanent' })
 
-  // What a sandbox host hears: every live grant of its agents that speaker does not enforce alone, and their requests.
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
     grants: engine
@@ -810,7 +778,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         expiresAt,
         ...kinds[kind].snapshot(item),
       })),
-    // What a sandboxed agent may ask for, so the sandbox host can name them in its instructions.
     secrets: Object.entries(ownerSecrets()).map(([name, { hosts, env }]) => ({ name, hosts, env })),
     requests: [...engine.requests.values()]
       .filter((request) => agentById(request.subject)?.host === hostId)
@@ -831,7 +798,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     push()
   }, 10_000).unref()
 
-  // `.full` includes read, so either item covers a read.
   const coverFor = (agentId: string, service: string, write: boolean) =>
     engine.held(agentId, write ? [`${service}.full`] : [`${service}.full`, `${service}.read`])
   // Secrets proxy (proxy.ts). One random placeholder per agent per secret; the agent puts it where the secret goes and
@@ -842,7 +808,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
     return placeholders.get(key) as string
   }
-  // The agent's active `secret:` grants whose secret still exists in the store.
   const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; until: string | null })[] =>
     engine
       .grants(agentId)
@@ -891,7 +856,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         .replace(/^::ffff:/, '') || peer
     )
   }
-  // Links and commands given to agents use the address the caller used to reach speaker.
   const baseOf = (c: Context) => {
     const url = new URL(c.req.url)
     const proto = peerOf(c) === config.TRUSTED_PROXY ? c.req.header('x-forwarded-proto') : undefined
@@ -949,7 +913,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     ca: certificateAuthority,
     log: audit,
   })
-  // The first visit sets the owner password and creates the store; later sign-ins unwrap it (WrongPassword if not).
   const createOwnerStore = (password: string) =>
     engine.serial(async () => {
       if (vault.state !== 'unset') throw new HTTPException(409, { message: 'The owner password is already set' })
