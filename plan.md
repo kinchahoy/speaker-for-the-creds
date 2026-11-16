@@ -67,7 +67,7 @@ Remote setup is `bottle` on `PATH` on the bottle host; `hc` arrives over ssh.
 
 ## Order of execution
 
-Not started; this is the drafted sequence. Work happens on `main`, in one working tree, with cheap subagents doing the mechanical edits and the main session reviewing each diff before it is committed.
+All steps are done (see the status log); kept as the record of how it was split. Work happens on `main`, in one working tree, with cheap subagents doing the mechanical edits and the main session reviewing each diff before it is committed.
 
 | Step | What | Who | Check |
 | --- | --- | --- | --- |
@@ -95,7 +95,14 @@ Not doing: reformatting speaker to width 160. It removes 363 lines without remov
 
 ## Open
 
-Nothing is waiting on a decision. No agent starts any step until the owner says go.
+Nothing is waiting on a decision.
+
+## Future work
+
+Ideas, not decided. None is started until the owner says go.
+
+- **Save chosen agents to Atuin threads.** Most bottle runs are throwaway tests, so nothing is pushed automatically. A `bottle thread <id>` command pushes one archived agent's `_control/pi-session.jsonl` to Atuin threads, with `agent.json` (id, name, template, model, closed time) and the launch folder as metadata, and writes `_control/atuin.json` so a second push is caught. The Herdr inbox's Recently finished rows get a **Save to Atuin** button that runs the command on the bottle machine (as Stop does), and show "in Atuin" once saved; `finishedAgents()` reads the marker. Saved agents then appear in Atuin's own Herdr mod (herdr-atuin-threads) beside other agent sessions. About 30 lines. Limits: the inbox lists only the last five finished agents, and Atuin must be installed where bottle runs. Before building: check Atuin's push command and flags, and keep it local-only; uploading transcripts to Atuin's backend is a boundary question for the owner.
+- **Model calls to Langfuse.** Every model call already passes the model door and lands in `model-calls.jsonl`, whatever the harness. An exporter run at archive could send them to Langfuse with the agent id as the session. Harness-native OpenTelemetry (Codex, Gemini CLI, Claude Code) adds tool spans but needs new egress from the VM, so it would go through a bottle door.
 
 ## Line-reduction audit of the existing code
 

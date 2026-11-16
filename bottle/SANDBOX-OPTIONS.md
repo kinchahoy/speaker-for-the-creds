@@ -20,7 +20,7 @@
 {.ai}
 
 - Folders over `sshfs` are much slower than a VM mount for `grep -r`, `find` and `git status` over many files.
-- Without TLS termination, `trace.jsonl` holds bodies only for model calls, and there are no path-level rules for third-party HTTPS hosts.
+- Without TLS termination, `model-calls.jsonl` holds bodies only for model calls, and there are no path-level rules for third-party HTTPS hosts.
 - Every client in the guest must honour the proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`) and trust speaker's proxy CA for secret hosts.
 - microsandbox refuses a storage folder that other accounts could write; its storage must be mode 700.
 - The egress gateway is a high-value host process and needs the same care as speaker's proxy.

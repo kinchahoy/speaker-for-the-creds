@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-15T21:10
+updated: 2026-11-15T22:30
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,14 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-15 22:30 · paused
+
+**Next**
+- Owner: decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button on the Herdr inbox's finished rows); written up under Future work in `plan.md`.
+
+**Open**
+- Docs pass done against the latest commits (Pi load wait, attach restarting a quit Pi, init's Enter-to-check, the mod's bottle machine and 10 s inbox poll, `mod.open:speaker`). Two ways to put `bottle` on PATH stay documented (`ln -s` in bottle's README, `pnpm link --global` in both READMEs).
 
 ## 2026-11-15 21:10 · paused
 
