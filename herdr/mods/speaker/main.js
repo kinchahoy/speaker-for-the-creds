@@ -9,7 +9,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { closeOverlay, exec, nextCommand, notify, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 
-const settings = () => shared("speaker.settings"); // { url, bottle } once saved in the inbox
+const settings = () => shared("speaker.settings"); // { url, bottle, machine } once saved in the inbox
 let token; // the owner API bearer token; gone when Herdr quits, the speaker URL changes, or speaker answers 401
 
 async function api(path, body) {

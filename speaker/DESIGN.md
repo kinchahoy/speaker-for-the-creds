@@ -323,6 +323,7 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - An extension's sites live and end with it. A site that came only because a request named `ext:<id>` (not asked for in that request) records the ext grant it belongs to; revoking, expiring or ending the agent of that ext grant ends the site grant too, through the same path (audit and push to the sandbox host). A site asked for explicitly, or already held on its own, stays. A site shared by two extensions ends with the last of them. Extending the ext grant extends its bundled sites. Cards and the Active list show the relationship.
 - A secret's Setup entry names the environment variable the sandbox sees (for example `GH_TOKEN`); `/catalog` shows it with the allowed hosts. Granting a secret also opens its allowed hosts; the card lists them, in the write tint.
 - A sandbox host mounts its agents' folders itself with `sshfs`: speaker sends it those grants in its snapshots, the agent's `sshKey` comes with the host's own requests for it, and speaker still enforces and logs everything.
+- Folders on the sandbox host that the owner names when launching an agent (bottle's launch folders) are bound into the VM by the sandbox host directly. Launching is the approval, so speaker never sees or logs them; bottle records them in the agent's archive.
 - After a speaker restart, the agent tokens of running agents are unknown and their grants are gone. Those agents lose speaker access until they are relaunched (the sandbox host does not re-create their agents).
 
 **Deployment**
@@ -330,21 +331,6 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 - The SSH port does not go through a web reverse proxy; open it separately.
 - Approving from a phone away from home needs a route to speaker, such as the tailnet.
 - On a single machine every local client can share one source address, so address binding adds little there; that setup protects against accidents and keeps a record, not against a hostile agent running as the owner.
-
-## Alternative to explore: a slimmer VM if every folder goes over SSH
-
-Every folder reaches sandboxes over SSH (`sshfs` through speaker), so the VM needs no shared-filesystem device at all, which opens up slimmer and faster runtimes:
-
-- **Firecracker:** the smallest device model of the common options (network, block, vsock; no shared-filesystem device at all, so only usable with folders over SSH), with boot to user space in about 125 ms per its documentation, and a jailer process for extra isolation. Linux with KVM only.
-- **Cloud Hypervisor:** a little larger, also KVM-only; useful if a shared-filesystem device is still wanted for some folders.
-- **libkrun:** small, and runs on both Linux and macOS (Hypervisor.framework), so the same sandbox works on a Mac.
-
-What still has to be provided outside the VM, whichever runtime is chosen:
-
-- the egress allowlist (`site:`) and secret injection (`secret:`): the VM's only network route goes through a host-side proxy that enforces them;
-- FUSE and `sshfs` in the guest image, and delivery of `mcp:` and `ext:` items.
-
-Trade-off: every folder becomes slower for metadata-heavy work (each file operation is a network round trip through speaker), in exchange for one folder mechanism for every agent, live revoke of folders, and a free choice of VM runtime. To decide, benchmark against the current runtime: boot time, memory per VM, and `grep -r`, `find` and `git status` on a realistic share.
 
 ## Alternative to explore: one WebSocket instead of most routes
 
@@ -383,8 +369,8 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 **Each request, for example `gh pr create`:**
 
 1. `gh` sends `POST https://api.github.com/repos/<owner>/<repo>/pulls` with `Authorization: token speaker-placeholder-…`.
-2. The VM's only network route is the sandbox host's interception. It terminates TLS with the sandbox's own certificate authority, which the VM trusts, and sees a request to a host covered by an active secret grant.
-3. Instead of sending it straight to GitHub, the sandbox host sends it to speaker's proxy (an HTTP `CONNECT` tunnel to the destination, authenticated as the agent; the tunnel trusts speaker's certificate authority).
+2. The VM's only network route is the sandbox host's egress proxy. It does not decrypt anything: it sees a `CONNECT` to a host covered by an active secret grant.
+3. Instead of sending it straight to GitHub, the sandbox host chains the tunnel to speaker's proxy, authenticated as the agent. The VM's TLS ends at speaker's proxy, whose certificate authority the VM trusts.
 4. Speaker checks that the agent holds `secret:GITHUB_TOKEN`, that `api.github.com` is one of its allowed hosts, and that the grant is still active. It replaces the placeholder with the real token, in the `Authorization` header and, for `git`, inside HTTP Basic credentials (`git` sends the token as the Basic password), and nowhere else.
 5. Speaker sends the request to GitHub over its own TLS connection, streams the response back to the sandbox host, and logs agent, host, method, path and status, never the token and never the bodies.
 6. The sandbox host returns the response to `gh`, which works as usual. `git clone`, `git push` and `gh api` go the same way to `github.com` and `api.github.com`.
@@ -396,13 +382,13 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 | | Real token | Requests and responses | Placeholder |
 | --- | --- | --- | --- |
 | Speaker | yes, encrypted at rest, in memory after unlock | passes through, not stored | knows which placeholder belongs to which agent |
-| Sandbox host | never | sees them (it already sees all sandbox traffic) | sets it in the VM |
+| Sandbox host | never | only as encrypted tunnels | never; the VM reads it from `/catalog` |
 | Agent in the VM | never | its own | sees it |
 | GitHub | yes, on each request | yes | never |
 
 **If the sandbox host is taken over,** it can make GitHub requests through speaker only while a `secret:GITHUB_TOKEN` grant is active, only to the allowed hosts, and every request is logged. It cannot copy the token for later or for use elsewhere.
 
-**Costs.** All traffic to the secret's hosts, including large `git clone`s, goes through speaker, so speaker needs the bandwidth and adds one hop of latency. The sandbox host's interception gains one hand-off rule: requests to hosts covered by an active secret grant go to speaker instead of the internet.
+**Costs.** All traffic to the secret's hosts, including large `git clone`s, goes through speaker, so speaker needs the bandwidth and adds one hop of latency. The sandbox host's egress proxy has one hand-off rule: tunnels to hosts covered by an active secret grant go to speaker instead of the internet.
 
 ### The same for a direct agent
 
