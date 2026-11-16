@@ -77,6 +77,12 @@ const authSchema = z.discriminatedUnion('type', [
   // The secret is a URL path segment (for example a webhook id) spliced in after the base URL.
   z.object({ type: z.literal('path'), secret: idSchema }),
 ])
+// Whether one base URL is the other or lies under it on the same site: what a service sharing another's key must be.
+export const within = (inner: string, outer: string) => {
+  const a = new URL(inner),
+    b = new URL(outer)
+  return a.origin === b.origin && `${a.pathname.replace(/\/$/, '')}/`.startsWith(`${b.pathname.replace(/\/$/, '')}/`)
+}
 export const serviceSchema = z.object({
   baseUrl: urlSchema,
   notes: z.string().max(20_000).optional(),
@@ -400,12 +406,17 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         ? { message: 'Speaker has no owner password yet', tell_user: `The owner sets one at ${base}/admin` }
         : { message: 'Speaker is locked', tell_user: `Speaker restarted: sign in at ${base}/admin to unlock` }
   // A service's key, or '' for a keyless service; undefined when a keyed service has none yet.
-  const credentialOf = (id: string) =>
-    services[id]?.auth.type === 'none'
-      ? ''
-      : vault.state === 'unlocked' && Object.hasOwn(vault.store.vault.services, id)
-        ? vault.store.vault.services[id]
-        : undefined
+  // A service's key is its own, or that of the wider service it names in auth.secret, which it must sit inside.
+  const credentialOf = (id: string) => {
+    const service = services[id]
+    if (!service || service.auth.type === 'none') return service && ''
+    const owner = service.auth.secret
+    return vault.state === 'unlocked' &&
+      Object.hasOwn(vault.store.vault.services, owner) &&
+      (owner === id || (Object.hasOwn(services, owner) && within(service.baseUrl, services[owner].baseUrl)))
+      ? vault.store.vault.services[owner]
+      : undefined
+  }
   // First unlock: speaker's SSH key and the demo service's key.
   async function newVault() {
     const created: Vault = { services: {}, secrets: {}, ssh: await generateSshKey() }
@@ -487,9 +498,11 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     target.pathname =
       service.auth.type === 'path'
         ? `${prefix}${encodeURIComponent(secret)}${parts.length ? `/${rest}` : ''}`
-        : prefix + rest
+        : parts.length
+          ? prefix + rest
+          : base.pathname // a call to the service itself reaches the base address exactly as the owner wrote it
     target.search = search
-    return target.origin === base.origin && target.pathname.startsWith(prefix) ? target : undefined
+    return target.origin === base.origin && `${target.pathname}/`.startsWith(prefix) ? target : undefined
   }
   const applyCredential = (service: Service, secret: string, headers: Headers) => {
     if (service.auth.type === 'path' || service.auth.type === 'none') return

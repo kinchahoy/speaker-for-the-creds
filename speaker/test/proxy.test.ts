@@ -900,11 +900,15 @@ test('a trusted proxy names the caller with the last X-Forwarded-For entry', asy
 test('TRUSTED_PROXY may be a name: its resolved address is trusted, and a name that does not resolve trusts no one', async (t) => {
   const named = await setup(t, {}, { TRUSTED_PROXY: 'localhost' })
   await enrolled(named, 'tok', { 'x-forwarded-for': '100.64.0.7' })
-  const moved = await named.call('/_speaker/catalog', { headers: { ...bearer('tok'), 'x-forwarded-for': '100.64.0.9' } })
+  const moved = await named.call('/_speaker/catalog', {
+    headers: { ...bearer('tok'), 'x-forwarded-for': '100.64.0.9' },
+  })
   assert.equal(moved.status, 401)
   const nowhere = await setup(t, {}, { TRUSTED_PROXY: 'no-such-proxy.invalid' })
   await enrolled(nowhere, 'tok', { 'x-forwarded-for': '100.64.0.7' })
-  const spoofed = await nowhere.call('/_speaker/catalog', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  const spoofed = await nowhere.call('/_speaker/catalog', {
+    headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' },
+  })
   assert.equal(spoofed.status, 200)
 })
 
@@ -1147,4 +1151,26 @@ test('approving a host that registers again from the same address and name repla
   assert.match(active, /registered <time/)
   assert.equal((await f.call('/_speaker/catalog', { headers: bearer(first.agent.token) })).status, 403)
   assert.equal((await f.ownerForm(`/hosts/${first.id}/remove`, {})).status, 404)
+})
+
+test('a service can use the key of a wider service it narrows, down to one address, with its own rules', async (t) => {
+  const f = await setup(t)
+  const save = (id: string, baseUrl: string, more: Record<string, string>) =>
+    f.ownerForm('/services/save', { id, baseUrl, authType: 'bearer', read: 'never', write: 'never', ...more })
+  // The wider service only holds the key: no agent may use it.
+  assert.equal((await save('whole', `${f.upstreamOrigin}/base`, { secret: 'whole-key' })).status, 303)
+  assert.equal((await save('part', `${f.upstreamOrigin}/base/sub/one`, { keyFrom: 'whole', read: 'open' })).status, 303)
+  await enroll(f, 'tok')
+  assert.equal((await f.call('/whole/sub/one', { headers: bearer('tok') })).status, 403)
+  assert.equal((await f.call('/part', { headers: bearer('tok') })).status, 200)
+  assert.deepEqual([f.calls[0].url, f.calls[0].headers.authorization], ['/base/sub/one', 'Bearer whole-key'])
+  assert.equal((await f.call('/part/x?q=1', { headers: bearer('tok') })).status, 200)
+  assert.equal(f.calls[1].url, '/base/sub/one/x?q=1')
+  // Not under the wider address, another site, or a service that has no key of its own: refused.
+  assert.equal((await save('out', `${f.upstreamOrigin}/based`, { keyFrom: 'whole' })).status, 400)
+  assert.equal((await save('away', 'http://127.0.0.1:1/base/sub', { keyFrom: 'whole' })).status, 400)
+  assert.equal((await save('deeper', `${f.upstreamOrigin}/base/sub/one/x`, { keyFrom: 'part' })).status, 400)
+  // Moving the wider service away leaves the narrow one without a key.
+  await save('whole', `${f.upstreamOrigin}/elsewhere`, {})
+  assert.equal((await f.call('/part', { headers: bearer('tok') })).status, 503)
 })

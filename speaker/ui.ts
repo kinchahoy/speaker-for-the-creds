@@ -10,7 +10,7 @@ type Owned = Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>
 export type McpSummary = Record<string, { read: number; write: number; unannotated: number }>
 export type Setup = {
   services: Record<string, Service>
-  secrets: Record<string, string>
+  keyed: Set<string>
   owned: Owned
   groups: Record<string, Group>
   ssh: SshSetup
@@ -48,7 +48,7 @@ article>footer{padding-bottom:12px}
 article>header{display:block;margin-bottom:10px}.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}article>header strong{font-size:1.12rem;font-weight:750;line-height:1.25}.card-meta{display:block;margin-top:4px;line-height:1.45}
 .reason{margin:10px 0 12px;padding:8px 12px;border-radius:var(--radius-2);background:var(--surface-2);font-size:.95rem}.reason-label{font-size:.78rem;font-weight:700;color:var(--dim);margin-right:6px;text-transform:uppercase;letter-spacing:.03em}
 .stub{position:relative;margin:14px -18px 0;padding:14px 18px 18px;border-top:2px dashed var(--perf)}.stub::before,.stub::after{content:"";position:absolute;top:-9px;width:16px;height:16px;border-radius:50%;background:var(--region)}.stub::before{left:-9px}.stub::after{right:-9px}
-.list article{border-top:1px solid var(--line);padding:14px 0}.list article:first-child{border-top:0;padding-top:4px}.list article>header{display:flex;gap:12px;align-items:flex-start;margin:0}.list article>header>span:not(.mark){flex:1;min-width:0}.list article>:not(header){margin-left:46px}.list table{width:calc(100% - 46px)}.access .actions{flex-wrap:nowrap}.status{margin:0 0 16px}.scope{margin:0 0 8px}.alert{margin:4px 0}
+.list article{border-top:1px solid var(--line);padding:14px 0}.list article:first-child{border-top:0;padding-top:4px}.list article>header{display:flex;gap:12px;align-items:flex-start;margin:0}.list article>header>span:not(.mark){flex:1;min-width:0}.list article>:not(header){margin-left:46px}.list table.data-table{width:calc(100% - 46px)}.access .actions{flex-wrap:nowrap}.status{margin:0 0 16px}.scope{margin:0 0 8px}.alert{margin:4px 0}
 .mark{--h:268;--m:light-dark(oklch(56% .19 var(--h)),oklch(78% .13 var(--h)));display:grid;place-items:center;width:34px;height:34px;border-radius:var(--radius-3);background:color-mix(in oklch,var(--m) 18%,transparent);color:var(--m);flex:none}.chips .mark{width:22px;height:22px}.chips .mark .ic{width:13px;height:13px}
 mark,.badge{display:inline-block;padding:1px 8px;border-radius:var(--radius-round);font-size:.78rem;font-weight:700;vertical-align:middle}mark,.badge-warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
 .warn{color:var(--bad)}p.warn{padding:10px 14px;border-radius:var(--radius-3);background:var(--bad-bg);border:1px solid var(--bad-line);font-weight:600}
@@ -282,6 +282,7 @@ export const setPasswordPage = (exposed: boolean, error?: string) =>
   )
 
 const labels: Record<string, string> = {
+  '': 'No: it has its own key',
   permanent: 'Until revoked',
   none: 'None (keyless)',
   ask: 'Ask the owner',
@@ -451,16 +452,23 @@ const preview = (items: string[], mono = false) => {
 }
 const consequence = (text: string) => html`<p><small>${text}</small></p>`
 
-export function setup({ services, secrets, owned, groups, ssh, mcp, selected, error }: Setup) {
+export function setup({ services, keyed, owned, groups, ssh, mcp, selected, error }: Setup) {
   const chosen = selected && Object.hasOwn(services, selected) ? services[selected] : undefined
   const authType = chosen?.auth.type ?? 'bearer'
   const hasAdvanced = Boolean(chosen?.readPaths?.length || chosen?.mcp || chosen?.notes)
-  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id', 'text', chosen ? selected : '')}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'POST paths that only read, one per line (for example a search endpoint)', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
+  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id', 'text', chosen ? selected : '')}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}${select('keyFrom', 'Or use the key of a wider service this one narrows (same site, under its address)', ['', ...Object.keys(services).filter((id) => id !== selected && services[id].auth.type !== 'none' && services[id].auth.secret === id)], chosen && chosen.auth.type !== 'none' && chosen.auth.secret !== selected ? chosen.auth.secret : '')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'POST paths that only read, one per line (for example a search endpoint)', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
   const tools = (id: string) =>
     html`<div class="actions">${error === 'tools' ? html`<p class="warn" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<small>${mcp[id] ? `Tools: ${mcp[id].read} read · ${mcp[id].write} write${mcp[id].unannotated ? ` (${mcp[id].unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</small>${button('/admin/services/tools', hidden('id', id), 'Refresh tools')}</div>`
   const serviceRows = Object.entries(services).map(([id, s]) => {
     const q = encodeURIComponent(id)
-    const key = s.auth.type === 'none' ? 'Not needed' : secrets[id] !== undefined ? 'Set' : 'Missing'
+    const key =
+      s.auth.type === 'none'
+        ? 'Not needed'
+        : s.auth.secret !== id
+          ? `${keyed.has(id) ? 'Key of' : 'Missing: key of'} ${s.auth.secret}`
+          : keyed.has(id)
+            ? 'Set'
+            : 'Missing'
     return html`<tr>${td('Name', html`<strong>${id}</strong>${s.mcp ? html`<br><small>MCP server</small>` : ''}`)}${td('Endpoint', s.baseUrl)}${td('Read policy', s.read, 'cap')}${td('Write policy', s.write, 'cap')}${td('Credential', s.auth.type === 'path' && key === 'Set' ? 'Set (in URL path)' : key)}${act(html`<a class="action-btn primary" href="/admin?section=services&amp;service=${q}">Edit</a>`, html`<a class="action-btn" href="/admin/log?service=${q}">Activity</a>`, button('/admin/services/delete', hidden('id', id), 'Delete', `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.`))}</tr>`
   })
   const secretForm = (name = '', o?: { hosts: string[]; env: string }) =>

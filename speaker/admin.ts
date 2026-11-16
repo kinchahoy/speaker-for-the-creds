@@ -16,6 +16,7 @@ import {
   newPasswordSchema,
   ownerSecretSchema,
   serviceSchema,
+  within,
   urlSchema,
   type View,
 } from './core.ts'
@@ -247,7 +248,7 @@ export function adminApp(core: Core) {
       const ssh = core.jump.setup(c.req.query('sshError'))
       const data = {
         services: core.services,
-        secrets: core.unlocked().vault.services,
+        keyed: new Set(Object.keys(core.services).filter((id) => core.credentialOf(id) !== undefined)),
         owned,
         groups: core.groups,
         ssh,
@@ -276,6 +277,7 @@ export function adminApp(core: Core) {
         authType: z.enum(['none', 'bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),
+        keyFrom: z.union([idSchema, z.literal('')]).optional(),
         notes: z.string().optional(),
         read: serviceSchema.shape.read,
         write: serviceSchema.shape.write,
@@ -289,20 +291,35 @@ export function adminApp(core: Core) {
           ctx.addIssue({ code: 'custom', message: 'A path credential must be one URL path segment' })
       })
       .parse(await fields(c))
+    const shared = input.authType !== 'none' && input.keyFrom
+    const wider = shared ? core.services[shared] : undefined
+    if (
+      shared &&
+      !(
+        wider &&
+        wider.auth.type !== 'none' &&
+        wider.auth.secret === shared &&
+        shared !== input.id &&
+        within(input.baseUrl, wider.baseUrl)
+      )
+    )
+      throw new HTTPException(400, {
+        message: `To use the key of ${shared}, the address must be on the same site and under that service's address, and ${shared} must hold its own key`,
+      })
     const service = serviceSchema.parse({
       baseUrl: input.baseUrl,
       notes: input.notes?.trim() || undefined,
-      auth: { type: input.authType, secret: input.id, headerName: input.headerName },
+      auth: { type: input.authType, secret: shared || input.id, headerName: input.headerName },
       read: input.read,
       write: input.write,
       readPaths: input.readPaths.length ? input.readPaths : undefined,
       mcp: input.mcp ? true : undefined,
     })
-    if (input.secret) {
+    if (input.secret && !shared) {
       core.unlocked().vault.services[input.id] = input.secret
       await core.unlocked().save()
     }
-    if (input.authType === 'none' && Object.hasOwn(core.unlocked().vault.services, input.id)) {
+    if ((input.authType === 'none' || shared) && Object.hasOwn(core.unlocked().vault.services, input.id)) {
       delete core.unlocked().vault.services[input.id]
       await core.unlocked().save()
     }
