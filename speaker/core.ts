@@ -133,10 +133,26 @@ export const hostSchema = z.object({
   registeredAt: z.number(),
 })
 const reasonSchema = z.string().trim().min(1).max(500)
-export const identitySchema = z.object({
-  label: z.string().trim().min(1).max(200),
-  agent: z.string().trim().min(1).max(120).default('unknown'),
-})
+// The identity fields of an agent, in display order. Self-reported ones are display text from the agent or its sandbox
+// host (untrusted, never a key; `max` caps the length); speaker-known ones speaker sets itself. `say` is how a card
+// words the field.
+export const identityFields = {
+  label: { from: 'self', max: 200, say: 'name' },
+  agent: { from: 'self', max: 120, say: 'says it is' },
+  title: { from: 'self', max: 60, say: 'task' },
+  source: { from: 'known', say: 'from' },
+  via: { from: 'known', say: 'via' },
+  key: { from: 'known', say: 'key' },
+} as const
+const selfReported = (field: 'label' | 'agent' | 'title') =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(identityFields[field].max)
+    .refine((text) => !/\p{Cc}/u.test(text), 'Control characters are not allowed')
+export const titleSchema = selfReported('title')
+export const identitySchema = z.object({ label: selfReported('label'), agent: selfReported('agent').default('unknown') })
 // A sandbox host's agent also names the extensions its template gave at launch. The host enforces them without speaker
 // (the owner started the template), so speaker only records and shows them; they are not grants and cannot be revoked here.
 export const hostAgentSchema = identitySchema.extend({
@@ -222,7 +238,7 @@ export type Agent = Usage & {
   revokedAt?: number
   tokenHash: string
   label: string
-  // A short task title its sandbox host reported (untrusted display text, never a key); kept in memory only.
+  // The task title its sandbox host reported (see identityFields); kept in memory only.
   title?: string
   agent: string
   // Address the agent enrolled from (a sandboxed agent: its sandbox host's); its token is refused elsewhere.
@@ -804,7 +820,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           return agent
             ? {
                 label: agent.label,
-                says: agent.agent,
+                agent: agent.agent,
                 via: hostOf(agent)?.name,
                 source: agent.source,
                 key: agent.tokenHash.slice(0, 8),

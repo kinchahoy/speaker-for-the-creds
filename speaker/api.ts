@@ -18,7 +18,7 @@ import {
   hash,
   hostSchema,
   hostAgentSchema,
-  identitySchema,
+  titleSchema,
   idSchema,
   invalid,
   noCounts,
@@ -29,14 +29,6 @@ import {
 import { catalogView } from './catalog.ts'
 import type { Approval, Request } from './engine.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
-
-// Untrusted display text from a sandbox host: 1 to 60 characters, no control characters.
-const titleSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(60)
-  .refine((title) => !/\p{Cc}/u.test(title), 'Control characters are not allowed')
 
 export type SpeakerApi = ReturnType<typeof agentApi>
 

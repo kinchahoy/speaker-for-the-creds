@@ -43,7 +43,7 @@ export type SubjectRules = {
   wait: number
   field: 'agent' | 'host'
   exists(id: string): boolean
-  who(id: string): { label: string; says?: string; via?: string; source: string; key?: string; at?: number }
+  who(id: string): { label: string; agent?: string; via?: string; source: string; key?: string; at?: number }
 }
 
 export type Approval = {
