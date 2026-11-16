@@ -104,12 +104,17 @@ test("speaker exception permits agent routes only at the configured origin", () 
   assert.ok(allowed("/_speaker/requests/abc123"));
   assert.equal(allowed("/_speaker/requests/abc123", "POST"), false);
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
+  assert.ok(allowed("/obsidian:tasks/Tasks.md", "PUT"));
+  assert.ok(allowed("/_speaker/help/obsidian:tasks"));
   for (const path of [
     "/admin",
     "/admin/api/leases",
     // A hosted model's service is for the model door only (its cap and model-calls.jsonl), however the path is spelled.
     "/openrouter",
     "/openrouter/chat/completions",
+    "/openrouter:chat/completions",
+    "/obsidian:a:b/x",
+    "/admin:x/api",
     "/obsidian/../openrouter/chat/completions",
     "/%6Fpenrouter/chat/completions",
     "/_speaker/hosts/agents",
