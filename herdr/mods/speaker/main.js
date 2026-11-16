@@ -4,13 +4,15 @@
 // (Stop; click one to focus its terminal pi-<id>, or its pending request card), the last few finished ones (click opens
 // their archive folder in a new tab), a Start section (templates and models from `bottle templates --json`), and Settings
 // (speaker URL, bottle URL, bottle machine: Herdr's shared state "speaker.settings"). The owner password is typed once per Herdr start;
-// the token stays in this module's memory, never on disk. Bind a key in keys.json: "alt-s": "mod.open:speaker".
+// the token stays in this module's memory, never on disk. "Open in browser" goes to speaker's public URL (from sign-in), since its
+// browser UI refuses sign-ins from any other address, such as a tailnet port the mod may use. Every field submits on Enter too. Bind a key in keys.json: "alt-s": "mod.open:speaker".
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { closeOverlay, exec, nextCommand, notify, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 
 const settings = () => shared("speaker.settings"); // { url, bottle, machine } once saved in the inbox
 let token; // the owner API bearer token; gone when Herdr quits, the speaker URL changes, or speaker answers 401
+let publicUrl; // speaker's PUBLIC_URL, from the same sign-in
 
 async function api(path, body) {
   const response = await fetch(`${settings().url}/admin/api${path}`, {
@@ -66,15 +68,13 @@ export default class Speaker extends View {
       };
       this.password = InputState.new({ placeholder: "Owner password" });
       this.password.set_masked(true);
-      this.password.on("submit", (_e, cx) => this.act(cx, async () => {
-        token = (await api("/signin", { password: this.password.value() })).token;
-        this.password.set_value("");
-      }));
-      this.urlInput = field("Speaker URL, e.g. http://localhost:3000", settings()?.url);
-      this.bottleInput = field("Bottle URL for listing agents (empty: http://127.0.0.1:7001 when bottle is local)", settings()?.bottle);
-      this.machineInput = field("Bottle machine from hc machine ls, e.g. wsl (empty: this computer)", settings()?.machine);
-      this.prompt = InputState.new({ placeholder: "Prompt for the new agent (optional)" });
-      this.folders = InputState.new({ placeholder: "Extra folders, comma-separated: ~/code/proj:rw, ~/docs (optional)" });
+      this.password.on("submit", (_e, cx) => this.signIn(cx));
+      this.urlInput = field("e.g. https://speaker.example.com or a tailnet address", settings()?.url);
+      this.bottleInput = field("empty: http://127.0.0.1:7001 when bottle is local", settings()?.bottle);
+      this.machineInput = field("a machine from hc machine ls, e.g. wsl (empty: this computer)", settings()?.machine);
+      for (const input of [this.urlInput, this.bottleInput, this.machineInput]) input.on("submit", (_e, cx) => this.save(cx));
+      this.prompt = InputState.new({ placeholder: "optional; then pick a model below" });
+      this.folders = InputState.new({ placeholder: "optional, comma-separated: ~/code/proj:rw, ~/docs" });
       (settings()?.url ? this.password : this.urlInput).focus();
       this.loadTemplates(cx);
     } else cx.spawn(async (cx) => { for (;;) if ((await nextCommand()) === "open") openInbox(); });
@@ -133,13 +133,27 @@ export default class Speaker extends View {
     });
   }
 
+  signIn(cx) {
+    if (this.signingIn || !this.password.value()) return;
+    this.signingIn = true;
+    cx.notify();
+    this.act(cx, async () => {
+      try {
+        ({ token, publicUrl } = await api("/signin", { password: this.password.value() }));
+        this.password.set_value("");
+      } finally {
+        this.signingIn = false;
+      }
+    });
+  }
+
   save(cx) {
     this.act(cx, async () => {
       const clean = (input) => input.value().trim().replace(/\/$/, "");
       const next = { url: clean(this.urlInput), bottle: clean(this.bottleInput), machine: clean(this.machineInput) };
       if (!next.url) throw new Error("Speaker URL is required");
       if (next.url !== settings()?.url) {
-        token = undefined;
+        token = publicUrl = undefined;
         this.pending = [];
         this.grants = [];
       }
@@ -195,9 +209,12 @@ export default class Speaker extends View {
       .text_size(12).child(label)
       .when(Boolean(onClick), (el) => el.cursor_pointer().hover((s) => s.opacity(0.88)).on_click(onClick))
       .when(!onClick, (el) => el.opacity(0.45));
-    const browser = (anchor) => (_e, cx) => cx.open_url(`${settings().url}/admin${anchor}`);
+    const browser = (anchor) => publicUrl && ((_e, cx) => cx.open_url(`${publicUrl.replace(/\/$/, "")}/admin${anchor}`)); // dimmed before sign-in
     const heading = (text) => div().pt(10).text_size(11.5).text_color(t.dim).child(text);
     const field = (state) => Input.new(state).h(34).px(10).rounded(8).border_1().border_color(t.input).bg(t.background);
+    // Every input has a label above it; one with an action has its button beside it (Enter does the same).
+    const labeled = (label, input) => v_flex().gap(4).child(div().text_size(11.5).text_color(t.muted).child(label)).child(input);
+    const withButton = (state, btn) => h_flex().gap(8).items_center().child(div().flex_1().child(field(state))).child(btn);
     const card = (r) => v_flex().gap(6).p(12).rounded(9).border_1().border_color(this.highlight.has(r.id) ? t.accent : t.border).bg(t.surface)
       .child(h_flex().justify_between().child(div().font_semibold().child(r.who.label)).child(div().text_color(t.dim).text_size(11.5).child(ago(r.createdAt))))
       .child(div().text_color(t.dim).text_size(11.5).child([r.who.says, r.who.via && `via ${r.who.via}`, `from ${r.who.source || "unknown address"}`].filter(Boolean).join(" · ")))
@@ -243,7 +260,9 @@ export default class Speaker extends View {
       .child(h_flex().justify_between().items_center().child(div().text_size(15).font_semibold().child("Speaker"))
         .child(button("close", "Close", false, () => closeOverlay(props().overlay))))
       .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
-      .when(ready && !token, (el) => el.child(heading("Sign in to see and decide requests")).child(field(this.password)))
+      .when(ready && !token, (el) => el.child(heading("Sign in to see and decide requests"))
+        .child(labeled("Owner password", withButton(this.password,
+          button("signin", this.signingIn ? "Signing in…" : "Sign in", true, this.signingIn ? undefined : (_e, cx) => this.signIn(cx))))))
       .when(Boolean(token), (el) => el
         .child(heading(pending.length ? `${pending.length} waiting` : "Nothing waiting"))
         .children(pending.map(card)))
@@ -253,8 +272,8 @@ export default class Speaker extends View {
         .when(Boolean(this.agentsNote), (el) => el.child(div().text_color(t.dim).child(this.agentsNote)))
         .when(this.finished.length > 0, (el) => el.child(heading("Recently finished")).children(this.finished.map(finished)))
         .child(heading("Start an agent"))
-        .child(field(this.prompt))
-        .child(field(this.folders))
+        .child(labeled("Prompt", field(this.prompt)))
+        .child(labeled("Extra folders", field(this.folders)))
         .children(this.templates.map(template))
         .when(Boolean(this.startNote), (el) => el.child(div().text_color(t.dim).child(this.startNote))))
       .when(Boolean(token), (el) => el
@@ -264,11 +283,11 @@ export default class Speaker extends View {
           .child(button(`r-${g.id}`, "Revoke", false, (_e, cx) => this.act(cx, () => api(`/grants/${g.id}/revoke`, {}))))))
         .when(!this.grants.length, (el) => el.child(div().text_color(t.dim).child("No live grants"))))
       .child(heading("Settings"))
-      .child(field(this.urlInput))
-      .child(field(this.bottleInput))
-      .child(field(this.machineInput))
-      .child(h_flex().gap(8)
+      .child(labeled("Speaker URL", field(this.urlInput)))
+      .child(labeled("Bottle URL, for listing agents", field(this.bottleInput)))
+      .child(labeled("Bottle machine", field(this.machineInput)))
+      .child(h_flex().gap(8).pt(4)
         .child(button("save", "Save", true, (_e, cx) => this.save(cx)))
-        .when(ready, (el) => el.child(button("admin", "Open in browser", false, browser("")))));
+        .child(button("admin", "Open in browser", false, browser(""))));
   }
 }

@@ -252,7 +252,8 @@ test('the owner API: sign-in gives a bearer token that lists, approves, denies a
   assert.equal((await s.enroll('tok')).status, 503)
   const signedIn = await signIn()
   assert.equal(signedIn.status, 200)
-  const { token } = (await signedIn.json()) as { token: string }
+  const { token, publicUrl } = (await signedIn.json()) as { token: string; publicUrl: string }
+  assert.match(publicUrl, /^https?:\/\//) // where the mod's "Open in browser" goes
   assert.equal((await s.enroll('tok')).status, 201)
 
   // Only the bearer token opens /admin/api: no token, a wrong one, or the session cookie get 401 in the error shape.

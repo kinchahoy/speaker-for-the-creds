@@ -146,7 +146,7 @@ export function adminApp(core: Core) {
     if (!(await signIn(c, password))) return apiError(c, 401, 'Wrong password')
     const token = newSession()
     apiTokens.add(token)
-    return c.json({ token })
+    return c.json({ token, publicUrl: core.config.PUBLIC_URL })
   })
   admin.use('/api/*', async (c, next) => {
     const token = c.req.header('authorization')?.match(/^Bearer (\S+)$/)?.[1]
