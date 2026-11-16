@@ -149,12 +149,15 @@ const modelsJson = (config: Config) => ({
 });
 
 export const systemNote = (
-  agent: { name: string; prompt?: string; attended: boolean; folders?: string[] },
+  agent: { name: string; prompt?: string; attended: boolean; folders?: string[]; launchExt?: string[] },
   grants: Grant[],
   catalog: Catalog,
   extIds: string[],
 ) => {
-  const rows = unexpired(grants).map((grant) => `${grant.item} (${grant.expiresAt ? `expires ${grant.expiresAt}` : "permanent"})`);
+  const rows = [
+    ...(agent.launchExt ?? []).map((id) => `ext:${id} (given at launch by the owner's template; lasts the whole task)`),
+    ...unexpired(grants).map((grant) => `${grant.item} (${grant.expiresAt ? `expires ${grant.expiresAt}` : "permanent"})`),
+  ];
   const notes = extIds.flatMap((id) => {
     const note = catalog.extensions[id]?.note;
     return note ? ["", `## Extension ${id}`, "", note] : [];
@@ -237,7 +240,7 @@ export const writeGuestConfig = (
   directory: string,
   config: Config,
   catalog: Catalog,
-  agent: { name: string; model: string; prompt?: string; attended: boolean; folders?: string[] },
+  agent: { name: string; model: string; prompt?: string; attended: boolean; folders?: string[]; launchExt?: string[] },
   grants: Grant[],
   mcpIds: string[],
   extIds: string[],

@@ -23,6 +23,7 @@ type Agent = {
   startedAt?: string;
   sessionId: string;
   pendingRequests: { id: string; what: string; reason: string }[];
+  launchGrants: string[];
   done: boolean;
   summary?: string;
 };
@@ -299,6 +300,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
       console.log(line(header));
       list.forEach((agent, index) => {
         console.log(line(rows[index]!));
+        if (agent.launchGrants.length) console.log(`    given at launch (template, no card): ${agent.launchGrants.join(", ")}`);
         for (const request of agent.pendingRequests)
           console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it at ${config.speaker.url}/admin`);
       });

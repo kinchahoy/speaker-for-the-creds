@@ -8,7 +8,7 @@ import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
 import { localModelUp, type Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
-import { launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
+import { givenAtLaunch, launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 
@@ -94,6 +94,8 @@ export type Agent = {
   mcpRunning: string[];
   /** The catalog extensions Pi started with. */
   extRunning: string[];
+  /** Extensions the template gave at launch, outside speaker (see givenAtLaunch); Pi always loads them. */
+  launchExt: string[];
   /** The id of the latest grant change written for the guest (see grantChange). */
   changeId: number;
   live: Live;
@@ -250,6 +252,7 @@ export class Agents {
     if (model.startsWith("local/") && !(await localModelUp(this.config.localModel.upstream!)))
       throw new StatusError(400, `the local model server ${this.config.localModel.upstream} is not answering; start it or pick another model with -m`);
     const folders = launchFolders([...template.folders, ...(input.folders ?? [])]);
+    const launchExt = givenAtLaunch(template, this.catalog.extensions);
     const hours = input.hours ?? template.limits.maxRuntimeHours;
     if (hours > template.limits.maxRuntimeHours)
       throw new StatusError(400, `template ${template.id} limits an agent to ${template.limits.maxRuntimeHours} hours`);
@@ -273,6 +276,9 @@ export class Agents {
         at: new Date().toISOString(),
         text: `mounted ${folder.path} at ${folder.mount} ${folder.writable ? "read-write" : "read-only"}`,
       })),
+      ...(launchExt.length
+        ? [{ at: new Date().toISOString(), text: `given at launch by template ${template.id}: ${launchExt.map((id) => `ext:${id}`).join(", ")}` }]
+        : []),
     ];
     const live: Live = {
       hosts: [],
@@ -294,10 +300,10 @@ export class Agents {
         guestConfigDir,
         this.config,
         this.catalog,
-        { name, model, prompt: input.prompt, attended, folders: folders.map((folder) => folder.mount) },
+        { name, model, prompt: input.prompt, attended, folders: folders.map((folder) => folder.mount), launchExt },
         [],
         [],
-        [],
+        launchExt,
       );
       guest = await this.#boot(
         this.config,
@@ -336,7 +342,8 @@ export class Agents {
       jobs: {},
       grants: [],
       mcpRunning: [],
-      extRunning: [],
+      extRunning: launchExt,
+      launchExt,
       changeId: 0,
       live,
       guest,
@@ -348,7 +355,7 @@ export class Agents {
     const awaitGrant = Boolean(input.prompt) && this.#modelService(model).length > 0;
     try {
       // The template's want list is the agent's first request. A hosted model's speaker service is asked for here too.
-      const first = launchRequest(template, agent.speakerAgentId, this.#modelService(model));
+      const first = launchRequest(template, agent.speakerAgentId, this.#modelService(model), launchExt);
       if (first) await upstream(this.speaker.request({ ...first, ...(guest.sshKey ? { sshKey: guest.sshKey } : {}) }));
       if (!awaitGrant) await pi.start(guest);
     } catch (error) {
@@ -442,7 +449,8 @@ export class Agents {
   #granted = (agent: Agent, kind: ItemKind) => unexpired(agent.grants).filter((grant) => kindOf(grant.item) === kind);
   #wanted = (agent: Agent, kind: "mcp" | "ext") => {
     const known = kind === "mcp" ? this.catalog.mcps : this.catalog.extensions;
-    return [...new Set(this.#granted(agent, kind).map((grant) => refOf(grant.item)))].filter((id) => known[id]);
+    const granted = this.#granted(agent, kind).map((grant) => refOf(grant.item));
+    return [...new Set([...(kind === "ext" ? agent.launchExt : []), ...granted])].filter((id) => known[id]);
   };
 
   /** Moves the live agent view to its grants. Hosts and shares are replaced as a whole, so no grant outlives its snapshot. */

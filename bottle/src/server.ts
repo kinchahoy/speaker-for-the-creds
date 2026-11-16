@@ -63,6 +63,7 @@ export const startControl = (config: Config, agents: Agents) => {
       sessionId: agent.guest.sessionId,
       speakerAgentId: agent.speakerAgentId,
       pendingRequests: agents.pendingRequests(agent),
+      launchGrants: agent.launchExt.map((id) => `ext:${id}`),
       done: agents.done(agent),
       summary: agent.lastMessage,
     }));

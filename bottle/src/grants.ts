@@ -62,9 +62,16 @@ export class StatusError extends Error {
   }
 }
 
-/** The agent's first request to speaker, from its template's want list (plus items the launch itself needs); none if empty. */
-export const launchRequest = (template: Template, agentId: string, extra: string[] = []) => {
-  const want = [...new Set([...template.want, ...extra])];
+/**
+ * The extensions a template gives at launch without a card: the owner wrote the template and started it, so that is the
+ * decision. Only extensions that bring no sites; anything that opens the network or reaches a service still asks speaker.
+ */
+export const givenAtLaunch = (template: Template, extensions: Record<string, { sites: string[] }>) =>
+  template.want.filter((item) => item.startsWith("ext:") && extensions[refOf(item)]?.sites.length === 0).map(refOf);
+
+/** The agent's first request to speaker, from its template's want list (less what launch gives, plus items the launch itself needs); none if empty. */
+export const launchRequest = (template: Template, agentId: string, extra: string[] = [], given: string[] = []) => {
+  const want = [...new Set([...template.want.filter((item) => !given.includes(refOf(item)) || !item.startsWith("ext:")), ...extra])];
   return want.length ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration } : undefined;
 };
 

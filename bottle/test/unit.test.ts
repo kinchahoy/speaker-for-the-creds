@@ -6,7 +6,7 @@ import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
 import { loadConfig } from "../src/config.ts";
-import { launchFolders, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
+import { givenAtLaunch, launchFolders, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce, resolveModel } from "../src/agents.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
 import {
@@ -231,6 +231,19 @@ test("a template's want, label and duration become the agent's first request", (
   );
   assert.ok(shipped.get("trusted")!.want.includes("secret:GITHUB_READ"));
   assert.ok(shipped.get("sealed")!.want.every((item) => !item.startsWith("group:") && !item.startsWith("site:")));
+});
+
+test("starting a template gives its site-less extensions without a card; everything else still asks speaker", () => {
+  const extensions = { notes: { sites: [] }, web: { sites: ["mcp.exa.ai"] } };
+  const tpl = Template.parse({ id: "t", label: "T", limits, want: ["ext:notes", "ext:web", "ext:unknown", "site:pypi.org"] });
+  const given = givenAtLaunch(tpl, extensions);
+  assert.deepEqual(given, ["notes"]);
+  assert.deepEqual(launchRequest(tpl, "agent-1", ["openrouter.full"], given)?.want, ["ext:web", "ext:unknown", "site:pypi.org", "openrouter.full"]);
+  // The shipped sealed template's three extensions bring no sites, so its launch card asks only for the model.
+  const sealed = loadTemplates(new URL("../templates.json", import.meta.url).pathname).get("sealed")!;
+  const shippedGiven = givenAtLaunch(sealed, JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")).extensions);
+  assert.deepEqual(shippedGiven, ["subagent", "pi-cc-monitor", "pi-cc-loop"]);
+  assert.equal(launchRequest(sealed, "agent-1", [], shippedGiven), undefined);
 });
 
 test("a model is chosen by id or alias; aliases must be unique; unknown names list the choices", () => {

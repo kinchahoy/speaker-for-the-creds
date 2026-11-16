@@ -269,7 +269,11 @@ export default class Speaker extends View {
         .child(button(`b-${r.id}`, "Open in browser", false, browser(`#request-${r.id}`))));
     // A pending request id here is the speaker request id, the same as the card's.
     const waits = (a) => a.pendingRequests.length > 0;
-    const agent = (a) => h_flex().id(`agent-${a.id}`).gap(8).py(3).items_center()
+    // Extensions the template gave at launch never reach speaker, so its cards and Active list do not show them; this line does.
+    const agent = (a) => v_flex().py(3).child(agentRow(a))
+      .when(Boolean(a.launchGrants?.length), (el) => el.child(div().text_size(11.5).text_color(t.dim)
+        .child(`given at launch by the template: ${a.launchGrants.join(", ")}`)));
+    const agentRow = (a) => h_flex().id(`agent-${a.id}`).gap(8).items_center()
       .child(div().id(`open-${a.id}`).truncate().cursor_pointer().hover((s) => s.text_color(t.accent)).on_click((_e, cx) => this.openAgent(cx, a.id)).child(a.name))
       .child(div().id(`state-${a.id}`).cursor_pointer().text_color(waits(a) ? t.blocked : t.muted)
         .on_click((_e, cx) => {
