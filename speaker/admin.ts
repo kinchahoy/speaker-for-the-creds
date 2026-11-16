@@ -276,7 +276,8 @@ export function adminApp(core: Core) {
   // The older inbox and active panels poll the same one.
   admin.get('/panel/:name{inbox|active|agents}', (c) => c.html(panel(core.view())))
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
-  const redirect = (c: Context) => c.redirect('/admin', 303)
+  // An htmx request (the Agents tab's forms) gets the refreshed panel at once; a plain form post gets the redirect.
+  const redirect = (c: Context) => (c.req.header('hx-request') ? c.html(panel(core.view())) : c.redirect('/admin', 303))
   admin.post('/services/save', async (c) => {
     const input = z
       .object({

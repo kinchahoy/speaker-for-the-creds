@@ -31,7 +31,7 @@ body{margin:0;min-width:320px;background:var(--bg);color:var(--ink)}
 ::selection{background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--ink)}
 .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .top{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--line)}.top .in{max-width:1120px;margin:auto;padding:0 20px}
-.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green-9)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
+form[data-busy]{opacity:.55}.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green-9)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
 .logo{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--radius-3);background:var(--accent);color:var(--on-accent);flex:none}
 h1{font-size:1.05rem;line-height:1.2;font-weight:800;letter-spacing:-.02em;margin:0;white-space:nowrap}h1 em{font-weight:700}
 nav.tabs{display:flex;gap:2px;margin-left:12px}nav.tabs a{display:flex;align-items:center;gap:6px;min-height:52px;padding:0 14px;border-bottom:3px solid transparent;color:var(--dim);text-decoration:none;font-weight:650;white-space:nowrap}
@@ -122,6 +122,7 @@ const mark = (kind: string) =>
 // status, deep links that open the disclosure holding their target, and accessible <dialog> confirmations.
 const pageScript = `const units = [['d', 86400], ['h', 3600], ['m', 60]]
 Idiomorph.defaults.callbacks.beforeAttributeUpdated = (name) => name !== 'open'
+Idiomorph.defaults.callbacks.beforeNodeMorphed = (node) => !node.getAttribute?.('id')?.startsWith('request-')
 const syncHeaderField = () => {
   const sel = document.querySelector('select[name=authType]')
   const box = document.querySelector('[data-auth-header]')
@@ -176,7 +177,7 @@ const tick = () => {
     if ('rep' in t.dataset) t.innerHTML = '<span class="dim">' + text.slice(0, -2) + '</span>' + text.slice(-2)
     if ('rel' in t.dataset || 'short' in t.dataset) t.title = (t.dataset.rel ?? '') + full
   })
-  document.querySelectorAll('button[data-sync]').forEach((b) => {
+  document.querySelectorAll('button[data-sync]:not([data-was])').forEach((b) => {
     const d = b.form.elements.duration.value
     b.textContent = 'Approve' + (b.form.querySelector('[name=items]:not(:checked)') ? ' selected' : '') + (d === 'permanent' ? ' until revoked' : ' for ' + d)
   })
@@ -222,18 +223,32 @@ document.addEventListener('htmx:confirm', (e) => {
   pendingConfirm = e.detail.issueRequest
   dlg.showModal()
 })
-document.addEventListener('htmx:beforeRequest', (e) => {
-  const elt = e.detail.elt
-  if (elt?.tagName === 'FORM') elt.querySelectorAll('button').forEach((b) => { b.disabled = true })
-})
-document.addEventListener('htmx:afterRequest', (e) => {
-  const elt = e.detail.elt
-  if (elt?.tagName === 'FORM') elt.querySelectorAll('button').forEach((b) => { b.disabled = false })
+const busy = (elt, on) => {
+  if (elt?.tagName !== 'FORM') return
+  elt.toggleAttribute('data-busy', on)
+  elt.querySelectorAll('button').forEach((b) => {
+    b.disabled = on
+    if (on && b.matches('.approve, .deny') && !b.dataset.was) { b.dataset.was = b.textContent; b.textContent = b.matches('.deny') ? 'Denying…' : 'Approving…' }
+    if (!on && b.dataset.was) { b.textContent = b.dataset.was; delete b.dataset.was }
+  })
+}
+const say = (text, bad) => {
   const live = document.getElementById('live-status')
-  if (!live || elt?.id !== 'agents') return
-  const ok = e.detail.successful
-  live.textContent = ok ? 'Live' : 'Offline'
-  live.classList.toggle('offline', !ok)
+  if (!live) return
+  live.textContent = text
+  live.classList.toggle('offline', bad)
+}
+document.addEventListener('htmx:confirm', (e) => { if (!e.detail.question) busy(e.detail.elt, true) })
+document.addEventListener('htmx:beforeRequest', (e) => busy(e.detail.elt, true))
+document.addEventListener('htmx:afterRequest', (e) => {
+  busy(e.detail.elt, false)
+  if (e.detail.elt?.id === 'agents' || !e.detail.xhr.status) say(e.detail.successful ? 'Live' : 'Offline', !e.detail.successful)
+})
+document.addEventListener('htmx:beforeSwap', (e) => {
+  const { xhr, target } = e.detail
+  if (xhr.status < 400 || target?.id !== 'agents') return
+  e.detail.shouldSwap = false
+  say(xhr.responseText.trim().slice(0, 100) || 'Request failed', true)
 })
 document.addEventListener('input', tick)
 document.addEventListener('htmx:afterSwap', tick)
@@ -371,7 +386,7 @@ const post = (action: string, fields: Html, icon: string, label: string, text: s
   button(action, fields, text, confirm),
 ]
 // The Agents panel: what needs a decision, then each agent with its access beneath it, then the quiet rest. The one
-// view gives every count; the panel is morphed every 5 seconds. Request cards are hx-preserve, so unticked items, a
+// view gives every count; the panel is morphed every 5 seconds. The morph skips request cards, so unticked items, a
 // chosen duration and an open Review stay.
 export function agents(
   { hosts, agents: all, cards, grants, sessions }: View,
@@ -427,7 +442,7 @@ export function agents(
     const bundle = asked.length
       ? html`<p class="scope"><strong>${asked.map((g) => g.name).join(', ')}</strong> · ${plural(r.items.length, 'capability', 'capabilities')} · <small>${some.join(', ')}${r.items.length > 3 ? ` and ${r.items.length - 3} more` : ''}</small></p>${r.items.filter((i) => i.risk || i.warning).map((i) => html`<p class="alert"><code>${i.item}</code> ${i.risk ? html`<span class="badge badge-warn">${i.risk}</span>` : ''} ${i.warning ? html`<mark>${i.warning}</mark>` : ''}</p>`)}`
       : ''
-    return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
+    return html`<article id="request-${r.id}" data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
   }
 
   const end = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Number.POSITIVE_INFINITY)
@@ -521,7 +536,7 @@ export function agents(
     const everything = [...mine].sort((x, y) => y.bundledWith.length - x.bundledWith.length)
     const toExtend = mine.filter((g) => extendable(g) && !g.bundledWith.length)
     const model = a.agent.split(' · ')[0].replace(` on ${a.sandboxHost}`, '')
-    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>Name it reported: ${a.label}<br>Identity it reported: ${a.agent}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)} from ${a.source}${a.sandboxHost ? ` via sandbox host ${a.sandboxHost}` : ''}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(c.requests, 'request', 'requests')} · ${c.granted} granted · ${c.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
+    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" hx-boost="false" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>Name it reported: ${a.label}<br>Identity it reported: ${a.agent}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)} from ${a.source}${a.sandboxHost ? ` via sandbox host ${a.sandboxHost}` : ''}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(c.requests, 'request', 'requests')} · ${c.granted} granted · ${c.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
     const session = (x: (typeof open)[number]) =>
       html`<details class="gr"><summary class="rw">${ico('ssh')}<span class="clip nm1">${x.what}</span><span class="clip dim mc">${local(x.started, 'Open since ')}</span><span class="lv"></span><span class="n"></span><span></span><span class="acts">${button('/admin/ssh/sessions/end', hidden('id', x.id), `End SSH session ${x.what}`, `End this SSH session now? ${x.what}`, 'revoke')}</span></summary><div class="xb"><div class="bt">${button('/admin/ssh/sessions/end', hidden('id', x.id), 'End session', `End this SSH session now? ${x.what}`)}</div></div></details>`
     return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh'), ...held.map(() => 'ext')])].join(' ')}">${head}${tree}${others.sort((x, y) => x.item.localeCompare(y.item)).map((g) => line(g, g.item.replace(/^\w+:|:rw$/g, ''), g.detail.text))}${open.map(session)}${chips('site', mine.filter((g) => g.kind === 'site').map(chip))}${chips('ext', [...held.map((item) => html`<span class="c held" title="${item}: held for the task by the launch template; not revoked here">${item.replace(/^\w+:/, '')}</span>`), ...mine.filter((g) => g.kind === 'ext').map(chip)])}</article>`
@@ -535,7 +550,7 @@ export function agents(
   const rest = all.filter(idle)
   const approved = hosts.filter((h) => h.grant)
   return String(
-    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-swap="morph:outerHTML" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
+    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-target="#agents" hx-swap="morph:outerHTML" hx-sync="body:queue all" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
   )
 }
 const groupErrors: Record<string, string> = {
