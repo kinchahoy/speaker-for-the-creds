@@ -3,6 +3,7 @@
 // (Kind) is in the registry in core.ts.
 import { randomBytes } from 'node:crypto'
 import { HTTPException } from 'hono/http-exception'
+import { z } from 'zod'
 import { durationNames, durations } from './items.ts'
 import { type ApprovalEvent, type ApprovalState, approvalTable, transition } from './lifecycle.ts'
 
@@ -276,7 +277,8 @@ export function createEngine(env: {
         throw new HTTPException(409, { message: `Request is already ${statusOf(request)}` })
       const rules = env.subjects[request.type]
       if (!rules.exists(request.subject)) throw new HTTPException(409, { message: 'Its subject was removed' })
-      const span = rules.durations.includes(duration) ? duration : rules.durations[0]
+      // A duration this subject does not offer falls back to its first (default) one.
+      const span = z.enum(rules.durations).catch(rules.durations[0]).parse(duration)
       const pending = pendingOf(request).filter((a) => shown.includes(a.item))
       const yes = pending.filter((a) => approved.includes(a.item))
       const no = pending.filter((a) => !approved.includes(a.item))

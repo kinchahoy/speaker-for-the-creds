@@ -853,18 +853,21 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     const peer = peerOf(c)
     if (peer === undefined) return 'unknown'
     if (peer !== config.TRUSTED_PROXY) return peer
-    return (
-      c.req
-        .header('x-forwarded-for')
-        ?.split(',')
-        .at(-1)
-        ?.trim()
-        .replace(/^::ffff:/, '') || peer
-    )
+    // The proxy appends the caller as the last entry; anything that is not an IP address leaves the proxy's own.
+    const last = c.req
+      .header('x-forwarded-for')
+      ?.split(',')
+      .at(-1)
+      ?.trim()
+      .replace(/^::ffff:/, '')
+    return z.union([z.ipv4(), z.ipv6()]).safeParse(last).data ?? peer
   }
   const baseOf = (c: Context) => {
     const url = new URL(c.req.url)
-    const proto = peerOf(c) === config.TRUSTED_PROXY ? c.req.header('x-forwarded-proto') : undefined
+    const proto =
+      peerOf(c) === config.TRUSTED_PROXY
+        ? z.enum(['http', 'https']).safeParse(c.req.header('x-forwarded-proto')).data
+        : undefined
     return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`
   }
   const enforcementOf = (grant: Approval): Enforcement => {

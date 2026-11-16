@@ -16,7 +16,16 @@ import { createServer as createHttpsServer, request as httpsRequest } from 'node
 import { isIP, type Socket } from 'node:net'
 import 'reflect-metadata'
 import * as x509 from '@peculiar/x509'
+import { z } from 'zod'
 import { coversAny } from './items.ts'
+
+// `Proxy-Authorization: Basic base64(<user>:<token>)`; the user part is ignored, so the token is all after the first colon.
+const basicPassword = z
+  .string()
+  .regex(/^Basic +\S+$/i)
+  .transform((value) => Buffer.from(value.split(/ +/)[1], 'base64').toString('utf8'))
+  .pipe(z.string().regex(/^[^:]*:.+$/s))
+  .transform((pair) => pair.slice(pair.indexOf(':') + 1))
 
 const { subtle } = globalThis.crypto
 const algorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' }
@@ -171,8 +180,7 @@ export function createProxy(hooks: ProxyHooks): Server {
       ;({ hostname: host, port } = new URL(`http://${req.url}`))
       host = host.replace(/^\[|\]$/g, '')
       port ||= '443'
-      const password = /^Basic +(\S+)$/i.exec(req.headers['proxy-authorization'] ?? '')?.[1]
-      const token = password && Buffer.from(password, 'base64').toString('utf8').split(':').slice(1).join(':')
+      const token = basicPassword.safeParse(req.headers['proxy-authorization']).data
       if (!token)
         throw new Refusal(
           407,

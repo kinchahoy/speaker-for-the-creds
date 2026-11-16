@@ -890,6 +890,11 @@ test('a trusted proxy names the caller with the last X-Forwarded-For entry', asy
   const away = await f.call('/_speaker/catalog', { headers: { ...bearer('tok'), ...from('100.64.0.7, 100.64.0.9') } })
   assert.equal(away.status, 401)
   assert.equal(((await away.json()) as { error: string }).error, 'enroll')
+  // An entry that is not an IP address names the proxy itself, and a forwarded protocol other than http(s) is ignored.
+  await enrolled(f, 'odd', from('100.64.0.7, not-an-ip'))
+  assert.equal((await f.call('/_speaker/catalog', { headers: { ...bearer('odd'), ...from('anything') } })).status, 200)
+  const help = await (await f.call('/_speaker/help', { headers: { 'x-forwarded-proto': 'javascript' } })).text()
+  assert.ok(help.includes(`${f.url}/_speaker/agents`))
 })
 
 test('public discovery answers without a token, uses the caller address, and names no service or group', async (t) => {
