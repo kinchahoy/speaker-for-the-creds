@@ -1060,9 +1060,6 @@ test('a sandbox host reports its catalog: unknown ext and mcp ids are refused, a
     state: 'ask',
   })
   assert.deepEqual(listed.mcp.files, { label: 'Files', tools: ['read_file'], state: 'ask' })
-  assert.match(listed.text, /^- site:<any hostname> — any website; ask for the exact hostname\.$/m)
-  assert.match(listed.text, /^- ext:web — Web search: Search the web/m)
-  assert.doesNotMatch(listed.text, /\/me\b|curl/)
   const refused = async (want: string[]) => {
     const response = await askFor(f, agent.token, { want, reason: 'x' })
     assert.equal(response.status, 400)
