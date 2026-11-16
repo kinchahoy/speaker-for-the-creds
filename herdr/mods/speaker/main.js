@@ -8,23 +8,49 @@
 // browser UI refuses sign-ins from any other address, such as a tailnet port the mod may use. Every field submits on Enter too. Bind a key in keys.json: "alt-s": "mod.open:speaker".
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { closeOverlay, exec, nextCommand, notify, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
+import { writeFile } from "fs/promises";
+import { appHome, closeOverlay, exec, nextCommand, notify, openOverlay, props, run, setShared, shared, terminals, theme } from "herdr";
 
 const settings = () => shared("speaker.settings"); // { url, bottle, machine } once saved in the inbox
 let token; // the owner API bearer token; gone when Herdr quits, the speaker URL changes, or speaker answers 401
 let publicUrl; // speaker's PUBLIC_URL, from the same sign-in
 
+// Debug log: the last 300 calls to speaker, bottle and programs (never a password, token or response body), rewritten to
+// ~/.config/herdr-app/speaker.log after each one (the bar and the inbox share this module, so one file).
+const lines = [];
+let writing = Promise.resolve();
+const log = (line) => {
+  lines.push(`${new Date().toISOString()} ${line}`);
+  lines.splice(0, lines.length - 300);
+  const text = `${lines.join("\n")}\n`;
+  writing = writing.then(() => writeFile(`${appHome()}/speaker.log`, text)).catch((error) => console.log(`speaker.log: ${error.message}`));
+};
+
 async function api(path, body) {
-  const response = await fetch(`${settings().url}/admin/api${path}`, {
+  const url = `${settings().url}/admin/api${path}`;
+  const response = await fetch(url, {
     method: body ? "POST" : "GET",
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: body && JSON.stringify(body),
+  }).catch((error) => {
+    log(`speaker ${body ? "POST" : "GET"} ${url} -> ${error.message}`);
+    throw error;
   });
+  log(`speaker ${body ? "POST" : "GET"} ${url} -> ${response.status}${token ? "" : " (no token)"}`);
   if (response.status === 401 && token) {
     token = undefined;
     throw new Error("signed out; sign in again");
   }
-  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).message ?? `speaker answered ${response.status}`);
+  if (!response.ok) {
+    // speaker's errors are JSON; its sign-in rate limit (429) answers plain text
+    const text = (await response.text()).trim();
+    let message = text;
+    try {
+      message = JSON.parse(text).message;
+    } catch {}
+    log(`  ${message}`);
+    throw new Error(message || `speaker answered ${response.status}`);
+  }
   return response.status === 204 ? null : response.json();
 }
 // Runs a program; a failure throws its stderr (or stdout) so the inbox shows it.
@@ -32,7 +58,11 @@ async function api(path, body) {
 const machine = () => settings()?.machine || undefined;
 const onMachine = () => (machine() ? ["--on", machine()] : []); // for hc run
 const must = async (command, args, on) => {
-  const r = await exec(command, args, { on });
+  const r = await exec(command, args, { on }).catch((error) => {
+    log(`run ${command} ${args.slice(0, 4).join(" ")}${on ? ` on ${on}` : ""} -> ${error.message}`);
+    throw error;
+  });
+  log(`run ${command} ${args.slice(0, 4).join(" ")}${on ? ` on ${on}` : ""} -> exit ${r.code}${r.code ? `: ${(r.stderr || r.stdout).trim().split("\n")[0]}` : ""}`);
   if (r.code !== 0) throw new Error(r.stderr.trim() || r.stdout.trim() || `${command} exited ${r.code}`);
   return r;
 };
@@ -49,6 +79,7 @@ const startScript = 'bottle "$@" || { echo; echo "bottle run failed; press Enter
 export default class Speaker extends View {
   init(_props, cx) {
     this.inbox = Boolean(props()?.inbox || props()?.overlay); // any overlay copy (mod.open, the palette) is the inbox; only the docked copy is the bar
+    log(`${this.inbox ? "inbox" : "bar"} start: speaker ${settings()?.url ?? "(unset)"}, bottle ${settings()?.bottle || "(default)"}, machine ${machine() ?? "(this computer)"}`);
     this.pending = [];
     this.grants = [];
     this.agents = []; // bottle's open agents
@@ -112,11 +143,14 @@ export default class Speaker extends View {
     this.agentsNote = bottle ? "" : "Set the Bottle URL in Settings to list agents on a bottle machine";
     if (bottle)
       try {
-        const state = await (await fetch(`${bottle}/api/state`)).json();
+        const response = await fetch(`${bottle}/api/state`);
+        log(`bottle GET ${bottle}/api/state -> ${response.status}`);
+        const state = await response.json();
         this.agents = state.agents.filter((a) => !closed.includes(a.state));
         this.finished = state.finished;
         if (!this.agents.length) this.agentsNote = "No open agents";
-      } catch {
+      } catch (error) {
+        log(`bottle ${bottle} -> ${error.message}`);
         this.agentsNote = "bottle is not running";
       }
   }
