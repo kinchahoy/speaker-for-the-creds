@@ -1,0 +1,60 @@
+services:
+  bottle:
+    build:
+      # The pnpm workspace root; set LOCKED: "1" under args for the tested lockfile set.
+      context: ..
+      dockerfile: bottle/Dockerfile
+    restart: unless-stopped
+    # The name bottle registers under in speaker (`bottle register` uses the hostname).
+    hostname: ${BOTTLE_NAME:?Set BOTTLE_NAME in .env to the sandbox host name speaker shows}
+    # tini reaps the microsandbox processes start.sh's children leave behind and passes TERM on.
+    init: true
+    # A stop archives every open agent first.
+    stop_grace_period: 2m
+    # Speaker binds the host token to the address it registered from, so `bottle register` must run in this very
+    # container (docker compose exec bottle bottle register); until a token exists it waits instead of failing.
+    command:
+      - sh
+      - -c
+      - until [ -s /data/state/speaker.token ]; do echo "not registered with speaker yet; run docker compose exec bottle bottle register"; sleep 15; done; exec ./start.sh
+    environment:
+      BOTTLE_HOME: /data
+      # The guest's clock follows the bottle process's zone.
+      TZ: ${TZ:-UTC}
+    volumes:
+      # config.json, config/, state/ (host token, agents' work), output/ (archives), microsandbox/ (guest image, VM disks).
+      - data:/data
+      # The shipped templates' launch folder (~/agent-space, read-write in every agent); must exist on the host.
+      - type: bind
+        source: ${AGENT_SPACE:?Set AGENT_SPACE in .env to the host folder agents share}
+        target: /home/node/agent-space
+        bind:
+          create_host_path: false
+      # Agents' archives (outputRoot), on the host so they can be read or fetched over ssh; must exist on the host.
+      - type: bind
+        source: ${BOTTLE_OUTPUT:?Set BOTTLE_OUTPUT in .env to the host folder that receives agents' archives}
+        target: /data/output
+        bind:
+          create_host_path: false
+    # Each agent is a microsandbox (libkrun) micro-VM; KVM is the only device it needs.
+    devices:
+      - /dev/kvm
+    group_add:
+      - ${KVM_GID:?Set KVM_GID in .env to the host's kvm group id (getent group kvm)}
+    # Reaches speaker by its service name (speaker.url http://speaker:3000) on speaker's network. Nothing is published:
+    # the control API listens on 127.0.0.1 inside the container (docker compose exec bottle bottle ls).
+    networks:
+      - speaker
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # bottle's per-VM door sockets.
+    tmpfs: [/tmp]
+
+networks:
+  speaker:
+    external: true
+    name: ${SPEAKER_NETWORK:?Set SPEAKER_NETWORK in .env to the Docker network speaker is on}
+
+volumes:
+  data:

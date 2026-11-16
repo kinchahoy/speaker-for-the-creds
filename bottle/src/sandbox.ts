@@ -17,7 +17,7 @@ import { RequestError, Server as ProxyServer } from "proxy-chain";
 import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
-import { localModelReady, microsandboxHome, type Config } from "./config.ts";
+import { localModelReady, localModelUp, microsandboxHome, type Config } from "./config.ts";
 import { speakerApi } from "./speaker.ts";
 import { coversAny, errorBody } from "../../speaker/items.ts";
 import { codes, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
@@ -220,7 +220,15 @@ const forward = async (
   req: IncomingMessage,
   res: ServerResponse,
   target: URL,
-  options: { headers?: Record<string, string>; json?: object; dispatcher?: Dispatcher; record?: { live: Live; file: string }; fail?: Reply } = {},
+  options: {
+    headers?: Record<string, string>;
+    json?: object;
+    dispatcher?: Dispatcher;
+    record?: { live: Live; file: string };
+    fail?: Reply;
+    /** Run when the target cannot be reached; true means it is back, and the call is sent once more. */
+    revive?: () => Promise<boolean>;
+  } = {},
 ) => {
   const started = Date.now();
   const sent = await buffer(req);
@@ -228,15 +236,22 @@ const forward = async (
   const body = options.json ? Buffer.from(JSON.stringify({ ...JSON.parse(sent.toString()), ...options.json })) : sent;
   const { host: _host, connection: _connection, "content-length": _length, ...headers } = req.headers;
   const method = req.method ?? "GET";
-  const upstream = await request(target, {
-    method: method as Dispatcher.HttpMethod,
-    headers: { ...headers, ...options.headers },
-    body: body.length ? body : null,
-    ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
-  }).catch((error: Error) => {
-    (options.fail ?? reply)(res, 502, `${target.host} is unreachable: ${error.message}`);
-    if (options.record) note(options.record.live, `${target.origin} is unreachable: ${error.message}`);
-  });
+  const send = () =>
+    request(target, {
+      method: method as Dispatcher.HttpMethod,
+      headers: { ...headers, ...options.headers },
+      body: body.length ? body : null,
+      ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
+    });
+  const upstream = await send()
+    .catch(async (error: Error) => {
+      if (await options.revive?.()) return send();
+      throw error;
+    })
+    .catch((error: Error) => {
+      (options.fail ?? reply)(res, 502, `${target.host} is unreachable: ${error.message}`);
+      if (options.record) note(options.record.live, `${target.origin} is unreachable: ${error.message}`);
+    });
   if (!upstream) return;
   const { connection: _c, "keep-alive": _k, "transfer-encoding": _t, ...responseHeaders } = upstream.headers;
   res.writeHead(upstream.statusCode, responseHeaders);
@@ -280,12 +295,13 @@ export const modelDoor =
     // The agent token goes to speaker's origin only, and only under the provider's service (no `..` out of it).
     if (provider && (target.origin !== new URL(speaker.url).origin || !target.pathname.startsWith(`/${provider.service}/`)))
       return void modelReply(res, 400, `a hosted model path stays under /hosted/${provider.id}/`);
-    // A local model server that sleeps when idle is woken here, so the agent only sees a slow call.
-    if (!provider && config.localModel.wake && !(await localModelReady(config)))
-      return void modelReply(res, 502, `the local model server did not answer within ${config.localModel.wake.waitSeconds} s of being woken`);
     if (!countModelRequest(live)) return void modelReply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
     await forward(req, res, target, {
-      ...(provider ? { headers: { authorization: `Bearer ${speaker.agentToken}` } } : {}),
+      // A local model server that sleeps when idle is woken only after a call fails to reach it, so the agent sees one
+      // slow call and a running server is never probed.
+      ...(provider
+        ? { headers: { authorization: `Bearer ${speaker.agentToken}` } }
+        : config.localModel.wake && { revive: async () => !(await localModelUp(config.localModel.upstream!)) && localModelReady(config) }),
       record: { live, file: modelCalls },
       fail: modelReply,
     });

@@ -221,7 +221,7 @@ export function adminApp(core: Core) {
         c.get('secureHeadersNonce'),
         'log',
         log(matches.slice(0, 500), matches.length, query, {
-          agent: now.agents.map((a) => [a.id, a.title ?? a.label]),
+          agent: now.agents.map((a) => [a.id, a.title ? `${a.label} · ${a.title}` : a.label]),
           grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
           service: ids(core.services),
           target: ids(ssh.targets),
