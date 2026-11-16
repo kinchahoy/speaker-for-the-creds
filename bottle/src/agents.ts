@@ -201,7 +201,10 @@ export class Agents {
     this.catalog = catalog;
     this.#boot = vm;
     this.speaker = speakerClient(config, hostToken);
-    this.#report = watchGrants(config, hostToken, (snapshot) => this.#onSnapshot(snapshot), catalog);
+    this.#report = watchGrants(config, hostToken, (snapshot) => this.#onSnapshot(snapshot), catalog, {
+      // Through the normal shutdown, which archives the agents.
+      onGone: (why) => (console.error(`stopping bottle: ${why}`), (process.exitCode = 1), process.kill(process.pid, "SIGTERM")),
+    });
   }
 
   list = () => [...this.byId.values()];

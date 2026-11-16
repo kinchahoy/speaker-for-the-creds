@@ -143,7 +143,7 @@ export const watchGrants = (
   hostToken: string,
   onSnapshot: (snapshot: Snapshot) => void,
   catalog: Catalog = { mcps: {}, extensions: {} },
-  { dropMs = DROP_MS, retryMs = 5_000 } = {},
+  { dropMs = DROP_MS, retryMs = 5_000, stopMs = 300_000, onGone = (_why: string) => {} } = {},
 ) => {
   const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -184,9 +184,18 @@ export const watchGrants = (
     socket.onerror = (event) => {
       lastError = (event as ErrorEvent).message || "connection failed";
     };
-    socket.onclose = () => {
+    socket.onclose = async () => {
       if (stopped) return;
+      // Why: speaker says so itself when it is locked or does not know this host; no answer means it is down.
+      const answer = await fetch(new URL("/_speaker/hosts/self", config.speaker.url), { headers: { authorization: `Bearer ${hostToken}` } }).catch(
+        () => undefined,
+      );
+      if (answer && !answer.ok)
+        lastError = ((await answer.json().catch(() => ({}))) as { message?: string }).message ?? `speaker answered HTTP ${answer.status}`;
       change(false);
+      // A speaker that is down (not merely locked) for stopMs ends bottle: no grant can apply without it.
+      if (!answer && Date.now() - since.getTime() > stopMs)
+        return onGone(`cannot reach speaker at ${config.speaker.url} for ${Math.round(stopMs / 60_000)} min`);
       timer = setTimeout(open, retryMs);
     };
   };
