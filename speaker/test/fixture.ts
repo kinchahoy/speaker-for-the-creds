@@ -41,11 +41,12 @@ export async function start(t: TestContext, { dir, env = {} }: { dir?: string; e
   }).listen(0, '127.0.0.1')
   await once(upstream, 'listening')
   const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`
+  const proxyPort = await freePort()
   const app = await createApp(
     readConfig({
       DATA_DIR: dataDir,
       PUBLIC_URL: 'http://localhost',
-      PROXY_PORT: String(await freePort()),
+      PROXY_PORT: String(proxyPort),
       SSH_PORT: String(await freePort()),
       ...env,
     }),
@@ -153,6 +154,7 @@ export async function start(t: TestContext, { dir, env = {} }: { dir?: string; e
   }
   if (!restarted) await signIn('/admin/setup')
   return {
+    proxyPort,
     url,
     cookie: () => cookie,
     dir: dataDir,

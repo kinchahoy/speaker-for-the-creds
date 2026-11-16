@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
+import { request as httpRequest } from 'node:http'
+import { createServer as httpsServer } from 'node:https'
+import { connect, getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { once } from 'node:events'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
@@ -409,4 +412,76 @@ test('a wrong owner password is refused, and repeated failures are cut off even 
   for (let i = 0; i < 5; i++)
     assert.equal((await f.post('/admin/signin', { password: 'not the password' })).status, 401)
   assert.equal((await f.post('/admin/signin', { password: ownerPassword })).status, 429)
+})
+
+// CONNECT through speaker's proxy as the agent, then speak TLS (trusting speaker's certificate) to the target.
+async function viaProxy(f: Fixture, token: string, host: string, port: number, authorization: string) {
+  const ca = await (await f.call('/_speaker/proxy/ca.pem')).text()
+  const connecting = httpRequest({
+    port: f.proxyPort,
+    host: '127.0.0.1',
+    method: 'CONNECT',
+    path: `${host}:${port}`,
+    headers: { 'proxy-authorization': `Basic ${Buffer.from(`agent:${token}`).toString('base64')}` },
+  }).end()
+  const [answer, socket] = await once(connecting, 'connect')
+  if (answer.statusCode !== 200) return answer.statusCode as number
+  const tls = connect({ socket, servername: host, ca })
+  const sent = httpRequest({ createConnection: () => tls, host, port, headers: { authorization } }).end()
+  const [response] = await once(sent, 'response')
+  tls.destroy()
+  return response.statusCode as number
+}
+
+test('the proxy swaps an inserted secret’s placeholder for the real value, for its allowed host and only with the grant', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'speaker-tls-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const pem = (name: string) => join(dir, name)
+  await run('openssl', [
+    'req',
+    '-x509',
+    '-newkey',
+    'ec',
+    '-pkeyopt',
+    'ec_paramgen_curve:P-256',
+    '-nodes',
+    '-days',
+    '1',
+    '-subj',
+    '/CN=localhost',
+    '-addext',
+    'subjectAltName=DNS:localhost',
+    '-keyout',
+    pem('key'),
+    '-out',
+    pem('cert'),
+  ])
+  const identity = { key: await readFile(pem('key')), cert: await readFile(pem('cert')) }
+  setDefaultCACertificates([...getCACertificates('default'), identity.cert.toString()])
+  const received: unknown[] = []
+  const upstream = httpsServer(identity, (req, res) => {
+    received.push(req.headers.authorization)
+    res.end('ok')
+  }).listen(0)
+  t.after(() => {
+    upstream.closeAllConnections()
+    upstream.close()
+  })
+  await once(upstream, 'listening')
+  const port = (upstream.address() as { port: number }).port
+
+  const f = await start(t)
+  const real = 'ghp_real_token_only_the_upstream_should_see'
+  await f.form('/secrets/save', { name: 'GH', value: real, hosts: 'localhost', env: 'GH_TOKEN' })
+  const a = await f.enrol()
+  const proxied = (host: string) => viaProxy(f, a.token, host, port, `Bearer ${placeholder}`)
+  let placeholder = ''
+  assert.equal(await viaProxy(f, a.token, 'localhost', port, 'x'), 403, 'no grant, no tunnel')
+  await grant(f, a, 'secret:GH')
+  placeholder = (await a.catalog()).secrets.GH.environment.GH_TOKEN
+  assert.ok(!placeholder.includes(real))
+  assert.equal(await proxied('localhost'), 200)
+  assert.deepEqual(received, [`Bearer ${real}`])
+  assert.equal(await proxied('example.org'), 403, 'a host the secret does not cover gets no tunnel')
+  assert.deepEqual(received, [`Bearer ${real}`])
 })
