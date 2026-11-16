@@ -4,7 +4,10 @@
 
 <sub>AI-written</sub>
 
-Speaker lets AI agents use the owner's homelab services, folders, network access and hosts without ever holding the owner's keys. Agents ask; the owner approves from a phone, for a chosen time; speaker makes the call, relays the session, or tells a sandbox what to allow, and can cut any of it off.
+Speaker lets AI agents use the owner's homelab services, folders, network access and hosts without ever holding the owner's keys. Agents ask; the owner approves in the `/admin` page (a browser, including a phone) or the Herdr mod, for a chosen time; speaker makes the call, relays the session, or tells a sandbox what to allow, and can cut any of it off.
+
+**How to read this document.** Everything here describes code that exists unless it is under a heading or label that says "Not built". For what the project is for and what works today, see the [top-level README](../README.md). For setup, configuration and API reference, see [README.md](README.md). A round of changes to the `/admin` pages and the Herdr mod is still awaiting the owner's review; "The owner's side" describes the pages as committed.
+{.ai}
 
 ## In plain words
 
@@ -29,6 +32,36 @@ Speaker lets AI agents use the owner's homelab services, folders, network access
 5. **Speaker does the controlling.** Limits are enforced by speaker (or by the sandbox host), not by special configuration on each target machine.
 6. **Nothing to install for agents.** Plain `curl`, `ssh`, `scp`, `sftp` and, where present, `sshfs`.
 7. **Brutally simple state.** Only durable settings, encrypted keys and the append-only log are written to disk. Agents, grants and requests live in memory; after a restart, agents ask again.
+
+## Who it serves
+
+There are two kinds of agent, and they need different things.
+
+- **Direct agents** (Claude Code on a workstation) already have their own internet, files and tools. They come to speaker only for what needs the owner's credentials or hosts: homelab services, SSH to homelab hosts, folders on other machines, and `secret:` items. They never need `site:`, `mcp:` or `ext:`.
+- **Sandboxed agents** (Pi inside a bottle VM) start with nothing. Besides the same items, they need websites, secrets, MCP servers, extensions and folder mounts.
+
+The scenarios speaker has to serve well:
+
+| Scenario | Agent | What the owner wants | Where it is described |
+| --- | --- | --- | --- |
+| Use a homelab service (read, then full), such as updating notes in Obsidian | either | One card saying what and why, one tap, and the agent finishes. Services whose reads the owner marked open need no card, but are not listed to agents. | Service rules; Calling a service |
+| Run commands over SSH on a homelab host | either | A limited account for a short time; the account is on the card and every command is logged. | Using SSH and folders over SSH |
+| Fetch or deliver files on another machine | either | One folder only, read-only unless a write was approved. | Folder limits over SSH |
+| Start an agent from a template | sandboxed | One card for the template's whole bundle, then a VM that is ready. | Sandbox hosts |
+| Need something new mid-task (a website, a tool) | sandboxed | The agent asks for the smallest thing that works, with a reason; the owner can say yes to some items and no to others. | Requesting access |
+| Use a secret without seeing it, such as GitHub for a pull request | either | The token never enters the VM or the sandbox host, and works only against the hosts the owner bound it to. | Secrets: speaker inserts them |
+| Work on a folder from inside the VM | sandboxed | Read-write only if approved; the mount disappears when the grant ends. | How a folder grant reaches the agent |
+| Run speaker on a home server or on one laptop | owner | A home server behind a reverse proxy (one HTTPS address for agents and phone), or everything on one MacBook. | Deployment |
+
+A sandboxed agent that needs a homelab service, SSH or a folder uses the same flows as a direct one, with three differences. The sandbox host creates its agent and hands it a token, so it does no setup. Its source address is the sandbox host's, and its token is bound to that address. And its network route to speaker (HTTP and the SSH port) must work from inside the VM.
+
+"Weak agent" elsewhere means a small model that follows steps literally, copies commands exactly and does not improvise around errors. The agent-facing text and error messages are written for it.
+
+**Scheduled and unattended agents.** These are in scope, because the project's goal is an agent that wakes on a schedule. The owner still decides: the launch card of an unattended run is the approval (the `cron` template asks for 30 days up front, and the run ends at 168 hours, `/output/DONE` or its request cap), and anything beyond it is a card the agent waits on. What is not built: an agent that keeps a to-do list across runs, and any channel that reaches the owner away from a browser or Herdr. Both are open points, not exclusions.
+
+**Priorities carried over from the earlier use-case notes.** A sandbox's block message should say what to do next, because the agent is a weak model. Every failure names the next step. A denied item means the agent stops, not retries. A direct agent that wants `ext:` or `mcp:` is a mismatch: those exist only inside VMs. Open points that were never settled: how Pi is told to use a newly granted extension or MCP server (today Pi reloads at its next idle moment), and whether the sandbox's network route to speaker (HTTP and SSH port) is guaranteed on every deployment.
+
+**Single laptop.** Direct agents use `http://localhost`. The owner signs in to `/admin` in a browser on the same machine over plain HTTP (the sign-in page says so), and VMs reach speaker through the laptop's network address, not `localhost`.
 
 ## Names
 
@@ -329,10 +362,20 @@ On disk, in speaker's data volume: settings (services with rules and notes, secr
 **Deployment**
 
 - The SSH port does not go through a web reverse proxy; open it separately.
-- Approving from a phone away from home needs a route to speaker, such as the tailnet.
+- Approving from a phone away from home needs a route to speaker, such as the tailnet. Today that means the responsive `/admin` page or Herdr on the phone; push notifications and a native app are not built.
 - On a single machine every local client can share one source address, so address binding adds little there; that setup protects against accidents and keeps a record, not against a hostile agent running as the owner.
 
-## Alternative to explore: one WebSocket instead of most routes
+## Planned, not built (admin and Herdr)
+
+_Kept from the earlier UI proposals; nothing here exists in the code._
+{.ai}
+
+- Show each bottle agent's real runtime status and latest messages in the web admin. Speaker would receive them as a bounded, allowlisted report over the existing authenticated sandbox-host connection and show them as untrusted text; the phone never calls bottle's control API.
+- Herdr: replace the template-by-model button matrix with a deliberate launch form that shows template, model, execution mode and folder scope, keeps its values until the launch is accepted, and cannot start a VM by exploring models.
+
+## Not built: one WebSocket instead of most routes
+
+_An idea only. Nothing here exists in the code._
 
 Instead of separate HTTP routes, the `Speaker-Wait` hold and an SSH port, each agent could keep one WebSocket connection to speaker and exchange messages over it: requests, decisions pushed the moment the owner taps, revocations, and SSH traffic tunnelled through the same connection.
 
@@ -393,3 +436,30 @@ A real secret is never handed to an agent or a sandbox host. Speaker keeps it an
 ### The same for a direct agent
 
 Claude Code holding `secret:GITHUB_TOKEN` runs `gh` with three environment variables from `/catalog`: `GH_TOKEN=<placeholder>`, `HTTPS_PROXY` pointing at speaker's proxy (with its agent token as the proxy credential), and `SSL_CERT_FILE` naming speaker's certificate authority (fetched once from `/catalog`). `gh`, and `git` with `gh auth setup-git`, then work exactly as in the sandbox, and the token never reaches the agent's machine. Use it when it is reasonable; an owner may equally give a direct agent its own token.
+
+## Verifying end to end
+
+Status: written, no recorded run. The unit tests cover the proxy, secrets, lifecycle, jump server and sandbox host, but nothing in the tests boots a guest, so this one pass on real endpoints is what proves the property the project rests on: an agent asks, the owner approves, the call goes through, a revoke cuts it off.
+
+The pass is driven by a subagent while the owner approves cards in `/admin`. It changes no code, never prints a secret (it tests for a key prefix and prints a count), polls up to 10 minutes for each card, and drives Pi through Herdr (`hc send`, `hc wait`, `hc read`). A card whose reason contains `E2E-DENY` is denied; every other card is approved for the shortest duration. Evidence comes from `audit.jsonl` in speaker's data folder, `~/.bottle/bottle.log` and the archive under `~/.bottle/output/`.
+
+Gotchas from writing it: `mise run init` needs a real terminal and the first guest-image build takes over 10 minutes; give it the local model server's `host:port`, or `none` for hosted models only (then the smoke agent is skipped). The share path must be written out in full (no `~`), the folder must exist first, and the account needs Setup's `authorized_keys` line before the target works. Check B's key test on a prefix only (`sk-or-`), never the value.
+
+Setup, once: `mise run install`, `mise run check` and `mise run test` pass; the owner runs `mise run init`, enters the OpenRouter key on the `openrouter` service, adds an SSH target `local` (127.0.0.1) and a share `e2e` holding a `hello.txt`; the subagent sets one cheap model in `hostedProviders` and restarts bottle.
+
+| Check | Passes when |
+| --- | --- |
+| A. `bottle run`, then `hc ls` | A `pi-<id>` terminal appears in Herdr's bottle space and Pi answers through the local model |
+| B. Models call through `openrouter.read`, then `openrouter.full` | Both return 200; the audit log has proxy lines; the VM's environment and Pi's config hold no key |
+| C. `site:example.com` with `E2E-DENY` | Pi reports a denial; `curl` in the VM gets 403 |
+| D. `site:pypi.org` approved | pypi.org answers 200 and example.org still 403 |
+| E. Revoke B's read grant while live | The next call is refused within seconds |
+| F. Shortest duration, call after expiry | Refused after expiry |
+| G. `folder:e2e` read-only, then `:rw` | Read works, write fails, nothing outside the share shows; read-write lands on the host; a revoke unmounts |
+| H. `bottle run -d -m openrouter/<model>` with a file-writing prompt | Waits in `awaiting-grant`, starts after approval, finishes and archives; model-call lines have status 200 and the archive holds no key |
+| I. After H | The tab is gone and the archive has `agent.json`, `manifest.json`, `pi-session.jsonl`, `transcript.html`, `model-calls.jsonl` and `artifacts/` |
+| J. `bottle stop` | Archived, tab gone, agent gone from speaker's Active page |
+| K. Approve `site:pypi.org` from the Herdr inbox | A toast, the bar counts 1 then 0, and the grant shows in the inbox and in `/admin` |
+| L. Deny a request in Herdr, then revoke K's grant | Pi reports the denial, the revoked site gets 403, and the audit log has both decisions |
+
+The report is one table (check, pass, fail or no decision, and the evidence), then each failure with its exact error and the steps that led there. No fixes.

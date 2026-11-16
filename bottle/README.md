@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see The VM). Speaker approves capabilities. bottle applies their grants.
+bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see The VM). Speaker approves capabilities. bottle applies their grants. This is the reference for setting up and running bottle; for what the project is for, see the [top-level README](../README.md), and for the grant model, [speaker's design](../speaker/DESIGN.md).
 {.ai}
 
 <!-- author: ai -->
@@ -419,7 +419,7 @@ You trust the host, bottle, the sandbox runtime, the pinned image, and every pee
 {.ai}
 
 - The host enforces grant expiry, revocation, network access, and shared-folder permissions independently of Pi. Validate those boundaries in a real guest before deployment.
-- Every approved destination can receive anything the guest can read. Placeholder substitution in speaker's proxy protects secret values. It does not prevent misuse of granted authority.
+- Every approved destination can receive anything the guest can read. Approving a hosted model provider approves every model and third-party operator behind that host; models are not told apart. Placeholder substitution in speaker's proxy protects secret values. It does not prevent misuse of granted authority.
 - bottle's egress proxy is a high-value host process and needs the same care as speaker's proxy. Every client in the guest must honour the proxy settings and trust speaker's proxy certificate; one that ignores them simply gets no network.
 - The speaker exception permits the configured origin and agent-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
 - Provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or the duration of a single generation.

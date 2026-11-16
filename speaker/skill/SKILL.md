@@ -6,7 +6,7 @@ description: "Get owner-approved access through speaker: homelab APIs (Obsidian,
 
 # Speaker
 
-Speaker holds the owner's keys and makes calls for you. The owner approves each use from a phone, so you never need an upstream key. Never ask for one, and never print your speaker token.
+Speaker holds the owner's keys and makes calls for you. The owner approves each use in the admin page or Herdr (both work on a phone), so you never need an upstream key. Never ask for one, and never print your speaker token.
 
 In a bottle sandbox, use the `request_capability` tool instead of this page.
 

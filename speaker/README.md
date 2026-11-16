@@ -4,10 +4,7 @@
 
 <sub>AI-written</sub>
 
-Speaker holds your keys. Agents enroll and ask for items, and you approve each request from a phone page. Sandbox hosts such as bottle apply the sandbox grants.
-{.ai}
-
-[DESIGN.md](DESIGN.md) has the details; [USECASES.md](USECASES.md) walks through the flows.
+Reference for running and configuring speaker. For what speaker is for and how it fits with bottle, see the [top-level README](../README.md). For the design and its rationale, see [DESIGN.md](DESIGN.md).
 {.ai}
 
 <!-- author: ai -->
