@@ -7,7 +7,9 @@ cp /etc/bottle/models.json /etc/bottle/settings.json /etc/bottle/APPEND_SYSTEM.m
 cp -r /etc/bottle/agent-files/. "$HOME/.pi/agent/"
 cd /work
 set --
-while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/bottle/args
-# Always-on extensions baked into the image (pinned in guest/pi-package.json); opt-in ones arrive as -e args
+# Always-on extensions baked into the image (pinned in guest/pi-package.json); opt-in ones arrive as -e args.
+# They load first: Pi runs session_start handlers in load order, and the launch prompt that request-capability.ts sends
+# there must not reach before_agent_start before proper-base has armed its session title.
 for extension in /opt/pi-extensions/*; do set -- "$@" -e "$extension"; done
+while IFS= read -r argument; do set -- "$@" "$argument"; done < /etc/bottle/args
 exec pi "$@" 2>/run/pi.err
