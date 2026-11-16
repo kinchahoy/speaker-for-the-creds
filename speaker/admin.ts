@@ -267,7 +267,11 @@ export function adminApp(core: Core) {
     const input = z
       .object({
         id: idSchema,
-        baseUrl: urlSchema,
+        // A pasted URL after a typed scheme ("https:/https://…") is a valid URL with host "https"; refuse it here only, so a
+        // stored one does not stop speaker from starting.
+        baseUrl: urlSchema.pipe(
+          z.url({ hostname: /^(?!https?$)/, error: 'Write the URL once, starting with https:// or http://' }),
+        ),
         authType: z.enum(['none', 'bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),

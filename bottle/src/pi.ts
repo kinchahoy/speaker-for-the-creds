@@ -188,6 +188,7 @@ export const systemNote = (
     "- Browser automation: Playwright with headless Chromium is installed.",
     "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (for example GitHub releases) only when no registry package exists.",
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`. Its description lists what you can ask for.",
+    "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it, or make the call itself with the header `Speaker-Wait: 60`, which answers as soon as the owner decides.",
     "",
     "## Grants at this Pi start",
     "",

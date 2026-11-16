@@ -215,6 +215,8 @@ test('enroll with a first request, approval, then the proxy injects the credenti
   assert.equal(f.calls.length, 0)
   const help = async () => (await f.call('/_speaker/help/notes', { headers: bearer('agent-token') })).text()
   assert.match(await help(), /needs `notes\.read`; not granted yet\./)
+  // A direct agent calls through SPEAKER_URL with its header file (a sandbox host's agent is told its bearer header instead).
+  assert.ok((await help()).includes('Call `$SPEAKER_URL/notes/<path>` with your header file.'))
   assert.equal((await f.decide(request.id, 'approve', { duration: '30m' })).status, 303)
   const decided = (await me(f, 'agent-token')).requests[0]
   assert.deepEqual([decided.status, decided.granted, decided.denied], ['decided', ['notes.read'], []])
@@ -223,6 +225,13 @@ test('enroll with a first request, approval, then the proxy injects the credenti
   assert.equal((await call()).status, 200)
   assert.equal(f.calls[0].url, '/base/things?q=1')
   assert.equal(f.calls[0].headers.authorization, `Bearer ${upstreamSecret}`)
+})
+
+test("a sandbox host's agent is told to call SPEAKER_URL with its bearer placeholder", async (t) => {
+  const f = await setup(t)
+  const { agent } = await approvedHost(f)
+  const help = await (await f.call('/_speaker/help/notes', { headers: bearer(agent.token) })).text()
+  assert.ok(help.includes('Call `$SPEAKER_URL/notes/<path>` with the header `Authorization: Bearer $SPEAKER_TOKEN`.'))
 })
 
 test('the owner decides per item: unticked items are denied, and .full covers reads', async (t) => {

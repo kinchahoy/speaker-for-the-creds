@@ -447,6 +447,24 @@ test('a service the owner sets to never loses its grants', async (t) => {
   assert.equal((await s.grantIds()).length, 0)
 })
 
+test('an unreachable service answers 502 with the network error code, not the host', async (t) => {
+  const s = await setup(t)
+  await s.ownerForm('/services/save', {
+    id: 'down',
+    baseUrl: `http://127.0.0.1:${await freePort()}/api`,
+    authType: 'none',
+    read: 'ask',
+    write: 'ask',
+  })
+  const agent = await s.agent('reader')
+  await agent.ask(['down.read'])
+  const reply = await s.call('/down/x', { headers: agent.headers })
+  assert.equal(reply.status, 502)
+  const body = (await reply.json()) as { error: string; message: string }
+  assert.equal(body.error, 'upstream_unavailable')
+  assert.equal(body.message, 'down did not answer (ECONNREFUSED)')
+})
+
 test('a keyless service forwards calls without any credential', async (t) => {
   const s = await setup(t)
   const agent = await s.agent('reader')

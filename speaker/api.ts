@@ -492,16 +492,19 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             ? `granted ${until(grant.expiresAt)}.`
             : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
         }
+        // An agent a sandbox host created (bottle) calls through its host's door with a placeholder token; a direct agent
+        // uses its header file (SKILL.md). Both have SPEAKER_URL; speaker's own address may be unreachable from a sandbox.
+        const auth = agent.host ? 'the header `Authorization: Bearer $SPEAKER_TOKEN`' : 'your header file'
         const lines = [
           `# ${name}`,
           '',
-          `- Call \`${core.baseOf(c)}/${name}/<path>\` with your header file. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
+          `- Call \`$SPEAKER_URL/${name}/<path>\` with ${auth}. Speaker sends \`<path>\` to the service's API root and adds the real credential. Send no other credentials.`,
           `- Read (GET, HEAD, OPTIONS${service.readPaths?.length ? `, POST to ${service.readPaths.join(', ')}` : ''}): ${access(false)}`,
           `- Everything else (\`${name}.full\`): ${access(true)}`,
           '- Without access, add `Speaker-Wait: 60` (and `Speaker-Reason: <one sentence>`). Speaker asks the owner and answers the call once they decide. Without that header, the call answers at once. `denied` is final.',
           ...(service.mcp
             ? [
-                `- MCP server (streamable HTTP) at \`${core.baseOf(c)}/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
+                `- MCP server (streamable HTTP) at \`$SPEAKER_URL/${name}\`. Listing tools and read-only tools count as read. Other tool calls need full.`,
               ]
             : []),
           service.notes
@@ -572,6 +575,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             headers.delete(name)
         core.applyCredential(service, secret, headers)
         const start = Date.now()
+        // The network error's code (ENOTFOUND, ECONNREFUSED, a TLS or timeout code), never its message, which names the host.
+        let failure: string | undefined
         const upstream = await proxy(target, {
           raw: c.req.raw,
           strictConnectionProcessing: true,
@@ -583,6 +588,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         } as RequestInit).catch((error: Error) => {
           if (error instanceof HTTPException) throw error
           core.audit('upstream_failed', { service: serviceId, error: String(error), cause: String(error.cause ?? '') })
+          failure = (error.cause as { code?: unknown } | undefined)?.code?.toString() ?? error.name
           return undefined
         })
         core.audit('proxy', {
@@ -597,7 +603,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           rule: service[write ? 'write' : 'read'],
         })
         if (!upstream)
-          return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer`, {
+          return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer${failure ? ` (${failure})` : ''}`, {
             next: 'Try again shortly; if it keeps failing, tell the user',
           })
         const location = upstream.headers.get('location')
