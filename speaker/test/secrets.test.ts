@@ -173,6 +173,7 @@ async function setup(t: TestContext) {
     grantIds,
     keylessPort: port(keylessUpstream),
     ownerForm,
+    owner,
     upstreamPort: port(upstream),
   }
 }
@@ -477,4 +478,69 @@ test('a keyless service forwards calls without any credential', async (t) => {
   // The service is listed with its state like any other.
   const me = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as { services: object }
   assert.ok('weather' in me.services)
+})
+
+test('a released secret: saved without hosts, read only after approval, audited without its value, stopped by revoke', async (t) => {
+  const s = await setup(t)
+  const wifi = 'correct-horse-battery-staple'
+  await s.ownerForm('/secrets/save', { name: 'wifi-otnow', value: wifi, release: 'on' })
+  const agent = await s.agent('reader')
+  const route = '/_speaker/secrets/wifi-otnow'
+  // Before approval: the catalog lists it as released with the route, no placeholder or variable; the read is refused.
+  const before = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as {
+    secrets: Record<string, object>
+    text: string
+  }
+  assert.deepEqual(before.secrets['wifi-otnow'], { release: true, state: 'ask' })
+  assert.match(before.text, /^- secret:wifi-otnow — released: once granted you read the value yourself\. Not granted\.$/m)
+  assert.equal((await s.call(route, { headers: agent.headers })).status, 403)
+  // An inserted secret and an unknown one answer like an unknown route.
+  for (const path of ['/_speaker/secrets/GITHUB_TOKEN', '/_speaker/secrets/NOPE'])
+    assert.equal((await s.call(path, { headers: agent.headers })).status, 404, path)
+  // The card warns; approval opens the read.
+  const card = await agent.ask(['secret:wifi-otnow'])
+  assert.match(card, /<mark title="[^"]*cannot take back[^"]*">agent receives the value<\/mark>/)
+  assert.match(card, /name="items" value="secret:wifi-otnow" checked/)
+  const read = await s.call(route, { headers: agent.headers })
+  assert.equal(read.status, 200)
+  assert.equal(await read.text(), wifi)
+  const held = (await agent.me()).secrets['wifi-otnow'] as unknown as Record<string, unknown>
+  assert.equal(held.state, 'granted')
+  assert.match(String(held.read), /^GET http:\/\/[^/]+\/_speaker\/secrets\/wifi-otnow$/)
+  assert.equal(held.environment, undefined)
+  // Another agent without the grant gets nothing, and no page or answer shows the value.
+  assert.equal((await s.call(route, { headers: (await s.agent('other')).headers })).status, 403)
+  const pages = await Promise.all(
+    ['/admin/log', '/admin/panel/active', '/admin/panel/inbox', '/admin/panel/agents', '/admin?section=services'].map(
+      async (path) => (await s.call(path, { headers: s.owner })).text(),
+    ),
+  )
+  assert.match(pages[0], /secret_released/)
+  assert.match(pages[1], /agent receives the value/)
+  assert.match(pages[4], /released/)
+  for (const page of pages) assert.ok(!page.includes(wifi))
+  assert.ok(!JSON.stringify(await agent.me()).includes(wifi))
+  // Revoking stops further reads.
+  await s.revokeAll()
+  assert.equal((await s.call(route, { headers: agent.headers })).status, 403)
+})
+
+test('delivery changes: inserted to released needs the value typed again; form errors are readable', async (t) => {
+  const s = await setup(t)
+  const save = async (body: Record<string, string>) => {
+    const reply = await s.call('/admin/secrets/save', { method: 'POST', headers: s.owner, body: new URLSearchParams(body) })
+    assert.equal(reply.status, 303)
+    return reply.headers.get('location')
+  }
+  const bad = (error: string) => `/admin?section=services&error=${error}`
+  // An edit that keeps the stored value cannot flip an inserted secret to released.
+  assert.equal(await save({ name: 'GITHUB_TOKEN', value: '', release: 'on' }), bad('secretFlip'))
+  // Retyping the value does; released back to inserted needs hosts again.
+  assert.equal(await save({ name: 'GITHUB_TOKEN', value: 'new', release: 'on' }), '/admin?section=services')
+  assert.equal(await save({ name: 'GITHUB_TOKEN', value: '', hosts: '', env: 'GH_TOKEN' }), bad('secretHosts'))
+  assert.equal(await save({ name: 'GITHUB_TOKEN', value: '', hosts: 'localhost', env: 'GH_TOKEN' }), '/admin?section=services')
+  assert.equal(await save({ name: 'bad name', value: 'x', release: 'on' }), bad('secretName'))
+  assert.equal(await save({ name: 'ok', value: 'two\nlines', release: 'on' }), bad('secretValue'))
+  const page = await (await s.call(bad('secretName'),{ headers: s.owner })).text()
+  assert.match(page, /Secret not saved: the name may use letters, digits, _ and -\./)
 })

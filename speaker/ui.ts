@@ -3,9 +3,8 @@
 import { html, raw } from 'hono/html'
 import type { Group, LogEntry, Service, View } from './core.ts'
 import type { SshSetup } from './jump.ts'
-import type { OwnerSecret } from './store.ts'
 type Html = ReturnType<typeof html>
-type Owned = Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>
+type Owned = Record<string, { hosts?: string[]; env?: string; release?: true }>
 export type McpSummary = Record<string, { read: number; write: number; unannotated: number }>
 export type Setup = {
   services: Record<string, Service>
@@ -399,7 +398,7 @@ export function agents(
       : ''
   }
   const pick = (i: Card['items'][number]) =>
-    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" checked>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark>${i.warning}</mark>` : ''}</span></label>`
+    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
   // Self-reported identity and what speaker itself knows stay on separate, labelled lines.
   const meta = ({ who, type, subject }: Card) =>
     type === 'host'
@@ -470,7 +469,7 @@ export function agents(
     // phone only the icon, name, level and expiry stay on the line; tapping it opens the rest.
     const line = (g: Grant, name: Html | string, main: Html | string, cls = '') => {
       const lv = level(g.item)
-      const note = html`${main}${state(g)}${g.detail.warning ? html` <mark>${g.detail.warning}</mark>` : ''}`
+      const note = html`${main}${state(g)}${g.detail.warning ? html` <mark title="${g.detail.hint ?? ''}">${g.detail.warning}</mark>` : ''}`
       const n = g.uses
         ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>`
         : ''
@@ -544,6 +543,12 @@ const groupErrors: Record<string, string> = {
   line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
   id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
   description: 'Group not saved: keep the description to one line of at most 200 characters.',
+}
+const secretErrors: Record<string, string> = {
+  secretName: 'Secret not saved: the name may use letters, digits, _ and -.',
+  secretHosts: 'Secret not saved: give at least one host and a variable name, or choose Released.',
+  secretValue: 'Secret not saved: the value must be one line.',
+  secretFlip: 'Secret not saved: type the value again to release a secret that is inserted today.',
 }
 const td = (label: string, body: Html | string) => html`<td data-label="${label}">${body}</td>`
 const act = (...buttons: (Html | string)[]) => html`<td class="act"><div class="actions">${buttons}</div></td>`
@@ -647,10 +652,10 @@ export function setup({
         .filter((k) => parentOf(k) === id)
         .map((k) => serviceRow(k, id)),
     ])
-  const secretForm = (name = '', o?: { hosts: string[]; env: string }) =>
-    html`<form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)', 'text', name)}${input('env', 'Environment variable the agent sees', 'text', o?.env)}${area('hosts', 'Allowed hosts, one per line', o?.hosts.join('\n'))}${consequence('Adding a host ends the grants already given for this secret.')}${input('value', o ? 'Replace value; blank keeps current' : 'Value (never shown again)', 'password')}<button>Save secret</button></form>`
+  const secretForm = (name = '', o?: Owned[string]) =>
+    html`<form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)', 'text', name)}${input('env', 'Environment variable the agent sees', 'text', o?.env)}${area('hosts', 'Allowed hosts, one per line', o?.hosts?.join('\n'))}${consequence('Adding a host ends the grants already given for this secret.')}<label><input type="checkbox" name="release" ${raw(o?.release ? 'checked' : '')}> Released: the agent receives the value, no hosts</label>${input('value', o ? 'Replace value; blank keeps current' : 'Value (never shown again)', 'password')}<button>Save secret</button></form>`
   const secretRows = Object.entries(owned).flatMap(([name, o]) => [
-    html`<tr>${td('Name', html`${ico('secret')}<strong>${name}</strong>`)}${td('Allowed destinations', preview(o.hosts))}${td('Agent variable', html`<code>${o.env}</code>`)}${act(button('/admin/secrets/delete', hidden('name', name), `Delete ${name}`, `Delete secret ${name}? Its value is erased.`, 'del'))}</tr>`,
+    html`<tr>${td('Name', html`${ico('secret')}<strong>${name}</strong>`)}${td('Allowed destinations', o.release ? html`<mark title="Approving lets the agent read the value itself">released</mark>` : preview(o.hosts ?? []))}${td('Agent variable', o.release ? '' : html`<code>${o.env}</code>`)}${act(button('/admin/secrets/delete', hidden('name', name), `Delete ${name}`, `Delete secret ${name}? Its value is erased.`, 'del'))}</tr>`,
     more(4, 'Edit', secretForm(name, o)),
   ])
   const targets = Object.entries(ssh.targets)
@@ -737,7 +742,7 @@ export function setup({
     more(4, 'Edit', groupForm(id, group)),
   ])
   const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
 }
 const s = (value: unknown) => String(value ?? '')
 const arr = (v: unknown) => (Array.isArray(v) ? v.map(s) : [])

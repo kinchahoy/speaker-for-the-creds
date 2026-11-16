@@ -13,7 +13,16 @@ export type SubjectType = 'agent' | 'host'
 // owner's rule), unavailable (denied and logged: it cannot be delivered).
 export type Admission = { to: 'ask' } | { to: 'open' } | { to: 'never' } | { to: 'unavailable'; why: string }
 // `reach` is kept with the grant: a grant ends when its reach widens.
-export type Description = { text: string; reach: string[]; warning?: string; risk?: 'read/write' | 'secret' | 'SSH' }
+export type Description = {
+  text: string
+  reach: string[]
+  warning?: string
+  // The warning's longer explanation, shown as its tooltip.
+  hint?: string
+  // Not pre-ticked on the card.
+  wider?: boolean
+  risk?: 'read/write' | 'secret' | 'SSH'
+}
 export type Refusal = { message: string; next: string }
 
 export type Kind = {

@@ -103,6 +103,11 @@ test("speaker exception permits agent routes only at the configured origin", () 
   assert.ok(allowed("/_speaker/requests", "POST"));
   assert.ok(allowed("/_speaker/requests/abc123"));
   assert.equal(allowed("/_speaker/requests/abc123", "POST"), false);
+  // A released secret is read with exactly GET /_speaker/secrets/<name>.
+  assert.ok(allowed("/_speaker/secrets/wifi-otnow"));
+  assert.equal(allowed("/_speaker/secrets/wifi-otnow", "POST"), false);
+  assert.equal(allowed("/_speaker/secrets/wifi/otnow"), false);
+  assert.equal(allowed("/_speaker/secrets"), false);
   assert.ok(allowed("/obsidian/vault/note", "PUT"));
   assert.ok(allowed("/obsidian:tasks/Tasks.md", "PUT"));
   assert.ok(allowed("/_speaker/help/obsidian:tasks"));

@@ -433,7 +433,8 @@ export class Agents {
       case "folder":
         return true;
       case "secret":
-        return secretHosts.safeParse(grant.hosts).success;
+        // A released secret (no hosts) needs nothing from bottle: the agent reads it from speaker.
+        return grant.hosts?.length === 0 || secretHosts.safeParse(grant.hosts).success;
       case "site":
         return siteRef.safeParse(ref).success;
       case "mcp":
@@ -488,11 +489,13 @@ export class Agents {
 
   /** Moves the live agent view to its grants. Hosts and shares are replaced as a whole, so no grant outlives its snapshot. */
   #apply(agent: Agent) {
-    agent.live.secretHosts = this.#granted(agent, "secret").map(({ item, hosts, expiresAt }) => ({
-      name: refOf(item),
-      hosts: secretHosts.parse(hosts),
-      expiresAt,
-    }));
+    agent.live.secretHosts = this.#granted(agent, "secret")
+      .filter(({ hosts }) => hosts?.length)
+      .map(({ item, hosts, expiresAt }) => ({
+        name: refOf(item),
+        hosts: secretHosts.parse(hosts),
+        expiresAt,
+      }));
     // A secret grant also opens egress to the hosts it names.
     agent.live.hosts = [
       ...this.#granted(agent, "site").map(({ item, expiresAt }) => ({ host: refOf(item), expiresAt })),

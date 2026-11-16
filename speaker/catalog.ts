@@ -17,8 +17,15 @@ const secretsView = (core: Core, c: Context, agent: Agent) => {
       : {}
   const granted = new Map(secretGrants(agent.id).map((secret) => [secret.name, secret]))
   return Object.fromEntries(
-    Object.entries(ownerSecrets()).map(([name, { hosts, env }]) => {
+    Object.entries(ownerSecrets()).map(([name, { hosts, env, release }]) => {
       const grant = granted.get(name)
+      if (release)
+        return [
+          name,
+          grant
+            ? { release, state: 'granted', until: grant.until, read: `GET ${base}/_speaker/secrets/${name}` }
+            : { release, state: 'ask' },
+        ]
       if (!grant) return [name, { hosts, env, state: 'ask' }]
       const { placeholder, until } = grant
       return [
@@ -64,7 +71,7 @@ const heldText = ({ state, until }: Held) =>
 // routes and assumes nothing else was read.
 function catalogText(input: {
   services: { id: string; mcp: boolean; read: Held; full: Held }[]
-  secrets: Record<string, { hosts: string[]; env: string } & Held>
+  secrets: Record<string, { hosts?: string[]; env?: string; release?: boolean; read?: string } & Held>
   groups: Record<string, { description?: string; items: string[]; also?: string }>
   sandboxed: boolean
   extensions: Record<string, { label: string; description: string; tools: string[]; sites: string[] } & Held>
@@ -82,10 +89,11 @@ function catalogText(input: {
       ),
     ),
     ...section(
-      'Secrets (you use them without seeing them)',
-      Object.entries(input.secrets).map(
-        ([name, { hosts, env, ...held }]) =>
-          `- secret:${name} — for ${hosts.join(', ')} (set ${env}). ${heldText(held)}`,
+      'Secrets (you use them without seeing them, except a released one)',
+      Object.entries(input.secrets).map(([name, { hosts, env, release, read, ...held }]) =>
+        release
+          ? `- secret:${name} — released: once granted you read the value yourself${read ? ` with ${read}` : ''}. ${heldText(held)}`
+          : `- secret:${name} — for ${hosts?.join(', ')} (set ${env}). ${heldText(held)}`,
       ),
     ),
     ...section('Websites', input.sandboxed ? ['- site:<any hostname> — any website; ask for the exact hostname.'] : []),

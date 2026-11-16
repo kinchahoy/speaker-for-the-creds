@@ -176,22 +176,24 @@ const envNameSchema = z
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _')
 export const ownerSecretSchema = z.object({
   // `secret:<NAME>` is how agents ask for it.
-  name: z.string().regex(/^[A-Za-z0-9_]+$/, 'A secret name uses letters, numbers and _'),
+  name: z.string().regex(/^[A-Za-z0-9_-]+$/, 'A secret name uses letters, numbers, _ and -'),
   value: z.string().refine((value) => !/[\r\n]/.test(value), 'A secret value must be a single line'),
-  hosts: z
-    .string()
-    .transform((value) => value.split(/[\s,]+/).filter(Boolean))
-    .pipe(secretHostsSchema),
+  // Released: the agent reads the value itself (no hosts, no variable). Otherwise speaker inserts it for the hosts.
+  release: z.literal('on').optional(),
+  hosts: z.string().default('').transform((value) => value.split(/[\s,]+/).filter(Boolean)),
   // The environment variable the agent sees (holding a placeholder, never the value).
-  env: envNameSchema,
+  env: z.string().default(''),
 })
+// What config.json keeps of a secret: what it may reach (inserted) or `release: true` (the agent reads it).
+export const secretSetupSchema = z.union([
+  z.object({ release: z.literal(true) }),
+  z.object({ hosts: secretHostsSchema, env: envNameSchema }),
+])
 // config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
 export const configSchema = z.object({
   services: z.record(serviceIdSchema, serviceSchema),
   groups: groupsSchema.default({}),
-  secrets: z
-    .record(ownerSecretSchema.shape.name, z.object({ hosts: secretHostsSchema, env: envNameSchema }))
-    .default({}),
+  secrets: z.record(ownerSecretSchema.shape.name, secretSetupSchema).default({}),
 })
 // A secret as stores before config.json held it.
 const legacySecretSchema = z.object({ value: z.string(), hosts: z.array(z.string()), env: z.string() })
@@ -378,7 +380,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     const values = vault.store.vault.secrets
     return Object.fromEntries(
       Object.entries(ownerConfig.secrets).flatMap(([name, setup]) =>
-        Object.hasOwn(values, name) ? [[name, { ...setup, value: values[name] }]] : [],
+        Object.hasOwn(values, name)
+          ? [[name, { hosts: [], env: '', release: false, ...setup, value: values[name] }]]
+          : [],
       ),
     )
   }
@@ -685,11 +689,16 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         if (credentialOf(id) === undefined) return unavailable(`${id} has no key`)
         return { to: write ? services[id].write : services[id].read }
       },
-      describe(item) {
+      describe(item, agentId) {
         const { id, write } = serviceItem(item) as { id: string; write: boolean }
         const service = Object.hasOwn(services, id) ? services[id] : undefined
         if (!service) return { text: 'no longer set up', reach: [] }
+        // Asking for the service while holding one of its scopes (or .full while holding .read) widens what the agent has.
+        const narrower = engine
+          .grants(agentId)
+          .find((g) => g.item.startsWith(`${id}:`) || (write && g.item === `${id}.read`))?.item
         return {
+          ...(narrower ? { warning: `wider than held: ${narrower}`, wider: true } : {}),
           text: `${write ? 'read and change' : 'read'} ${service.baseUrl}${service.mcp ? ' · MCP server' : ''}`,
           // What `.read` lets through grows with the read paths and the MCP read-only tools.
           reach: [
@@ -714,7 +723,16 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           : unavailable(`there is no secret ${item.slice('secret:'.length)}`),
       // Granting a secret opens the hosts its value goes to.
       describe(item) {
-        const hosts = secretHosts(item.slice('secret:'.length))
+        const name = item.slice('secret:'.length)
+        const hosts = secretHosts(name)
+        if (ownerSecrets()[name]?.release)
+          return {
+            text: 'the agent reads the value with GET /_speaker/secrets',
+            reach: ['released'],
+            warning: 'agent receives the value',
+            hint: 'Revoking stops further reads but cannot take back a value already read.',
+            risk: 'secret',
+          }
         return hosts.length
           ? { text: `sent to ${hosts.join(', ')}`, reach: hosts, warning: broad(hosts), risk: 'secret' }
           : { text: 'not set up: it will do nothing', reach: [], risk: 'secret' }
@@ -891,7 +909,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
     return placeholders.get(key) as string
   }
-  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; until: string | null })[] =>
+  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; release: boolean; until: string | null })[] =>
     engine
       .grants(agentId)
       .filter((grant) => grant.kind === 'secret')

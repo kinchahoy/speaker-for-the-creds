@@ -87,6 +87,8 @@ Ask for `secret:<NAME>`, with a name from the catalog. After approval, the catal
 
 In `HTTPS_PROXY`, replace `<token>` with the part after `Bearer ` in your header file. Speaker refuses other hosts, and swaps the placeholder for the real token only on the allowed ones.
 
+A secret the catalog marks `release` has no placeholder: once granted, read the value with the `read` route (`GET /_speaker/secrets/<NAME>`, your normal header) and use it where the task needs it. Do not store or repeat it.
+
 ## Remote MCP servers
 
 A service in the catalog with `mcp: true` is a remote MCP server. Ask for `<service>.read`, then point your MCP client at `$SPEAKER_URL/<service>` with the `Authorization` header from your header file.

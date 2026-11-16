@@ -529,6 +529,22 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const text = `${lines.join('\n')}\n`
         return c.text(agent.host ? text : withAddress(c, text), 200, { 'content-type': 'text/markdown; charset=utf-8' })
       })
+      // A released secret: the owner approved `secret:NAME`, so the agent reads the value itself. Any other name is the same
+      // 404 as an unknown route, so an agent learns nothing beyond the catalog.
+      .get('/_speaker/secrets/:name', (c) => {
+        const agent = agentCaller(c),
+          name = c.req.param('name'),
+          owned = Object.hasOwn(core.ownerSecrets(), name) ? core.ownerSecrets()[name] : undefined
+        if (!owned?.release)
+          return agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Secrets" in GET /_speaker/help' })
+        const grant = core.engine.held(agent.id, [`secret:${name}`])
+        if (!grant)
+          return agentError(c, 403, 'denied', `Not granted: ask for secret:${name} first`, { next: catalogHint })
+        core.useOf(grant)
+        core.useOf(agent)
+        core.audit('secret_released', { agent: agent.id, secret: name })
+        return c.text(owned.value, 200, { 'cache-control': 'no-store' })
+      })
       .all('/_speaker/*', (c) =>
         agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
       )

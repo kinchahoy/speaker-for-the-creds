@@ -1183,3 +1183,27 @@ test('a scope `parent:name` uses its parent key, down to one address, with its o
   await save('whole', `${f.upstreamOrigin}/elsewhere`)
   assert.equal((await f.call('/whole:part', { headers: bearer('tok') })).status, 503)
 })
+
+test('a card row that widens what the agent holds is marked and left unticked; a first request is not', async (t) => {
+  const f = await setup(t)
+  const save = (id: string, baseUrl: string, more: Record<string, string> = {}) =>
+    f.ownerForm('/services/save', { id, baseUrl, authType: 'bearer', read: 'ask', write: 'ask', ...more })
+  await save('a', `${f.upstreamOrigin}/base`, { secret: 'a-key' })
+  await save('a:b', `${f.upstreamOrigin}/base/sub`)
+  await enroll(f, 'tok')
+  const row = (html: string, item: string) => html.split('<label').find((part) => part.includes(`name="items" value="${item}"`)) ?? ''
+  // A first request for the parent is a normal row: ticked, no mark.
+  const first = await firstRequest(f, 'tok', '/a/x')
+  const plain = (await f.pending()).find((c) => c.id === first)?.html ?? ''
+  assert.match(row(plain, 'a.read'), /checked/)
+  assert.doesNotMatch(row(plain, 'a.read'), /wider than held/)
+  await f.decide(first, 'deny')
+  // Holding a scope, a write call on the parent asks for a wider item.
+  await askFor(f, 'tok', { want: ['a:b.full'], reason: 'x', duration: '1h' })
+  await f.decide((await f.pending())[0].id, 'approve')
+  const wide = await f.call('/a/x', { method: 'POST', headers: bearer('tok'), body: '{}' })
+  const id = ((await wide.json()) as { request: string }).request
+  const card = row((await f.pending()).find((c) => c.id === id)?.html ?? '', 'a.full')
+  assert.match(card, /<mark[^>]*>wider than held: a:b\.full<\/mark>/)
+  assert.doesNotMatch(card, /checked/)
+})
