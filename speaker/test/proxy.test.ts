@@ -460,6 +460,33 @@ test('the admin saves and deletes groups without a restart, and refuses malforme
   assert.deepEqual(await listed(), {})
 })
 
+test('an htmx decision answers the refreshed panel without that card, a repeat answers 409, a plain post redirects', async (t) => {
+  const f = await setup(t)
+  await enroll(f, 'a')
+  await enroll(f, 'b')
+  const [first, second] = [await firstRequest(f, 'a'), await firstRequest(f, 'b')]
+  const post = (id: string, htmx: boolean) =>
+    f.call(`/admin/requests/${id}/approve`, {
+      method: 'POST',
+      headers: {
+        cookie: f.ownerHeaders.cookie,
+        origin: f.ownerHeaders.origin,
+        ...(htmx ? { 'hx-request': 'true' } : {}),
+      },
+      body: new URLSearchParams({ duration: '1h', items: 'notes.read', shown: 'notes.read' }),
+    })
+  const answered = await post(first, true)
+  assert.equal(answered.status, 200)
+  const panel = await answered.text()
+  assert.ok(panel.startsWith('<section id="agents"'))
+  assert.ok(!panel.includes(`id="request-${first}"`) && panel.includes(`id="request-${second}"`))
+  const again = await post(first, true)
+  assert.equal(again.status, 409)
+  assert.match(await again.text(), /already decided/)
+  const plain = await post(second, false)
+  assert.equal([plain.status, plain.headers.get('location')].join(' '), '303 /admin')
+})
+
 test('the proxy returns redirects without following them', async (t) => {
   const f = await setup(t)
   await enroll(f, 'st')
