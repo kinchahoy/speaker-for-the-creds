@@ -41,7 +41,8 @@
         {
           "id": "deepseek/deepseek-v4.1-flash-1017",
           "label": "DeepSeek V4.1 Flash",
-          "alias": "deepseek"
+          "alias": "deepseek",
+          "openRouterRouting": { "only": ["deepinfra/fp8"], "allow_fallbacks": false }
         }
       ]
     },

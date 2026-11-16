@@ -66,6 +66,7 @@ export const startControl = (config: Config, agents: Agents) => {
       launchGrants: agent.launchExt.map((id) => `ext:${id}`),
       done: agents.done(agent),
       summary: agent.lastMessage,
+      title: agent.title,
     }));
 
   const routes = app
@@ -107,15 +108,19 @@ export const startGuestListener = (config: Config, agents: Agents) => {
     "/guest/status",
     validator("json", (body) =>
       z
-        .object({ busy: z.boolean(), summary: z.string().max(400).optional() })
+        .object({ busy: z.boolean(), summary: z.string().max(400).optional(), title: z.string().trim().min(1).max(60).optional() })
         .strict()
         .parse(body),
     ),
     (context) => {
       const agent = context.get("agent");
-      const { busy, summary } = context.req.valid("json");
+      const { busy, summary, title } = context.req.valid("json");
       agents.report(agent, busy);
       if (summary) agent.lastMessage = summary;
+      if (title && title !== agent.title) {
+        agent.title = title;
+        agents.reportTitles();
+      }
       return context.json({ state: agent.state });
     },
   );

@@ -373,7 +373,7 @@ test('a folder needs an sshKey, is delivered over SSH, and the sandbox host hear
 })
 
 const grantCount = async (f: Fixture) =>
-  ((await f.ownerGet('/admin/panel/active')).match(/<li id="grant-/g) ?? []).length
+  ((await f.ownerGet('/admin/panel/active')).match(/<tr id="grant-/g) ?? []).length
 
 test('a share whose path changes loses its folder grants', async (t) => {
   const f = await fixture(t)

@@ -1,7 +1,10 @@
+import { execFile } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { BlockList, isIPv4 } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { promisify } from "node:util";
 import { z } from "zod";
 
 const port = z.number().int().min(1).max(65_535);
@@ -15,6 +18,9 @@ const model = z.object({
     .string()
     .regex(/^[a-z0-9-]+$/, "a model alias uses lowercase letters, digits, and dashes")
     .optional(),
+  // OpenRouter only: its `provider` routing preferences, sent with every call (for example { "only": ["deepinfra/fp8"] }
+  // pins the model to one upstream endpoint).
+  openRouterRouting: z.record(z.string(), z.unknown()).optional(),
 });
 
 const HostedProviderSchema = z.object({
@@ -45,6 +51,9 @@ const ConfigFile = z
       guestHost: z.hostname().refine((value) => value === value.toLowerCase(), "a guest model host must be lowercase"),
       upstream: z.string().min(1).optional(),
       models: z.array(model).default([]),
+      // For a model server that sleeps when idle: a shell command that wakes it (for example a curl to a Home Assistant
+      // webhook), and how long to wait for it to answer afterwards.
+      wake: z.object({ command: z.string().min(1), waitSeconds: z.number().positive().default(180) }).optional(),
     }),
     hostedProviders: z.array(HostedProviderSchema),
     // A detached agent (run -d, or Ctrl-\ during run) gets a tab in the Herdr app's "bottle" space when `hc` is on PATH; false turns that off.
@@ -110,6 +119,23 @@ export const localModelUp = (upstream: string) =>
     (response) => response.ok,
     () => false,
   );
+
+let waking: Promise<boolean> | undefined;
+/**
+ * Whether the local model server answers, after waking it with `localModel.wake` when it does not. Calls that arrive
+ * during a wake share it, so the command runs once.
+ */
+export const localModelReady = ({ localModel: { upstream, wake } }: Config, poll = 3_000): Promise<boolean> =>
+  (waking ??= (async () => {
+    if (await localModelUp(upstream!)) return true;
+    if (!wake) return false;
+    console.log(`local model server ${upstream} is not answering; waking it`);
+    await promisify(execFile)("sh", ["-c", wake.command], { timeout: 30_000 }).catch((error: Error) =>
+      console.error(`localModel.wake failed: ${error.message}`),
+    );
+    for (const deadline = Date.now() + wake.waitSeconds * 1_000; Date.now() < deadline; await sleep(poll)) if (await localModelUp(upstream!)) return true;
+    return false;
+  })().finally(() => (waking = undefined)));
 
 export const validateConfig = (data: unknown): Config => {
   const config = ConfigFile.parse(data);

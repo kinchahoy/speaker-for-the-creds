@@ -17,9 +17,10 @@ import {
   ownerSecretSchema,
   serviceSchema,
   urlSchema,
+  type View,
 } from './core.ts'
 import { WrongPassword } from './store.ts'
-import { active, icons, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
+import { agents, icons, layout, log, setPasswordPage, setup, signInPage } from './ui.ts'
 
 const textLines = (text = '') =>
   text
@@ -77,6 +78,7 @@ export function adminApp(core: Core) {
   }
   const sprite = `<svg xmlns="http://www.w3.org/2000/svg"><defs>${Object.entries(icons).map(symbol).join('')}</defs></svg>`
   admin.get('/assets/htmx.js', cached('text/javascript', asset('htmx.org/dist/htmx.min.js')))
+  admin.get('/assets/idiomorph.js', cached('text/javascript', asset('idiomorph/dist/idiomorph-ext.min.js')))
   admin.get('/assets/open-props.css', cached('text/css', props))
   admin.get('/assets/icons.svg', cached('image/svg+xml', sprite))
   const sessionLife = 12 * 3600_000
@@ -164,6 +166,7 @@ export function adminApp(core: Core) {
     c.json({
       grants: core.engine.grants().map((g) => ({
         id: g.id,
+        subject: g.subject,
         who: core.engine.whoOf(g),
         item: g.item,
         expiresAt: g.expiresAt,
@@ -218,21 +221,19 @@ export function adminApp(core: Core) {
         c.get('secureHeadersNonce'),
         'log',
         log(matches.slice(0, 500), matches.length, query, {
-          agent: now.agents.map((a) => [a.id, a.label]),
+          agent: now.agents.map((a) => [a.id, a.title ?? a.label]),
           grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
           service: ids(core.services),
           target: ids(ssh.targets),
           share: ids(ssh.shares),
         }),
+        core.engine.cards().length,
       ),
     )
   })
-  const panels = {
-    inbox: () => inbox(core.view(), core.groups),
-    active: () => active(core.view()),
-  }
+  const panel = (view: View) => agents(view, core.groups, new Set(core.connections.keys()))
   admin.get('/', (c) => {
-    const section = c.req.query('section') ?? (c.req.query('service') ? 'services' : 'approvals')
+    const section = c.req.query('section') ?? (c.req.query('service') ? 'services' : 'agents')
     const nonce = c.get('secureHeadersNonce')
     if (section === 'services' || section === 'groups') {
       const mcp = Object.fromEntries(
@@ -254,17 +255,13 @@ export function adminApp(core: Core) {
         selected: c.req.query('service'),
         error: c.req.query('error'),
       }
-      return c.html(layout(nonce, 'services', setup(data)))
+      return c.html(layout(nonce, 'services', setup(data), core.engine.cards().length))
     }
-    if (['active', 'grants', 'agents'].includes(section))
-      return c.html(layout(nonce, 'active', live('active', panels.active())))
-    return c.html(layout(nonce, 'approvals', live('inbox', panels.inbox())))
+    const view = core.view()
+    return c.html(layout(nonce, 'agents', panel(view), view.cards.length))
   })
-  admin.get('/panel/:name{inbox|active}', (c) => {
-    const name = z.enum(['inbox', 'active']).parse(c.req.param('name'))
-    const inner = panels[name]()
-    return unchanged(inner, c.req.query('h')) ? c.body(null, 204) : c.html(live(name, inner))
-  })
+  // The older inbox and active panels poll the same one.
+  admin.get('/panel/:name{inbox|active|agents}', (c) => c.html(panel(core.view())))
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
   const redirect = (c: Context) => c.redirect('/admin', 303)
   admin.post('/services/save', async (c) => {

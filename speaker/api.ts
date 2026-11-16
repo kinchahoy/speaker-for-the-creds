@@ -30,6 +30,14 @@ import { catalogView } from './catalog.ts'
 import type { Approval, Request } from './engine.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
 
+// Untrusted display text from a sandbox host: 1 to 60 characters, no control characters.
+const titleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(60)
+  .refine((title) => !/\p{Cc}/u.test(title), 'Control characters are not allowed')
+
 export type SpeakerApi = ReturnType<typeof agentApi>
 
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
@@ -375,6 +383,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               const message = z
                 .discriminatedUnion('type', [
                   z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
+                  z.object({ type: z.literal('titles'), titles: z.record(z.string(), titleSchema) }),
                   z.object({
                     type: z.literal('catalog'),
                     mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
@@ -400,7 +409,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
                   mcps: message.mcps.length,
                   extensions: message.extensions.length,
                 })
-              } else connection.applied = new Set(message.grantIds)
+              } else if (message.type === 'titles') core.setTitles(id, message.titles)
+              else connection.applied = new Set(message.grantIds)
             },
             onClose: (_event, ws) => {
               if (core.connections.get(id)?.ws === ws) core.connections.delete(id)
@@ -431,7 +441,11 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           counts: noCounts(),
         }
         core.agents.set(agent.id, agent)
-        core.audit('agent_created', { agent: agent.id, host: host.id, ...(agent.launched?.length ? { launched: agent.launched } : {}) })
+        core.audit('agent_created', {
+          agent: agent.id,
+          host: host.id,
+          ...(agent.launched?.length ? { launched: agent.launched } : {}),
+        })
         return c.json({ id: agent.id, token }, 201)
       })
       .delete('/_speaker/hosts/agents/:id', (c) => {

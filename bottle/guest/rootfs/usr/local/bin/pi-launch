@@ -2,7 +2,7 @@
 # Starts Pi from the trusted configuration the host mounted read-only at /etc/bottle.
 set -eu
 mkdir -p "$HOME/.pi/agent" /work/.pi-session
-cp /etc/bottle/models.json /etc/bottle/settings.json /etc/bottle/APPEND_SYSTEM.md /etc/bottle/mcp.json "$HOME/.pi/agent/"
+cp /etc/bottle/models.json /etc/bottle/settings.json /etc/bottle/APPEND_SYSTEM.md /etc/bottle/mcp.json /etc/bottle/proper-base.json "$HOME/.pi/agent/"
 # Config files of the loaded extensions (catalog `files`), already named for ~/.pi/agent
 cp -r /etc/bottle/agent-files/. "$HOME/.pi/agent/"
 cd /work

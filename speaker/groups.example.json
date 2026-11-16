@@ -32,5 +32,9 @@
   "notes-read": {
     "description": "Read the owner's Obsidian notes and Karakeep bookmarks through speaker's proxy.",
     "items": ["obsidian.read", "karakeep.read"]
+  },
+  "life": {
+    "description": "The owner's planning: edit Home Assistant to-do lists (synced to Apple Reminders), read the Obsidian notes, and write in their Tasks and Planning folders.",
+    "items": ["ha-todo.full", "obsidian.read", "obsidian-tasks.full", "obsidian-planning.full"]
   }
 }

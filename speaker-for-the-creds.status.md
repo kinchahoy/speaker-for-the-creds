@@ -2,7 +2,7 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-15T22:30
+updated: 2026-11-16T01:00
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +10,19 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## 2026-11-16 01:00 · paused
+
+**Next**
+- Read `personal/HANDOFF-2026-11-16.md` first (git-ignored; it holds the full state, the open list and how to work with the owner's machines).
+- Owner: give the go-ahead to review, commit and deploy the working tree. Nothing from this round is committed; deployed speaker and bottle run `06525ba`.
+- Design with the owner before shipping wake-on-demand: bottle events delivered to URLs, with an optional sidecar running small scripts per event, in place of `localModel.wake.command`.
+
+**Open**
+- Uncommitted: the `/admin` rework (one Agents page, Setup and Activity tables, idiomorph polling), the Herdr mod rework, the bottle CLI output, agent titles (proper-base in the guest, `titles` host message), pi-subagents always on with limits, the `cron` template, the `life` group and its example services, per-model OpenRouter routing, `localModel.wake`, `bottle ls --json`, and a Dockerfile and compose file for bottle.
+- Never done: a full review of the combined diff. Tests pass (82 speaker; 55 bottle, 6 skipped); two speaker sign-in tests are timing-sensitive. `mise run check` fails only on the formatting HEAD already has in `speaker/init.ts` and `speaker/test/proxy.test.ts`.
+- Unverified in a real bottle: everything that needs the guest image rebuilt (titles, pi-subagents, Pi status reports), the Herdr dialog beyond its signed-out state, and the web pages under real clicks.
+- The Herdr mod is about 23% larger than before this round; the owner's budget was 20%.
 
 ## 2026-11-15 22:30 · paused
 

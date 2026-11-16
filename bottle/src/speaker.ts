@@ -200,6 +200,7 @@ export const watchGrants = (
   let backoff = limits.retryMs;
   let retryTimer: NodeJS.Timeout | undefined;
   let applied = "[]";
+  let titles = "{}";
   const fail = (message: string) => {
     if (link.state === "stopped") return;
     link = { state: "stopped" };
@@ -234,6 +235,7 @@ export const watchGrants = (
       backoff = limits.retryMs;
       send({ type: "catalog", ...catalogReport(catalog) });
       send({ type: "applied", grantIds: JSON.parse(applied) });
+      send({ type: "titles", titles: JSON.parse(titles) });
     };
     socket.onmessage = (event) => {
       if (link.state === "stopped") return;
@@ -269,11 +271,17 @@ export const watchGrants = (
     catalog = next;
     send({ type: "catalog", ...catalogReport(catalog) });
   };
+  /** Reports each agent's title (by speaker agent id), on connect and whenever one changes. */
+  const setTitles = (next: Record<string, string>) => {
+    if (JSON.stringify(next) === titles) return;
+    titles = JSON.stringify(next);
+    send({ type: "titles", titles: next });
+  };
   const stop = () => {
     link = { state: "stopped" };
     clearInterval(dropTimer);
     clearTimeout(retryTimer);
     socket?.close();
   };
-  return Object.assign(report, { stop, catalog: setCatalog });
+  return Object.assign(report, { stop, catalog: setCatalog, titles: setTitles });
 };

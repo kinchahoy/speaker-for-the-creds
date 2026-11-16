@@ -74,7 +74,7 @@ RUN --mount=type=cache,target=/root/.cache/mise \
 # ALWAYS_ON ones into /opt/pi-extensions (pi-launch loads them in every agent), the rest into /opt/pi-plugins, the paths
 # catalog.json names. /opt/pi-plugins.manifest lists what is linked there; `bottle build` copies it to the host, and
 # bottle checks every catalog guestPath against it.
-ARG ALWAYS_ON="pi-loop-police pi-token-speed"
+ARG ALWAYS_ON="pi-loop-police pi-token-speed proper-base pi-subagents"
 COPY pi-package.json /opt/pi/package.json
 RUN --mount=type=cache,target=/root/.local/share/pnpm \
     --mount=type=cache,target=/root/.cache/pnpm \
@@ -87,8 +87,6 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm \
       case " $ALWAYS_ON " in *" $p "*) to=/opt/pi-extensions ;; *) to=/opt/pi-plugins ;; esac; \
       ln -s "$dir" "$to/${p##*/}"; \
     done \
- && ln -s /opt/pi/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent /opt/pi-plugins/subagent \
- && test -f /opt/pi-plugins/subagent/index.ts \
  && { ls -d /opt/pi-plugins/*; find -L /opt/pi-plugins -maxdepth 2 -name index.ts; } | sort -u > /opt/pi-plugins.manifest
 
 COPY rootfs/ /

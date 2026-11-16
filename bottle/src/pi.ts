@@ -22,7 +22,7 @@ const McpEntry = z
   })
   .strict();
 
-const RESERVED_FILES = new Set(["models.json", "settings.json", "mcp.json", "APPEND_SYSTEM.md"]);
+const RESERVED_FILES = new Set(["models.json", "settings.json", "mcp.json", "APPEND_SYSTEM.md", "proper-base.json"]);
 
 export const Catalog = z
   .object({
@@ -101,7 +101,8 @@ export const CLI_TOOLS = `
 `
   .trim()
   .split(/\s+/);
-const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability";
+// The last four are pi-subagents', always on in the image.
+const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability,subagents_enable,subagent,bg_wait,subagent_supervisor";
 
 /** Hosted providers listed in models.json work once the agent holds their speaker service (`<service>.full`). */
 export const availableModels = (config: Config) => [
@@ -119,7 +120,12 @@ export const availableModels = (config: Config) => [
   ),
 ];
 
-const modelIds = (models: { id: string; contextWindow?: number }[]) => models.map(({ id, contextWindow }) => ({ id, ...(contextWindow && { contextWindow }) }));
+const modelIds = (models: Config["localModel"]["models"]) =>
+  models.map(({ id, contextWindow, openRouterRouting }) => ({
+    id,
+    ...(contextWindow && { contextWindow }),
+    ...(openRouterRouting && { compat: { openRouterRouting } }),
+  }));
 
 const modelsJson = (config: Config) => ({
   providers: {
@@ -188,6 +194,7 @@ export const systemNote = (
     "- Browser automation: Playwright with headless Chromium is installed.",
     "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (for example GitHub releases) only when no registry package exists.",
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`. Its description lists what you can ask for.",
+    "- Subagents (`subagent`) run in this VM with your access and spend your model request budget. Limits: at most 2 children per call, children cannot delegate further, and every child uses your model. Delegate only independent work large enough to be worth a fresh context, and write the final answer yourself.",
     "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it, or make the call itself with the header `Speaker-Wait: 60`, which answers as soon as the owner decides.",
     "",
     "## Grants at this Pi start",
@@ -255,7 +262,15 @@ export const writeGuestConfig = (
   const writeJson = (name: string, value: unknown) => writeFileSync(`${directory}/${name}`, JSON.stringify(value, null, 2));
   writeJson("models.json", modelsJson(config));
   // enabledModels: Pi's startup choice and Ctrl+P cycling offer only the models this bottle configures.
-  writeJson("settings.json", { packages: [], defaultProjectTrust: "never", enabledModels: availableModels(config).map(({ id }) => id) });
+  // subagents.modelScope: pi-subagents refuses any child model but the agent's own.
+  writeJson("settings.json", {
+    packages: [],
+    defaultProjectTrust: "never",
+    enabledModels: availableModels(config).map(({ id }) => id),
+    subagents: { modelScope: { enforce: true, strict: true, allow: ["inherit"] } },
+  });
+  // proper-base is always on for session titles; its proactive subagent delegation is not wanted in a bottle.
+  writeJson("proper-base.json", { proactiveDelegation: false });
   writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(agent, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 

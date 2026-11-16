@@ -129,7 +129,10 @@ export const identitySchema = z.object({
 // A sandbox host's agent also names the extensions its template gave at launch. The host enforces them without speaker
 // (the owner started the template), so speaker only records and shows them; they are not grants and cannot be revoked here.
 export const hostAgentSchema = identitySchema.extend({
-  launched: z.array(itemSchema.refine((item) => kindOf(item) === 'ext', 'Only extensions are given at launch')).max(50).default([]),
+  launched: z
+    .array(itemSchema.refine((item) => kindOf(item) === 'ext', 'Only extensions are given at launch'))
+    .max(50)
+    .default([]),
 })
 export const requestSchema = z.object({
   want: z.array(itemSchema).min(1).max(50),
@@ -210,6 +213,8 @@ export type Agent = Usage & {
   revokedAt?: number
   tokenHash: string
   label: string
+  // A short task title its sandbox host reported (untrusted display text, never a key); kept in memory only.
+  title?: string
   agent: string
   // Address the agent enrolled from (a sandboxed agent: its sandbox host's); its token is refused elsewhere.
   source: string
@@ -331,7 +336,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const stored = await json(configFile)
   const ownerConfig = configSchema.parse(
-    stored ?? { services: (await json(file('services.json'))) ?? (await starter()), groups: await json(file('groups.json')) },
+    stored ?? {
+      services: (await json(file('services.json'))) ?? (await starter()),
+      groups: await json(file('groups.json')),
+    },
   )
   const saveConfig = () => save(configFile, ownerConfig)
   if (!stored) {
@@ -932,10 +940,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const baseOf = (c: Context) => {
     const url = new URL(c.req.url)
-    const proto =
-      trusted(peerOf(c))
-        ? z.enum(['http', 'https']).safeParse(c.req.header('x-forwarded-proto')).data
-        : undefined
+    const proto = trusted(peerOf(c))
+      ? z.enum(['http', 'https']).safeParse(c.req.header('x-forwarded-proto')).data
+      : undefined
     return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`
   }
   const enforcementOf = (grant: Approval): Enforcement => {
@@ -969,6 +976,13 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       }),
     sessions: jump.sessions(),
   })
+  // A host titles only the agents it created; others in the report are ignored. Titles are display text only.
+  const setTitles = (hostId: string, titles: Record<string, string>) => {
+    for (const [id, title] of Object.entries(titles)) {
+      const agent = agentById(id)
+      if (agent?.host === hostId) agent.title = title
+    }
+  }
   function endAgent(id: string) {
     const agent = agentById(id)
     if (!agent) throw new HTTPException(404, { message: 'Agent not found' })
@@ -1056,6 +1070,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     baseOf,
     enforcementOf,
     view,
+    setTitles,
     endAgent,
   }
 }

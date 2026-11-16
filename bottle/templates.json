@@ -10,7 +10,7 @@
       "workGiB": 20,
       "maxRuntimeHours": 24
     },
-    "want": ["ext:subagent", "ext:pi-cc-monitor", "ext:pi-cc-loop"],
+    "want": ["ext:pi-cc-monitor", "ext:pi-cc-loop"],
     "duration": "1d",
     "folders": ["~/agent-space:rw"]
   },
@@ -27,7 +27,6 @@
       "maxModelRequests": 1500
     },
     "want": [
-      "ext:subagent",
       "ext:pi-cc-monitor",
       "ext:pi-cc-loop",
       "site:pypi.org",
@@ -60,7 +59,6 @@
       "maxRuntimeHours": 24
     },
     "want": [
-      "ext:subagent",
       "ext:pi-cc-monitor",
       "ext:pi-cc-loop",
       "site:pypi.org",
@@ -82,6 +80,22 @@
       "karakeep.read"
     ],
     "duration": "1d",
+    "folders": ["~/agent-space:rw"]
+  },
+  {
+    "id": "cron",
+    "label": "Cron: wakes itself on a schedule for up to a week, with web search",
+    "model": "deepseek",
+    "limits": {
+      "cpus": 2,
+      "memoryMiB": 2048,
+      "rootfsGiB": 8,
+      "workGiB": 20,
+      "maxRuntimeHours": 168,
+      "maxModelRequests": 3000
+    },
+    "want": ["ext:pi-cc-loop", "ext:pi-cc-monitor", "ext:pi-web-access", "site:mcp.exa.ai", "site:*.wikipedia.org", "site:arxiv.org", "site:export.arxiv.org"],
+    "duration": "30d",
     "folders": ["~/agent-space:rw"]
   }
 ]

@@ -259,6 +259,9 @@ importers:
       htmx.org:
         specifier: latest
         version: 2.0.11
+      idiomorph:
+        specifier: latest
+        version: 0.8.0
       lucide-static:
         specifier: latest
         version: 1.72.0
@@ -870,6 +873,9 @@ packages:
   htmx.org@2.0.11:
     resolution: {integrity: sha512-Thx/WtpeOQqSrqBCw/A1cwGJGg4UrVa3+sW0GmrM3p4gJgO89ecH4qtbnyzDDWFvBTqjnIMCgELTNt636dtamA==}
 
+  idiomorph@0.8.0:
+    resolution: {integrity: sha512-R47JBL+6jHDQvcnbppIUtXXcxi5h6+wuCEEZXnRhUltsgzPFKzThL5PuHppP9ypJuy+7WawcY1TsSBD/iQbMhw==}
+
   ip-address@10.7.6:
     resolution: {integrity: sha512-00LYkM6byILa9eQIx6qoaXCM40xTLd56AZ4vyaPW3YTyb49VZYPo5xsiAq4tuQ54GH4R7gVdYScJ1B7B77PuTg==}
     engines: {node: '>= 12'}
@@ -1400,6 +1406,8 @@ snapshots:
   hono@4.13.18: {}
 
   htmx.org@2.0.11: {}
+
+  idiomorph@0.8.0: {}
 
   ip-address@10.7.6: {}
 

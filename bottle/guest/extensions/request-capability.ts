@@ -69,7 +69,8 @@ const lastMessage = (entries: { type: string; message?: { role?: string; content
             .map((part) => part.text ?? "")
             .join("\n")
         : "";
-  return text.slice(0, 400);
+  // proper-base has the first reply end with a <session_title> line; that is the title, not the message.
+  return text.replace(/\s*<session_title>[\s\S]*$/i, "").slice(0, 400);
 };
 
 /**
@@ -77,7 +78,8 @@ const lastMessage = (entries: { type: string; message?: { role?: string; content
  * approves each request in speaker; nothing here grants access.
  */
 export default async function (pi: ExtensionAPI) {
-  const report = (busy: boolean, summary?: string) => void call(control, "POST", "guest/status", { busy, summary }).catch(() => undefined);
+  const report = (busy: boolean, summary?: string, title?: string) =>
+    void call(control, "POST", "guest/status", { busy, summary, title }).catch(() => undefined);
   // A run spans every model and tool step; Pi settles only when it will not continue on its own.
   let idle = true;
   pi.on("agent_start", () => {
@@ -86,8 +88,10 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.on("agent_settled", (_event, ctx) => {
     idle = true;
-    report(false, lastMessage(ctx.sessionManager.getBranch()));
+    report(false, lastMessage(ctx.sessionManager.getBranch()), ctx.sessionManager.getSessionName());
   });
+  // Pi's session name (set by the always-on proper-base, or /name) is the task title the owner sees beside the agent.
+  pi.on("session_info_changed", (event) => event.name && report(!idle, undefined, event.name));
   // Requests the owner has not decided yet, by item set. A background watcher per request delivers the decision.
   type Pending = { id: number | string; params: { want: string[]; reason: string; duration: string } };
   const pending: Record<string, Pending> = existsSync(PENDING) ? JSON.parse(readFileSync(PENDING, "utf8")) : {};

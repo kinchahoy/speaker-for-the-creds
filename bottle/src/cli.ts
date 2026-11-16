@@ -10,14 +10,16 @@ import { attach } from "./sandbox.ts";
 import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
 import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, localModelUp, type Config } from "./config.ts";
-import { loadTemplates } from "./grants.ts";
-import { availableModels } from "./pi.ts";
+import { givenAtLaunch, loadTemplates } from "./grants.ts";
+import { availableModels, loadCatalog } from "./pi.ts";
 import { finishedAgents } from "./agents.ts";
 
 /** The owner's terminal client: `bottle run | ls | attach | stop | down | serve | build | register`. */
 type Agent = {
   id: string;
   name: string;
+  /** Short task title written by the agent: untrusted text. */
+  title?: string;
   state: string;
   attended?: boolean;
   model?: string;
@@ -158,9 +160,42 @@ const age = (startedAt: string): string => {
   return `${Math.floor(seconds / 3600)}h${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`;
 };
 
-const truncate = (text: string, width: number) => {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > width ? `${oneLine.slice(0, width - 3)}...` : oneLine;
+/** Untrusted text on one line: control characters (terminal escapes included) and runs of whitespace become one space. */
+const clean = (text: string) => text.replace(/[\p{Cc}\s]+/gu, " ").trim();
+const truncate = (text: string, width: number) => (clean(text).length > width ? `${clean(text).slice(0, width - 3)}...` : clean(text));
+const columns = () => process.stdout.columns ?? 100;
+const STATES: Record<string, string> = { "awaiting-grant": "awaiting approval", "failed-archive": "archive failed" };
+const stateLabel = (agent: Agent) => (agent.done ? "done" : (STATES[agent.state] ?? agent.state.replaceAll("-", " ")));
+const taskLabel = (agent: Agent) => (agent.title ? `${clean(agent.title)} (${clean(agent.name)})` : clean(agent.name));
+
+/** Rows aligned in columns. */
+const cells = (rows: string[][]) => {
+  const widths = rows[0]!.map((_, column) => Math.max(...rows.map((row) => row[column]!.length)));
+  return rows.map((row) =>
+    row
+      .map((cell, column) => cell.padEnd(widths[column]!))
+      .join("  ")
+      .trimEnd(),
+  );
+};
+
+/** Columns id, task, then more fields. A table when it fits the terminal, otherwise a labelled block per row; ids and URLs are never cut. */
+const listing = (header: string[], rows: string[][], extra: string[][]) => {
+  if (rows.length === 0) return;
+  const lines = cells([header, ...rows]);
+  const wide = lines.every((line) => line.length <= columns());
+  if (wide) console.log(lines[0]);
+  rows.forEach((row, index) => {
+    if (wide) console.log(lines[index + 1]);
+    else
+      console.log(
+        `${row[0]}  ${row[1]}\n    ${header
+          .slice(2)
+          .map((title, at) => `${title[0]}${title.slice(1).toLowerCase()}: ${row[at + 2]}`)
+          .join(" · ")}`,
+      );
+    for (const line of extra[index]!) console.log(`    ${line}`);
+  });
 };
 
 const loadCliConfig = (): Config => {
@@ -213,10 +248,13 @@ async function main(command: Command_, values: Values, positionals: string[]) {
   if (command === "down") {
     await stopBottle();
   } else if (command === "templates") {
-    const templates = [...loadTemplates(`${config.configRoot}/templates.json`).values()].map(({ id, label, model }) => ({
-      id,
-      label,
-      ...(model && { model }),
+    const { extensions } = loadCatalog(config);
+    const templates = [...loadTemplates(`${config.configRoot}/templates.json`).values()].map((template) => ({
+      id: template.id,
+      label: template.label,
+      ...(template.model && { model: template.model }),
+      // What the template gives at launch without a speaker card; the Herdr launch form shows it.
+      extensions: givenAtLaunch(template, extensions).map((id) => `ext:${id}`),
     }));
     const models = await Promise.all(
       availableModels(config).map(async ({ id, alias, label }) => {
@@ -225,20 +263,9 @@ async function main(command: Command_, values: Values, positionals: string[]) {
       }),
     );
     if (values.json) return void console.log(JSON.stringify({ templates, models }));
-    const table = (rows: string[][]) => {
-      const widths = rows[0]!.map((_, column) => Math.max(...rows.map((row) => row[column]!.length)));
-      return rows
-        .map((row) =>
-          row
-            .map((cell, column) => cell.padEnd(widths[column]!))
-            .join("  ")
-            .trimEnd(),
-        )
-        .join("\n");
-    };
-    console.log(table([["TEMPLATE", "MODEL", "LABEL"], ...templates.map((entry) => [entry.id, entry.model ?? "-", entry.label])]));
+    console.log(cells([["TEMPLATE", "DEFAULT MODEL", "DESCRIPTION"], ...templates.map((entry) => [entry.id, entry.model ?? "-", entry.label])]).join("\n"));
     console.log(
-      `\n${table([["ALIAS", "MODEL", "LABEL", "STATUS"], ...models.map((entry) => [entry.alias ?? "-", entry.id, entry.label, entry.local ? (entry.up ? "up" : "down") : ""])])}`,
+      `\n${cells([["ALIAS", "MODEL", "DESCRIPTION", "AVAILABILITY"], ...models.map((entry) => [entry.alias ?? "-", entry.id, entry.label, entry.local ? (entry.up ? "up" : "down") : "-"])]).join("\n")}`,
     );
   } else if (command === "register") {
     const name = values.name ?? hostname();
@@ -255,16 +282,16 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     // Relative folder paths are this shell's; the service needs absolute ones.
     const folders = values.folder?.map((spec) => (spec.startsWith("~") || spec.startsWith("/") ? spec : resolve(spec)));
     const { id, outputDir } = await api(controlApi.agents.$post({ json: { name, template, model, prompt, attended, hours, folders } }));
-    const archive = prompt ? " It archives when Pi writes /output/DONE." : "";
-    console.log(
-      `Started ${id} (${template}).${archive} Archive: ${outputDir}\nWhen the agent asks for access, approve it at ${config.speaker.url}/admin (or check ${SELF} ls).`,
-    );
-    if (detach) {
-      await openTab(config, id);
-      return void console.log(`Attach: ${attachCommand(id)}`);
-    }
     let agent = await byId(id);
-    if (agent?.state === "awaiting-grant") console.log(`Waiting for you to approve its model at ${config.speaker.url}/admin`);
+    const waiting = agent?.state === "awaiting-grant";
+    const request = agent?.pendingRequests[0]?.id;
+    console.log(
+      `${waiting ? "Waiting for approval" : "Starting"}: ${id} (${agent ? taskLabel(agent) : (name ?? template)}), ${template}, ${clean(agent?.model ?? model ?? "default model")}`,
+    );
+    if (waiting) console.log(`  Approve: ${config.speaker.url}/admin${request ? `#request-${request}` : ""}`);
+    if (detach) console.log(`  Attach:  ${attachCommand(id)}`);
+    console.log(`  Archive: ${outputDir}${prompt ? " (when Pi writes /output/DONE)" : ""}`);
+    if (detach) return void (await openTab(config, id));
     while (agent?.state === "awaiting-grant") {
       await sleep(2_000);
       agent = await byId(id);
@@ -272,54 +299,57 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     if (!agent || !ATTACHABLE.includes(agent.state)) throw new Error(`agent ${id} is ${agent?.state ?? "gone"}; see ${SELF} ls`);
     await attachHere(agent);
     const after = await byId(id);
-    if (!after || CLOSED.includes(after.state)) return void console.log(`${id} is ${after?.state ?? "archived"}. Archive: ${outputDir}`);
+    if (!after || CLOSED.includes(after.state)) return void console.log(`${id} is ${after ? after.state.replaceAll("-", " ") : "gone"}. Archive: ${outputDir}`);
     if (!piRunning(after)) return void console.log(piQuit(id));
-    console.log(`Detached; ${id} keeps running.`);
+    console.log(`Detached; ${id} keeps running. Attach: ${attachCommand(id)}`);
     await openTab(config, id);
-    console.log(`Attach: ${attachCommand(id)}`);
   } else if (command === "ls") {
+    // The control API's state as it is, for the Herdr mod when bottle is on another machine.
+    if (values.json) return void console.log(JSON.stringify(await api(controlApi.state.$get())));
     const up = await isUp(control);
     const list = up ? await agents() : [];
-    if (list.length === 0) console.log(`${up ? "No live agents" : "bottle is not running, so no live agents"}. Start one with: ${SELF} run "<prompt>"`);
-    const header = ["ID", "STATE", "MODE", "PENDING", "AGE", "MODEL", "NAME", "LAST MESSAGE"];
-    const rows = list.map((agent) => [
-      agent.id,
-      agent.done ? "done" : agent.state,
-      agent.attended === undefined ? "-" : agent.attended ? "attended" : "unattended",
-      String(agent.pendingRequests.length),
-      agent.startedAt ? age(agent.startedAt) : "-",
-      agent.model ?? "-",
-      agent.name,
-      truncate(agent.summary ?? "", 60),
-    ]);
-    if (list.length > 0) {
-      const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
-      const line = (cells: string[]) =>
-        cells
-          .map((cell, column) => cell.padEnd(widths[column]!))
-          .join("  ")
-          .trimEnd();
-      console.log(line(header));
-      list.forEach((agent, index) => {
-        console.log(line(rows[index]!));
-        if (agent.launchGrants.length) console.log(`    given at launch (template, no card): ${agent.launchGrants.join(", ")}`);
-        for (const request of agent.pendingRequests)
-          console.log(`    pending approval ${request.id}: ${request.what} (${request.reason}). Approve it at ${config.speaker.url}/admin`);
-      });
+    if (list.length === 0)
+      console.log(
+        `${up ? `bottle is running at ${control} with no live agents` : `bottle is not running (${control})`}. Start an agent with: ${SELF} run "<prompt>"`,
+      );
+    const room = Math.max(30, columns() - 14);
+    listing(
+      ["ID", "TASK", "STATE", "MODEL", "AGE"],
+      list.map((agent) => [agent.id, taskLabel(agent), stateLabel(agent), clean(agent.model ?? "-"), agent.startedAt ? age(agent.startedAt) : "-"]),
+      list.map((agent) => [
+        ...(CLOSED.includes(agent.state) || !agent.summary ? [] : [`Latest: ${truncate(agent.summary, room)}`]),
+        ...agent.pendingRequests.flatMap((request) => [
+          `Request ${request.id}: ${clean(request.what)} (${truncate(request.reason, room)})`,
+          `Approve: ${config.speaker.url}/admin#request-${request.id}`,
+        ]),
+        ...(agent.attended === undefined ? [] : [`Mode: ${agent.attended ? "attended" : "unattended"}`]),
+        ...(agent.launchGrants.length ? [`Launch-held: ${agent.launchGrants.join(", ")}`] : []),
+        ...(agent.state === "failed-archive" ? [`Archive failed: the error is recorded in ${config.outputRoot}/*--${agent.id}/_control/agent.json`] : []),
+      ]),
+    );
+    const finished = finishedAgents(config.outputRoot);
+    if (finished.length > 0) {
+      console.log("\nFinished:");
+      listing(
+        ["ID", "TASK", "OUTCOME", "ARCHIVE"],
+        finished.map(({ id, name, state, outputDir }) => [id, clean(name), state.replaceAll("-", " "), outputDir]),
+        finished.map(({ state, outputDir }) =>
+          state === "failed-archive" ? [`Archive failed: the error is recorded in ${outputDir}/_control/agent.json; its output is beside it`] : [],
+        ),
+      );
     }
-    const finished = finishedAgents(config.outputRoot).map(({ state, outputDir }) => `${state.padEnd(15)}${outputDir}`);
-    if (finished.length > 0) console.log(`\nLast finished agents (state, archive folder):\n${finished.map((row) => `  ${row}`).join("\n")}`);
   } else if (command === "attach") {
     const agent = await resolveAgent(positionals[0]);
     if (!ATTACHABLE.includes(agent.state)) throw new Error(`agent ${agent.id} is ${agent.state}, so it has no terminal to attach to`);
     if ((await api(controlApi.agents[":id"].resume.$post({ param: { id: agent.id } }))).resumed)
-      console.log("Pi had exited; restarted it on the same session.");
+      console.log(`Restarted Pi on the same live session of ${agent.id}.`);
+    else console.log(`Reconnecting to ${agent.id}: Pi is still running on its live session.`);
     await attachHere(agent);
-    if (!piRunning(agent)) console.log(piQuit(agent.id));
+    console.log(piRunning(agent) ? `Detached; ${agent.id} keeps running.` : piQuit(agent.id));
   } else if (command === "stop") {
     const agent = await resolveAgent(positionals[0]);
     await api(controlApi.agents[":id"].close.$post({ param: { id: agent.id } }));
-    console.log(`Closing ${agent.id} (${agent.name}). The archive lands in ${config.outputRoot}. Follow progress with ${SELF} ls.`);
+    console.log(`Closing and archiving ${agent.id} (${clean(agent.name)}) into ${config.outputRoot}. \`${SELF} ls\` shows when it is done.`);
   }
 }
 
@@ -328,6 +358,7 @@ const program = new Command(SELF)
   .exitOverride((error) => process.exit(error.exitCode === 1 ? 2 : error.exitCode)); // usage errors exit 2
 program
   .command("run")
+  .helpGroup("Run/join:")
   .description("Start an agent and attach to its Pi terminal (Ctrl-\\ detaches); with a prompt it runs once and archives when Pi writes /output/DONE")
   .argument("[prompt]", "what the agent should do; none opens Pi for you to type")
   .option("-d, --detach", "do not attach: print the attach command and return (the agent is unattended)")
@@ -349,40 +380,49 @@ program
   .action((prompt: string | undefined, values: Values) => main("run", values, prompt ? [prompt] : []));
 program
   .command("templates")
+  .helpGroup("Inspect:")
   .description("List the launch templates and the models (with aliases); works without bottle running")
   .option("--json", "print JSON")
   .action((values: Values) => main("templates", values, []));
 program
   .command("ls")
+  .helpGroup("Inspect:")
   .description("List live agents, and the last finished ones")
-  .action(() => main("ls", {}, []));
+  .option("--json", "print JSON")
+  .action((values: Values) => main("ls", values, []));
 program
   .command("attach")
+  .helpGroup("Run/join:")
   .description("Open an agent's Pi terminal; Ctrl-\\ detaches and leaves Pi running")
   .argument("[id|name]", "default: the only open agent")
   .action((agent?: string) => main("attach", {}, agent ? [agent] : []));
 program
   .command("stop")
+  .helpGroup("Run/join:")
   .description("Close an agent and archive its artifacts and transcript")
   .argument("[id|name]", "default: the only open agent")
   .action((agent?: string) => main("stop", {}, agent ? [agent] : []));
 program
   .command("register")
+  .helpGroup("Host operations:")
   .description("Register this host as a speaker sandbox host")
   .option("--name <name>", "host name (default: this machine's)")
   .action((values: Values) => main("register", values, []));
 program
   .command("serve")
+  .helpGroup("Host operations:")
   .description("Run the bottle service in the foreground; Ctrl-C stops it")
   .allowUnknownOption()
   .argument("[args...]")
   .action((args: string[]) => runScript("serve", args));
 program
   .command("down")
+  .helpGroup("Host operations:")
   .description("Stop bottle; its open agents are archived first")
   .action(() => main("down", {}, []));
 program
   .command("build")
+  .helpGroup("Host operations:")
   .description("Build the guest image (default tag bottle-guest) and load it into microsandbox")
   .allowUnknownOption()
   .argument("[args...]")

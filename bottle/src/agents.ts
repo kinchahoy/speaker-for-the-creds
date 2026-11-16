@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
-import { localModelUp, type Config } from "./config.ts";
+import { localModelReady, type Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
 import { givenAtLaunch, launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
@@ -87,6 +87,8 @@ export type Agent = {
   guestConfigDir: string;
   prompt?: string;
   lastMessage?: string;
+  /** A short task title: what Pi named its session. */
+  title?: string;
   /** The deadline and the DONE watch; the close path clears them. */
   timers: Set<NodeJS.Timeout>;
   /** Work in flight, shared by concurrent callers: the archive and the next Pi restart. */
@@ -230,6 +232,8 @@ export class Agents {
   #move = (agent: Agent, event: AgentEvent) => {
     agent.state = transition("agent", agentTable, agent.state, event);
   };
+  /** Sends speaker each agent's title; it only goes out when a title changed. */
+  reportTitles = () => this.#report.titles(Object.fromEntries(this.list().flatMap((agent) => (agent.title ? [[agent.speakerAgentId, agent.title]] : []))));
   /** The guest reports Pi working or resting; only an idle or busy agent follows it. */
   report = (agent: Agent, busy: boolean) => {
     if (agent.state === "idle" || agent.state === "busy") this.#move(agent, busy ? "work" : "rest");
@@ -252,7 +256,7 @@ export class Agents {
     const attended = input.attended ?? true;
     const name = input.name ?? template.id;
     const model = resolveModel(this.config, input.model ?? template.model);
-    if (model.startsWith("local/") && !(await localModelUp(this.config.localModel.upstream!)))
+    if (model.startsWith("local/") && !(await localModelReady(this.config)))
       throw new StatusError(400, `the local model server ${this.config.localModel.upstream} is not answering; start it or pick another model with -m`);
     const folders = launchFolders([...template.folders, ...(input.folders ?? [])]);
     const launchExt = givenAtLaunch(template, this.catalog.extensions);
@@ -295,7 +299,11 @@ export class Agents {
     const guestToken = randomBytes(24).toString("hex");
     // The agent's label is the agent as the owner would say it: the launch name, else the template's label.
     const speakerAgent = await upstream(
-      this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`, launchExt.map((id) => `ext:${id}`)),
+      this.speaker.createAgent(
+        input.name ?? template.label,
+        `${model} · Pi on ${hostname()}`,
+        launchExt.map((id) => `ext:${id}`),
+      ),
     );
     let guest: Guest;
     try {
@@ -315,7 +323,17 @@ export class Agents {
         live,
         template.limits,
         { work: workDir, artifacts: `${outputDir}/artifacts`, guestConfig: guestConfigDir, modelCalls: `${outputDir}/_control/model-calls.jsonl`, folders },
-        { BOTTLE_TOKEN: guestToken, BOTTLE_CONTROL: "http://control.internal", PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" },
+        {
+          BOTTLE_TOKEN: guestToken,
+          BOTTLE_CONTROL: "http://control.internal",
+          PI_OFFLINE: "1",
+          PI_TELEMETRY: "0",
+          PI_SKIP_VERSION_CHECK: "1",
+          PI_PROGRAM_STATUS: "1",
+          // pi-subagents, always on in the image, kept small: 2 children per delegation and no nesting. pi.ts holds their model to the agent's own.
+          PI_SUBAGENT_MAX_SPAWNS_PER_RUN: "2",
+          PI_SUBAGENT_MAX_DEPTH: "1",
+        },
         { url: this.config.speaker.url, agentToken: speakerAgent.agentToken, ca },
         speakerProxy(this.config, speakerAgent.agentToken, ca),
       );

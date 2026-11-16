@@ -88,7 +88,7 @@ test('the first visit sets the owner password, a restart asks for it again, and 
   const secure = await first.form('/admin/signin', { password: ownerPassword }, { 'x-forwarded-proto': 'https' })
   assert.match(secure.headers.getSetCookie()[0], /Secure/i)
   const cookie = sessionCookie(created)
-  assert.match(await (await first.call('/admin', { headers: { cookie } })).text(), /Inbox/)
+  assert.match(await (await first.call('/admin', { headers: { cookie } })).text(), /id="agents"/)
   // The password is set once; HTTP Basic is gone.
   assert.equal((await first.form('/admin/setup', { password: ownerPassword, confirm: ownerPassword })).status, 409)
   const basic = { authorization: `Basic ${Buffer.from(`admin:${ownerPassword}`).toString('base64')}` }
@@ -100,10 +100,13 @@ test('the first visit sets the owner password, a restart asks for it again, and 
   const restarted = await start(dir)
   const page = await (await restarted.call('/admin', { headers: { cookie } })).text()
   assert.match(page, /Sign in/)
-  assert.doesNotMatch(page, /Inbox/)
+  assert.doesNotMatch(page, /id="agents"/)
   const signedIn = await restarted.signIn()
   assert.equal(signedIn.status, 303)
-  assert.match(await (await restarted.call('/admin', { headers: { cookie: sessionCookie(signedIn) } })).text(), /Inbox/)
+  assert.match(
+    await (await restarted.call('/admin', { headers: { cookie: sessionCookie(signedIn) } })).text(),
+    /id="agents"/,
+  )
 })
 
 test('the log survives a restart and can be searched', async (t) => {
@@ -230,7 +233,7 @@ test('keys and secrets are stored only encrypted, and come back after sign-in', 
   const after = await (
     await restarted.call('/admin?section=services', { headers: { cookie: sessionCookie(back) } })
   ).text()
-  assert.match(after, /Credential: configured/)
+  assert.match(after, /Credential[^>]*>Set</)
   assert.ok(after.includes('GITHUB_TOKEN') && !after.includes(secretValue))
 })
 
@@ -254,7 +257,7 @@ test('changing the password re-wraps the keys: the old password stops working, t
   const page = await (
     await restarted.call('/admin?section=services', { headers: { cookie: sessionCookie(back) } })
   ).text()
-  assert.match(page, /Credential: configured/)
+  assert.match(page, /Credential[^>]*>Set</)
 })
 
 test('the owner API: sign-in gives a bearer token that lists, approves, denies and revokes; the cookie is refused', async (t) => {

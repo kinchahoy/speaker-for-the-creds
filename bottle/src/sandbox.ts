@@ -17,7 +17,7 @@ import { RequestError, Server as ProxyServer } from "proxy-chain";
 import type { Sandbox as MicroVm } from "microsandbox";
 import { request, type Dispatcher } from "undici";
 import { z } from "zod";
-import { microsandboxHome, type Config } from "./config.ts";
+import { localModelReady, microsandboxHome, type Config } from "./config.ts";
 import { speakerApi } from "./speaker.ts";
 import { coversAny, errorBody } from "../../speaker/items.ts";
 import { codes, speakerRequestAllowed, unexpired, type Timed } from "./grants.ts";
@@ -280,6 +280,9 @@ export const modelDoor =
     // The agent token goes to speaker's origin only, and only under the provider's service (no `..` out of it).
     if (provider && (target.origin !== new URL(speaker.url).origin || !target.pathname.startsWith(`/${provider.service}/`)))
       return void modelReply(res, 400, `a hosted model path stays under /hosted/${provider.id}/`);
+    // A local model server that sleeps when idle is woken here, so the agent only sees a slow call.
+    if (!provider && config.localModel.wake && !(await localModelReady(config)))
+      return void modelReply(res, 502, `the local model server did not answer within ${config.localModel.wake.waitSeconds} s of being woken`);
     if (!countModelRequest(live)) return void modelReply(res, 429, `model request limit ${live.maxModelRequests} reached; the owner can raise it`);
     await forward(req, res, target, {
       ...(provider ? { headers: { authorization: `Bearer ${speaker.agentToken}` } } : {}),

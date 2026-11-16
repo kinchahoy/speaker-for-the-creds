@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { itemPatterns } from "../../speaker/items.ts";
 import { Catalog, grantChange, loadCatalog, systemNote, writeGuestConfig } from "../src/pi.ts";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig, localModelReady, type Config } from "../src/config.ts";
 import { givenAtLaunch, launchFolders, launchRequest, loadTemplates, refOf, secretHosts, speakerRequestAllowed, Template } from "../src/grants.ts";
 import { inForce, resolveModel } from "../src/agents.ts";
 import { catalogReport, type Grant } from "../src/speaker.ts";
@@ -137,7 +138,7 @@ test("templates load from one file and reject duplicate identities", () => {
   roots.push(join(path, ".."));
   const templates = JSON.parse(readFileSync(new URL("../templates.json", import.meta.url), "utf8"));
   writeFileSync(path, JSON.stringify(templates));
-  assert.deepEqual([...loadTemplates(path).keys()], ["sealed", "builder", "trusted"]);
+  assert.deepEqual([...loadTemplates(path).keys()], ["sealed", "builder", "trusted", "cron"]);
   writeFileSync(path, JSON.stringify([templates[0], templates[0]]));
   assert.throws(() => loadTemplates(path), /repeat an id/);
   writeFileSync(path, JSON.stringify([{ ...templates[0], duration: "1h" }]));
@@ -227,6 +228,7 @@ test("a template's want, label and duration become the agent's first request", (
       ["sealed", "qwen"],
       ["builder", "deepseek"],
       ["trusted", "deepseek"],
+      ["cron", "deepseek"],
     ],
   );
   assert.ok(shipped.get("trusted")!.want.includes("secret:GITHUB_READ"));
@@ -239,10 +241,10 @@ test("starting a template gives its site-less extensions without a card; everyth
   const given = givenAtLaunch(tpl, extensions);
   assert.deepEqual(given, ["notes"]);
   assert.deepEqual(launchRequest(tpl, "agent-1", ["openrouter.full"], given)?.want, ["ext:web", "ext:unknown", "site:pypi.org", "openrouter.full"]);
-  // The shipped sealed template's three extensions bring no sites, so its launch card asks only for the model.
+  // The shipped sealed template's two extensions bring no sites, so its launch card asks only for the model.
   const sealed = loadTemplates(new URL("../templates.json", import.meta.url).pathname).get("sealed")!;
   const shippedGiven = givenAtLaunch(sealed, JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")).extensions);
-  assert.deepEqual(shippedGiven, ["subagent", "pi-cc-monitor", "pi-cc-loop"]);
+  assert.deepEqual(shippedGiven, ["pi-cc-monitor", "pi-cc-loop"]);
   assert.equal(launchRequest(sealed, "agent-1", [], shippedGiven), undefined);
 });
 
@@ -470,4 +472,16 @@ test("launch folders: read-only under /input, :rw under /space, ~ is home, a mis
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a sleeping local model server is woken with localModel.wake and waited for; without it, down is down", async (t) => {
+  const flag = join(mkdtempSync(join(tmpdir(), "bottle-wake-")), "awake");
+  const server = createServer((_req, res) => res.writeHead(existsSync(flag) ? 200 : 503).end("{}"));
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  t.after(() => server.close());
+  const upstream = `127.0.0.1:${(server.address() as { port: number }).port}`;
+  const config = (wake?: { command: string; waitSeconds: number }) => ({ localModel: { upstream, wake } }) as Config;
+  assert.equal(await localModelReady(config()), false);
+  assert.equal(await localModelReady(config({ command: "true", waitSeconds: 0.2 }), 50), false);
+  assert.equal(await localModelReady(config({ command: `touch ${flag}`, waitSeconds: 5 }), 50), true);
 });

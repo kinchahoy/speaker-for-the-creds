@@ -114,7 +114,7 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   }
   const grants = async (): Promise<Grant[]> =>
     (await live()).grants
-      .split('<li id="grant-')
+      .split('<tr id="grant-')
       .slice(1)
       .map((row) => ({
         id: row.slice(0, row.indexOf('"')),
@@ -495,7 +495,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
   const page = await (await f.call('/admin?service=obsidian', { headers: f.ownerHeaders })).text()
   assert.ok(page.includes('Read rule (GET / HEAD / OPTIONS)'))
   assert.ok(page.includes('Write rule (all other methods)'))
-  assert.ok(page.includes('read ask · write never'))
+  assert.match(page, /Read policy[^>]*>ask<[\s\S]*Write policy[^>]*>never</)
   assert.ok(!page.includes(input.secret))
 
   for (const site of ['cross-site', 'same-site', 'none', '']) {
@@ -525,7 +525,7 @@ test('admin service saves accept a proxied same-origin browser and reject foreig
   assert.equal(missing.status, 403)
   assert.match(await missing.text(), /^Cross-origin form post blocked: send an Origin header matching http/)
   const after = await (await f.call('/admin?service=obsidian', { headers: f.ownerHeaders })).text()
-  assert.ok(after.includes('read ask · write never'))
+  assert.match(after, /Read policy[^>]*>ask<[\s\S]*Write policy[^>]*>never</)
   // Older clients still work with an explicitly configured Origin and no Fetch Metadata.
   assert.equal((await f.ownerForm('/services/save', input)).status, 303)
 })
@@ -639,9 +639,9 @@ test('the owner session cookie reaches no JSON route, and the live panels poll',
   const f = await setup(t)
   for (const path of ['/admin/api/pending', '/admin/api/active', '/admin/api/requests'])
     assert.equal((await f.call(path, { headers: f.ownerHeaders })).status, 401)
-  // A live panel polls with the hash of what it shows: unchanged answers 204, a new request answers the new panel.
+  // The live panel polls its own URL and morphs the answer in; a new request shows in the next answer.
   const poll = /hx-get="([^"]+)"/.exec(await (await f.call('/admin', { headers: f.ownerHeaders })).text())?.[1] ?? ''
-  assert.equal((await f.call(poll, { headers: f.ownerHeaders })).status, 204)
+  assert.equal((await f.call(poll, { headers: f.ownerHeaders })).status, 200)
   await enroll(f, 'poll-token', { want: ['notes.read'], reason: 'poll' })
   assert.match(await (await f.call(poll, { headers: f.ownerHeaders })).text(), /<article id="request-/)
   assert.equal((await f.call('/admin/assets/htmx.js')).status, 200)
@@ -1139,11 +1139,11 @@ test('approving a host that registers again from the same address and name repla
   const again = await register('test', 'host-token-2')
   // Registration alone changes nothing; the card says what approval will do.
   assert.match((await f.live()).approvals, /Approving replaces the approved host test registered/)
-  assert.match((await f.live()).grants, /Sandbox host test/)
+  assert.match((await f.live()).grants, /data-label="Host"><strong>test</)
   assert.equal((await f.ownerForm(`/hosts/${again}/approve`, {})).status, 303)
   const active = (await f.live()).grants
-  assert.equal(active.match(/Sandbox host test/g)?.length, 1)
-  assert.match(active, /Sandbox host elsewhere/)
+  assert.equal(active.match(/data-label="Host"><strong>test</g)?.length, 1)
+  assert.match(active, /data-label="Host"><strong>elsewhere</)
   assert.match(active, /registered <time/)
   assert.equal((await f.call('/_speaker/catalog', { headers: bearer(first.agent.token) })).status, 403)
   assert.equal((await f.ownerForm(`/hosts/${first.id}/remove`, {})).status, 404)
