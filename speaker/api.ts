@@ -217,7 +217,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     covers: string[],
     call: string,
     trigger: string,
-  ): Promise<{ grant?: Approval } | Response> {
+  ): Promise<{ grant?: Approval; asked?: boolean } | Response> {
     const admission = core.kinds[kindOf(item) ?? ''].admission(item, agent.id)
     // `why` is the line on the owner's page; `message` is the agent's.
     const blocked = (why: string, error: 'denied' | 'approval_required', message: string, fields: ErrorFields) => {
@@ -248,7 +248,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     })
     await hold(c, () => core.engine.statusOf(request) !== 'pending')
     const grant = await core.engine.serial(() => core.engine.held(agent.id, covers))
-    if (grant) return { grant }
+    if (grant) return { grant, asked: true }
     return core.engine.statusOf(request) === 'decided'
       ? blocked(`no grant for ${item}`, 'denied', `The owner denied ${item}`, {
           request: request.id,
@@ -492,8 +492,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             ? `granted ${until(grant.expiresAt)}.`
             : `needs \`${name}.${write ? 'full' : 'read'}\`; not granted yet.`
         }
-        // An agent a sandbox host created (bottle) calls through its host's door with a placeholder token; a direct agent
-        // uses its header file (SKILL.md). Both have SPEAKER_URL; speaker's own address may be unreachable from a sandbox.
+        // An agent a sandbox host created (bottle) calls its host's door, $SPEAKER_URL in its sandbox, with a placeholder
+        // token; a direct agent gets the address it used, like /_speaker/help, and uses its header file.
         const auth = agent.host ? 'the header `Authorization: Bearer $SPEAKER_TOKEN`' : 'your header file'
         const lines = [
           `# ${name}`,
@@ -511,7 +511,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             ? `\n${service.notes.trim()}`
             : '- No notes for this service. Use the upstream API documentation for paths.',
         ]
-        return c.text(`${lines.join('\n')}\n`, 200, { 'content-type': 'text/markdown; charset=utf-8' })
+        const text = `${lines.join('\n')}\n`
+        return c.text(agent.host ? text : withAddress(c, text), 200, { 'content-type': 'text/markdown; charset=utf-8' })
       })
       .all('/_speaker/*', (c) =>
         agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
@@ -555,7 +556,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           `${method} ${detail ? `${path} · ${detail}` : path}`,
         )
         if (gated instanceof Response) return gated
-        const { grant } = gated
+        const { grant, asked } = gated
         const target = core.upstreamUrl(service, secret, parts, incoming.search)
         if (!target) return c.json({ error: 'invalid', message: 'Invalid service URL' }, 400)
         if (grant) core.useOf(grant)
@@ -603,12 +604,22 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           rule: service[write ? 'write' : 'read'],
         })
         if (!upstream)
-          return agentError(c, 502, 'upstream_unavailable', `${serviceId} did not answer${failure ? ` (${failure})` : ''}`, {
-            next: 'Try again shortly; if it keeps failing, tell the user',
-          })
+          return agentError(
+            c,
+            502,
+            'upstream_unavailable',
+            `${serviceId} did not answer${failure ? ` (${failure})` : ''}`,
+            {
+              next: 'Try again shortly; if it keeps failing, tell the user',
+            },
+          )
         const location = upstream.headers.get('location')
         if (service.auth.type === 'path' && location?.includes(secret))
           upstream.headers.set('location', location.replaceAll(secret, '<redacted>'))
+        // Tells the agent this answer is the service's own (a 404 here is a wrong path, not a refusal), and that the call
+        // it held with Speaker-Wait was granted.
+        upstream.headers.set('speaker-upstream', serviceId)
+        if (asked && grant) upstream.headers.set('speaker-granted', grant.item)
         return upstream
       })
   )

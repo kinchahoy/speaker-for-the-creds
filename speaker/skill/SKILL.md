@@ -1,6 +1,6 @@
 ---
 name: access-and-creds
-version: 7
+version: 8
 description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH hosts, folders, and secrets such as GitHub tokens. Use when a task needs access, a credential, API key, token, SSH or `gh` you lack, or a call returns 401 or 403."
 ---
 
@@ -10,9 +10,10 @@ Speaker holds the owner's keys and makes calls for you. The owner approves each 
 
 In a bottle sandbox, use the `request_capability` tool instead of this page.
 
-- Call a service: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" $SPEAKER_URL/<service>/<path>`
+- Call a service: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" "$SPEAKER_URL/<service>/<path>"` (quote URLs: `?` breaks unquoted in zsh)
 - No header file, or error `enroll`: read "Set up" below. It takes four commands, once.
-- No access yet: repeat the call with `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`. Speaker asks the owner and answers when they decide. Without `Speaker-Wait` it answers at once, so you would never see the decision.
+- No access yet: repeat the call with `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`. Speaker asks the owner, who reads your reason on the request, and answers when they decide. Without `Speaker-Wait` it answers at once, so you would never see the decision. For one service this is all you need; `POST /_speaker/requests` (see "Asking") is for several items at once.
+- A service's own answer carries `Speaker-Upstream: <service>`, so its 404 means a wrong path (see its help page), not a refusal. After a held call is approved, it also carries `Speaker-Granted: <item>`.
 - Every error is JSON with `error` and `message`, and has `next` where there is a next step. Do exactly that, and tell the user what `tell_user` says. On `denied`, stop: asking again only annoys the owner.
 - What you may ask for, and where you stand: `GET $SPEAKER_URL/_speaker/catalog`.
 - One service's usage and your state for it: `GET $SPEAKER_URL/_speaker/help/<service>`.

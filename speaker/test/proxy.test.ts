@@ -215,8 +215,8 @@ test('enroll with a first request, approval, then the proxy injects the credenti
   assert.equal(f.calls.length, 0)
   const help = async () => (await f.call('/_speaker/help/notes', { headers: bearer('agent-token') })).text()
   assert.match(await help(), /needs `notes\.read`; not granted yet\./)
-  // A direct agent calls through SPEAKER_URL with its header file (a sandbox host's agent is told its bearer header instead).
-  assert.ok((await help()).includes('Call `$SPEAKER_URL/notes/<path>` with your header file.'))
+  // A direct agent is given the address it used and its header file (a sandbox host's agent: SPEAKER_URL and its bearer).
+  assert.match(await help(), /Call `http:\/\/[^`$]+\/notes\/<path>` with your header file\./)
   assert.equal((await f.decide(request.id, 'approve', { duration: '30m' })).status, 303)
   const decided = (await me(f, 'agent-token')).requests[0]
   assert.deepEqual([decided.status, decided.granted, decided.denied], ['decided', ['notes.read'], []])
@@ -775,6 +775,12 @@ test('Speaker-Wait holds a call until approval; without it the call answers at o
   assert.deepEqual(await response.json(), { ok: true })
   assert.equal(f.calls.at(-1)?.headers['speaker-wait'], undefined)
   assert.equal(f.calls.at(-1)?.headers['speaker-reason'], undefined)
+  // The answer says it is the service's, and that the held call was granted; a later call carries no grant header.
+  assert.equal(response.headers.get('speaker-upstream'), 'notes')
+  assert.equal(response.headers.get('speaker-granted'), 'notes.read')
+  const again = await f.call('/notes/doc', { headers: bearer('tok') })
+  assert.equal(again.headers.get('speaker-upstream'), 'notes')
+  assert.equal(again.headers.get('speaker-granted'), null)
 })
 
 test('the third denial of an item locks it with an ISO retry_after; other items and earlier denials still ask', async (t) => {
