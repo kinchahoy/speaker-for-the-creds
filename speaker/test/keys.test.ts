@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { createApp, readConfig } from '../server.ts'
+import { createStore, generateSshKey, openStore, type Vault } from '../store.ts'
 import { freePorts, ownerPassword, sessionCookie, quiet, setOwnerPassword } from './owner.ts'
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -44,6 +45,31 @@ const filesOf = async (dir: string) =>
       .filter((entry) => entry.isFile())
       .map(async (entry) => ({ name: entry.name, text: await readFile(join(entry.parentPath, entry.name), 'utf8') })),
   )
+
+test('a data folder from before config.json moves into it: files at start, secret setups at the first sign-in', async (t) => {
+  const dir = await dataDir(t)
+  const service = {
+    baseUrl: 'https://notes.example.com/api',
+    auth: { type: 'bearer', secret: 'notes' },
+    read: 'ask',
+    write: 'ask',
+  }
+  await writeFile(join(dir, 'services.json'), JSON.stringify({ notes: service }))
+  await writeFile(join(dir, 'groups.json'), JSON.stringify({ ops: { items: ['notes.read'] } }))
+  const old = { value: 'ghp-old-format', hosts: ['api.github.com'], env: 'GH_TOKEN' }
+  const vault = { services: { notes: 'notes-key' }, secrets: { GITHUB_TOKEN: old }, ssh: await generateSshKey() }
+  await createStore(join(dir, 'store.json'), ownerPassword, vault as unknown as Vault)
+  const app = await start(dir)
+  const config = async () => JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
+  assert.deepEqual((await config()).services.notes, service)
+  assert.deepEqual((await config()).groups, { ops: { items: ['notes.read'] } })
+  assert.ok(!(await readdir(dir)).some((name) => ['services.json', 'groups.json'].includes(name)))
+  assert.equal((await app.signIn()).status, 303)
+  assert.deepEqual((await config()).secrets, { GITHUB_TOKEN: { hosts: ['api.github.com'], env: 'GH_TOKEN' } })
+  assert.ok(!JSON.stringify(await config()).includes(old.value))
+  assert.deepEqual((await openStore(join(dir, 'store.json'), ownerPassword)).vault.secrets, { GITHUB_TOKEN: old.value })
+  assert.deepEqual((await openStore(join(dir, 'store.json.bak'), ownerPassword)).vault.secrets, { GITHUB_TOKEN: old })
+})
 
 test('the first visit sets the owner password, a restart asks for it again, and sessions are cookies only', async (t) => {
   const dir = await dataDir(t)

@@ -16,8 +16,8 @@ export type OwnerSecret = { value: string; hosts: string[]; env: string }
 export type Vault = {
   // Upstream key of each service, by service id.
   services: Record<string, string>
-  // Secrets agents may use without seeing them, by name: the hosts they may be sent to and the variable the agent sees.
-  secrets: Record<string, OwnerSecret>
+  // The value of each secret, by name; what it may reach is in config.json.
+  secrets: Record<string, string>
   // Speaker's SSH key for its targets.
   ssh: { private: string; public: string }
   // Certificate authority of the secrets proxy (PEM), made at first need.

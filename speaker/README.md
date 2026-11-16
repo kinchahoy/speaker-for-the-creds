@@ -81,7 +81,7 @@ Speaker keeps these values encrypted on its data volume, decrypts them in memory
 
 <sub>AI-written</sub>
 
-All service keys, secrets, and speaker's SSH key live in one file, `DATA_DIR/store.json`. A random data key seals each secret (AES-256-GCM). A key derived from the owner password (scrypt) wraps the data key. Unwrapping the data key is the password check, so speaker stores no password hash. Clear values exist only in memory after sign-in.
+Speaker keeps two files in `DATA_DIR`. `config.json` holds everything you set up except the values: services, groups, and each secret's name, allowed hosts and environment variable. It holds no key, so you can share it; another speaker that loads it answers `no_key` for each service until its owner adds the key, and offers a secret only once it has a value. Every value (service keys, secret values) and speaker's own SSH key and proxy certificate authority live in `store.json`. A random data key seals them (AES-256-GCM). A key derived from the owner password (scrypt) wraps the data key. Unwrapping the data key is the password check, so speaker stores no password hash. Clear values exist only in memory after sign-in.
 {.ai}
 
 - `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
@@ -120,14 +120,14 @@ Every other host gets `403` and a one-line message. This is not a general proxy.
 
 <sub>AI-written</sub>
 
-Define groups in `DATA_DIR/groups.json`:
+Define groups under `groups` in `DATA_DIR/config.json`:
 {.ai}
 
 ```json
 { "<name>": { "description": "<one line>", "items": ["<item>", "…"] } }
 ```
 
-The description is optional. A group may hold any items except other groups. Copy [groups.example.json](groups.example.json) to start. The `/admin` Groups page edits the file live. If you edit it by hand, restart speaker.
+The description is optional. A group may hold any items except other groups. [groups.example.json](groups.example.json) has examples. The `/admin` Groups page edits the file live. If you edit it by hand, restart speaker. (A speaker from before `config.json` moves its `services.json` and `groups.json` into it at start, and each secret's hosts and variable out of `store.json` at the first sign-in, keeping the old store as `store.json.bak`.)
 {.ai}
 
 A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items.

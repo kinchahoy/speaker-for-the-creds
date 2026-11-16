@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
-import { mkdir, readFile } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import type { Context } from 'hono'
@@ -20,7 +20,7 @@ import {
 import { durationNames, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
-import { createStore, generateSshKey, openStore, type Store, type Vault } from './store.ts'
+import { createStore, generateSshKey, openStore, type OwnerSecret, type Store, type Vault } from './store.ts'
 
 export const idSchema = z
   .string()
@@ -152,6 +152,12 @@ const listSchema = z.union([z.string(), z.array(z.string())]).transform((value) 
 export const newPasswordSchema = z
   .object({ password: z.string().min(8, 'Use at least 8 characters.'), confirm: z.string() })
   .refine((value) => value.password === value.confirm, { message: 'The two passwords differ.', path: ['confirm'] })
+const secretHostsSchema = z
+  .array(z.string().regex(/^(\*\.)?[a-zA-Z0-9.-]+$/, 'Allowed hosts look like api.github.com or *.example.org'))
+  .min(1)
+const envNameSchema = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _')
 export const ownerSecretSchema = z.object({
   // `secret:<NAME>` is how agents ask for it.
   name: z.string().regex(/^[A-Za-z0-9_]+$/, 'A secret name uses letters, numbers and _'),
@@ -159,14 +165,20 @@ export const ownerSecretSchema = z.object({
   hosts: z
     .string()
     .transform((value) => value.split(/[\s,]+/).filter(Boolean))
-    .pipe(
-      z
-        .array(z.string().regex(/^(\*\.)?[a-zA-Z0-9.-]+$/, 'Allowed hosts look like api.github.com or *.example.org'))
-        .min(1),
-    ),
+    .pipe(secretHostsSchema),
   // The environment variable the agent sees (holding a placeholder, never the value).
-  env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _'),
+  env: envNameSchema,
 })
+// config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
+export const configSchema = z.object({
+  services: z.record(idSchema, serviceSchema),
+  groups: groupsSchema.default({}),
+  secrets: z
+    .record(ownerSecretSchema.shape.name, z.object({ hosts: secretHostsSchema, env: envNameSchema }))
+    .default({}),
+})
+// A secret as stores before config.json held it.
+const legacySecretSchema = z.object({ value: z.string(), hosts: z.array(z.string()), env: z.string() })
 // What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 export const decisionSchema = z.object({
   duration: adminDurationSchema,
@@ -266,7 +278,7 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
     .parse(environment)
 }
 
-async function optionalFile(path: string): Promise<string | undefined> {
+async function optionalFile(path: string | URL): Promise<string | undefined> {
   try {
     return await readFile(path, 'utf8')
   } catch (error) {
@@ -301,17 +313,29 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
-  const servicesFile = file('services.json')
-  const starter = z
-    .record(idSchema, serviceSchema)
-    .parse(JSON.parse(await readFile(new URL('./services.example.json', import.meta.url), 'utf8')))
-  starter.demo.baseUrl = `http://127.0.0.1:${config.PORT}/_demo-upstream`
-  // A fresh install starts with the starter services; after that the file is the owner's.
-  const stored = await optionalFile(servicesFile)
-  const services = stored === undefined ? starter : z.record(idSchema, serviceSchema).parse(JSON.parse(stored))
-  if (stored === undefined) await save(servicesFile, services)
-  const groupsFile = file('groups.json')
-  const groups = groupsSchema.parse(JSON.parse((await optionalFile(groupsFile)) ?? '{}'))
+  // config.json: everything the owner set up except the values (services, groups, what each secret may reach), so it
+  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services. One made
+  // before config.json (services.json and groups.json) is moved into it once.
+  const configFile = file('config.json')
+  const json = async (path: string | URL) => {
+    const text = await optionalFile(path)
+    return text === undefined ? undefined : JSON.parse(text)
+  }
+  const starter = async () => {
+    const services = await json(new URL('./services.example.json', import.meta.url))
+    services.demo.baseUrl = `http://127.0.0.1:${config.PORT}/_demo-upstream`
+    return services
+  }
+  const stored = await json(configFile)
+  const ownerConfig = configSchema.parse(
+    stored ?? { services: (await json(file('services.json'))) ?? (await starter()), groups: await json(file('groups.json')) },
+  )
+  const saveConfig = () => save(configFile, ownerConfig)
+  if (!stored) {
+    await saveConfig()
+    await Promise.all(['services.json', 'groups.json'].map((name) => rm(file(name), { force: true })))
+  }
+  const { services, groups } = ownerConfig
   const hostsFile = file('hosts.json')
   const storedHosts = z.array(hostSchema).parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
   const hosts = new Map<string, Host>(storedHosts.map((host) => [host.id, host]))
@@ -326,8 +350,33 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (vault.state !== 'unlocked') throw new Error('Speaker is locked')
     return vault.store
   }
-  const ownerSecrets = (): Vault['secrets'] => (vault.state === 'unlocked' ? vault.store.vault.secrets : {})
+  // The secrets agents can use: those with both a setup in config.json and a value in the unlocked store.
+  const ownerSecrets = (): Record<string, OwnerSecret> => {
+    if (vault.state !== 'unlocked') return {}
+    const values = vault.store.vault.secrets
+    return Object.fromEntries(
+      Object.entries(ownerConfig.secrets).flatMap(([name, setup]) =>
+        Object.hasOwn(values, name) ? [[name, { ...setup, value: values[name] }]] : [],
+      ),
+    )
+  }
   const unlock = async (opened: Store) => {
+    // A store from before config.json kept each secret's hosts and variable with its value: move them out, once,
+    // keeping the old store beside it as store.json.bak.
+    const moved = Object.entries(opened.vault.secrets as Record<string, unknown>).flatMap(([name, entry]) => {
+      const old = legacySecretSchema.safeParse(entry)
+      return old.success ? [{ name, ...old.data }] : []
+    })
+    if (moved.length) {
+      await copyFile(storeFile, `${storeFile}.bak`)
+      for (const { name, value, hosts, env } of moved) {
+        ownerConfig.secrets[name] ??= { hosts, env }
+        opened.vault.secrets[name] = value
+      }
+      await saveConfig()
+      await opened.save()
+      audit('secrets_moved_to_config', { secrets: moved.map(({ name }) => name) })
+    }
     vault = { state: 'unlocked', store: opened }
     // Speaker's SSH key goes into a stock ssh-agent; nothing else holds it in clear.
     await jump.start(opened.vault.ssh)
@@ -981,8 +1030,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     hostOf,
     hostGrant,
     registerHost,
-    saveServices: () => save(servicesFile, services),
-    saveGroups: () => save(groupsFile, groups),
+    ownerConfig,
+    saveConfig,
     peerOf,
     sourceOf,
     baseOf,

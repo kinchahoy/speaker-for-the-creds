@@ -242,9 +242,7 @@ export function adminApp(core: Core) {
           return [id, { read, write: list.length - read, unannotated: list.filter((tool) => !tool.annotated).length }]
         }),
       )
-      const owned = Object.fromEntries(
-        Object.entries(core.unlocked().vault.secrets).map(([name, { hosts, env }]) => [name, { hosts, env }]),
-      )
+      const owned = core.ownerConfig.secrets
       const ssh = core.jump.setup(c.req.query('sshError'))
       const data = {
         services: core.services,
@@ -313,7 +311,7 @@ export function adminApp(core: Core) {
     }
     core.services[input.id] = service
     core.mcpTools.delete(input.id)
-    await core.saveServices()
+    await core.saveConfig()
     core.audit('service_saved', { service: input.id })
     core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
@@ -332,7 +330,7 @@ export function adminApp(core: Core) {
     if (!Object.hasOwn(core.services, id)) throw new HTTPException(404, { message: 'Unknown service' })
     delete core.services[id]
     delete core.unlocked().vault.services[id]
-    await core.saveServices()
+    await core.saveConfig()
     await core.unlocked().save()
     core.audit('service_deleted', { service: id })
     core.engine.reconcile()
@@ -341,10 +339,12 @@ export function adminApp(core: Core) {
   admin.post('/secrets/save', async (c) => {
     const input = ownerSecretSchema.parse(await fields(c))
     const { vault } = core.unlocked()
-    const value = input.value || vault.secrets[input.name]?.value
+    const value = input.value || vault.secrets[input.name]
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
-    vault.secrets[input.name] = { value, hosts: input.hosts, env: input.env }
+    vault.secrets[input.name] = value
+    core.ownerConfig.secrets[input.name] = { hosts: input.hosts, env: input.env }
     await core.unlocked().save()
+    await core.saveConfig()
     core.audit('secret_saved', { secret: input.name })
     // Grants read the hosts live, so a newly allowed host would quietly widen every grant already given: reconcile
     // ends them (their reach grew).
@@ -354,9 +354,11 @@ export function adminApp(core: Core) {
   admin.post('/secrets/delete', async (c) => {
     const { name } = ownerSecretSchema.pick({ name: true }).parse(await fields(c))
     const { vault } = core.unlocked()
-    if (!Object.hasOwn(vault.secrets, name)) throw new HTTPException(404, { message: 'Unknown secret' })
+    if (!Object.hasOwn(core.ownerConfig.secrets, name)) throw new HTTPException(404, { message: 'Unknown secret' })
     delete vault.secrets[name]
+    delete core.ownerConfig.secrets[name]
     await core.unlocked().save()
+    await core.saveConfig()
     core.audit('secret_deleted', { secret: name })
     core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
@@ -387,7 +389,7 @@ export function adminApp(core: Core) {
     const parsed = groupItemsSchema.safeParse(input.data.items)
     if (!parsed.success) return back('line')
     core.groups[input.data.id] = { ...(description.data ? { description: description.data } : {}), items: parsed.data }
-    await core.saveGroups()
+    await core.saveConfig()
     core.audit('group_saved', { group: input.data.id })
     return c.redirect('/admin?section=groups', 303)
   })
@@ -395,7 +397,7 @@ export function adminApp(core: Core) {
     const { id } = z.object({ id: idSchema }).parse(await fields(c))
     if (!Object.hasOwn(core.groups, id)) throw new HTTPException(404, { message: 'Unknown group' })
     delete core.groups[id]
-    await core.saveGroups()
+    await core.saveConfig()
     core.audit('group_deleted', { group: id })
     return c.redirect('/admin?section=groups', 303)
   })
