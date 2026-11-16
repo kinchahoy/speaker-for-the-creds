@@ -44,7 +44,6 @@ export type SubjectRules = {
   field: 'agent' | 'host'
   exists(id: string): boolean
   who(id: string): { label: string; says?: string; via?: string; source: string; key?: string; at?: number }
-  count(id: string, field: 'requests' | 'granted' | 'denied', n: number): void
 }
 
 export type Approval = {
@@ -261,10 +260,6 @@ export function createEngine(env: {
     }
     requests.set(request.id, request)
     const rules = env.subjects[type]
-    const { granted, denied, pending } = outcomeOf(request)
-    if (pending.length) rules.count(subject, 'requests', 1)
-    rules.count(subject, 'granted', granted.length)
-    rules.count(subject, 'denied', denied.length)
     env.audit('request_created', {
       request: request.id,
       [rules.field]: subject,
@@ -310,8 +305,6 @@ export function createEngine(env: {
       }
       // The subject is told "granted" only once each grant is in place (the jump server listening, for SSH).
       await Promise.all(yes.map((a) => kindOf(a).granted(a)))
-      rules.count(request.subject, 'granted', yes.length)
-      rules.count(request.subject, 'denied', no.length)
       settle(request)
       env.changed()
     })

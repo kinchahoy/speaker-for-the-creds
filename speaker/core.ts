@@ -206,15 +206,13 @@ export type Service = z.infer<typeof serviceSchema>
 export type Group = z.infer<typeof groupsSchema>[string]
 export type Host = z.infer<typeof hostSchema>
 type Usage = { uses: number; lastUsedAt: number | null }
+// Refusals leave no approval behind, so they are counted; requests, granted and denied are read off the approvals.
 type Counts = {
-  requests: number
-  granted: number
-  denied: number
   refused: number
   blocked: number
   lastRefusal?: string
 }
-export const noCounts = (): Counts => ({ requests: 0, granted: 0, denied: 0, refused: 0, blocked: 0 })
+export const noCounts = (): Counts => ({ refused: 0, blocked: 0 })
 export type Agent = Usage & {
   counts: Counts
   id: string
@@ -257,7 +255,7 @@ export type Connection = {
 }
 // Where the encrypted store stands: no owner password yet, set but not unlocked since the last start, or open.
 type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
-type AgentView = Agent & { sandboxHost?: string; grants: number }
+type AgentView = Agent & { sandboxHost?: string; grants: number; requests: number; granted: number; denied: number }
 export type View = {
   hosts: (Host & { grant?: string })[]
   agents: AgentView[]
@@ -814,10 +812,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
               }
             : { label: 'Unknown agent', source: '' }
         },
-        count(id, field, n) {
-          const agent = agentById(id)
-          if (agent) agent.counts[field] += n
-        },
       },
       host: {
         durations: ['permanent'],
@@ -828,7 +822,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           const host = hosts.get(id)
           return { label: `Sandbox host ${host?.name ?? id}`, source: host?.source ?? '', at: host?.registeredAt }
         },
-        count: () => undefined,
       },
     },
   })
@@ -962,11 +955,18 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const view = (): View => ({
     hosts: [...hosts.values()].map((host) => ({ ...host, grant: hostGrant(host.id)?.id })),
-    agents: enrolled().map((agent) => ({
-      ...agent,
-      sandboxHost: hostOf(agent)?.name,
-      grants: engine.grants(agent.id).length,
-    })),
+    agents: enrolled().map((agent) => {
+      const outcomes = [...engine.requests.values()].filter((r) => r.subject === agent.id).map(engine.outcomeOf)
+      const items = (field: 'granted' | 'denied') => outcomes.flatMap((o) => o[field]).length
+      return {
+        ...agent,
+        sandboxHost: hostOf(agent)?.name,
+        grants: engine.grants(agent.id).length,
+        requests: outcomes.length,
+        granted: items('granted'),
+        denied: items('denied'),
+      }
+    }),
     cards: engine.cards(),
     grants: engine
       .grants()
