@@ -4,7 +4,7 @@ import { request as httpRequest } from 'node:http'
 import { createServer as httpsServer } from 'node:https'
 import { connect, getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, readFile, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -197,70 +197,102 @@ test('a sandbox host: one card for site, extension and service; approval deliver
 })
 
 const run = promisify(execFile)
-const sshd = existsSync('/usr/sbin/sshd') && existsSync('/usr/bin/ssh-keygen')
+const noSshd = !(existsSync('/usr/sbin/sshd') && existsSync('/usr/bin/ssh-keygen')) && 'no sshd on this machine'
+
+// Speaker in front of a throwaway non-root sshd standing in for a homelab host `box`, and an agent with its own key.
+async function jump(t: TestContext) {
+  const f = await start(t)
+  const dir = await mkdtemp(join(tmpdir(), 'speaker-ssh-'))
+  const user = userInfo().username
+  const port = await freePort()
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const page = await (await f.call('/admin?section=services', { headers: { cookie: f.cookie() } })).text()
+  const speakerKey = page.match(/ssh-ed25519 [A-Za-z0-9+/=]+ speaker/)?.[0]
+  assert.ok(speakerKey, 'the setup page shows speaker’s public key')
+  for (const name of ['host', 'agent'])
+    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, name)])
+  await writeFile(join(dir, 'keys'), `from="127.0.0.1",restrict ${speakerKey}\n`)
+  const config = [`Port ${port}`, 'ListenAddress 127.0.0.1', `HostKey ${join(dir, 'host')}`, 'PidFile none']
+  config.push(`AuthorizedKeysFile ${join(dir, 'keys')}`, 'StrictModes no', 'PasswordAuthentication no', 'UsePAM no')
+  await writeFile(join(dir, 'sshd_config'), [...config, `AllowUsers ${user}`, 'LogLevel ERROR'].join('\n'))
+  const daemon = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', join(dir, 'sshd_config')], { stdio: 'inherit' })
+  t.after(() => daemon.kill())
+  for (let i = 0; i < 100 && (await run('nc', ['-z', '127.0.0.1', String(port)]).catch(() => null)) === null; i++)
+    await sleep(50)
+  await f.form('/ssh/targets/add', { alias: 'box', host: '127.0.0.1', port: String(port), account: user })
+  const a = await f.enrol('ssh', {}, { sshKey: (await readFile(join(dir, 'agent.pub'), 'utf8')).trim() })
+  // Runs the command line /catalog prints for an item (as the agent would, with its own key), filling `fill` in.
+  const line = async (item: string, kind: string, fill: Record<string, string> = {}) => {
+    const entry = (await a.catalog()).ssh.find((e: { item: string }) => e.item === item)
+    await writeFile(join(dir, 'known_hosts'), `${entry.knownHosts.line}\n`)
+    const filled = { '<key>': join(dir, 'agent'), '<known_hosts>': join(dir, 'known_hosts'), ...fill }
+    const text = entry.commands.find((c: string) => c.startsWith(`${kind} `)).replace(/^(\w+) /, '$1 -F /dev/null ')
+    return Object.entries(filled).reduce((l, [k, v]) => l.replaceAll(k, v), text)
+  }
+  const sh = (command: string) => run('sh', ['-c', command], { timeout: 12_000 })
+  return { f, a, dir, user, line, sh }
+}
+
 test(
   'an approved ssh: grant runs a command through the jump server; a revoked one does not',
-  { skip: !sshd && 'no sshd on this machine' },
+  { skip: noSshd },
   async (t) => {
-    const f = await start(t)
-    const dir = await mkdtemp(join(tmpdir(), 'speaker-ssh-'))
-    const user = userInfo().username
-    const port = await freePort()
-    t.after(() => rm(dir, { recursive: true, force: true }))
-    const speakerKey = (
-      await (await f.call('/admin?section=services', { headers: { cookie: f.cookie() } })).text()
-    ).match(/ssh-ed25519 [A-Za-z0-9+/=]+ speaker/)?.[0]
-    assert.ok(speakerKey, 'the setup page shows speaker’s public key')
-    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, 'host')])
-    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, 'agent')])
-    await writeFile(join(dir, 'keys'), `from="127.0.0.1",restrict ${speakerKey}\n`)
-    await writeFile(
-      join(dir, 'sshd_config'),
-      [
-        `Port ${port}`,
-        'ListenAddress 127.0.0.1',
-        `HostKey ${join(dir, 'host')}`,
-        'PidFile none',
-        `AuthorizedKeysFile ${join(dir, 'keys')}`,
-        'StrictModes no',
-        'PasswordAuthentication no',
-        'UsePAM no',
-        `AllowUsers ${user}`,
-        'LogLevel ERROR',
-      ].join('\n'),
-    )
-    const daemon = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', join(dir, 'sshd_config')], { stdio: 'inherit' })
-    t.after(() => daemon.kill())
-    for (let i = 0; i < 100 && (await run('nc', ['-z', '127.0.0.1', String(port)]).catch(() => null)) === null; i++)
-      await sleep(50)
-    await f.form('/ssh/targets/add', { alias: 'box', host: '127.0.0.1', port: String(port), account: user })
-    const a = await f.enrol('ssh', {}, { sshKey: (await readFile(join(dir, 'agent.pub'), 'utf8')).trim() })
+    const { f, a, user, line, sh } = await jump(t)
     await grant(f, a, 'ssh:box')
-    const entry = (await a.catalog()).ssh.find((e: { item: string }) => e.item === 'ssh:box')
-    await writeFile(join(dir, 'known_hosts'), `${entry.knownHosts.line}\n`)
-    const command = entry.commands.find((c: string) => c.startsWith('ssh '))
-    const ssh = () =>
-      run(
-        'sh',
-        [
-          '-c',
-          command
-            .replace(/^ssh /, 'ssh -F /dev/null ')
-            .replace('<key>', join(dir, 'agent'))
-            .replace('<known_hosts>', join(dir, 'known_hosts'))
-            .replace('<command>', 'echo ran-as $(id -un)'),
-        ],
-        { timeout: 12_000 },
-      )
+    const ssh = async () => sh(await line('ssh:box', 'ssh', { '<command>': 'echo ran-as $(id -un)' }))
     assert.equal((await ssh()).stdout.trim(), `ran-as ${user}`)
     await f.revoke('ssh:box')
     await assert.rejects(ssh())
   },
 )
 
-test('a card that widens what the agent holds is marked as wider; a first request is not', async (t) => {
-  const f = await start(t)
-  await f.saveService('a', { secret: 'a-key' })
+test(
+  'a folder grant is sftp inside its share: reads work, outside paths and read-only writes do not',
+  { skip: noSshd },
+  async (t) => {
+    const { f, a, dir, line, sh } = await jump(t)
+    const world = join(dir, 'world')
+    for (const name of ['pics', 'docs']) {
+      await mkdir(join(world, name), { recursive: true })
+      assert.equal((await f.form('/ssh/shares/save', { name, target: 'box', path: join(world, name) })).status, 303)
+    }
+    await writeFile(join(world, 'pics', 'hello.txt'), 'hello from pics\n')
+    await writeFile(join(world, 'outside.txt'), 'not in any share\n')
+    await symlink('../outside.txt', join(world, 'pics', 'escape'))
+    await writeFile(join(dir, 'up.txt'), 'upload\n')
+    assert.deepEqual((await a.catalog()).ssh, [], 'nothing before the grant')
+    await grant(f, a, 'folder:pics', 'folder:docs:rw')
+    // One sftp session running `commands`; the exit code and what landed on disk are the outcome.
+    const sftp = async (item: string, ...commands: string[]) => {
+      await writeFile(join(dir, 'batch'), `${commands.join('\n')}\n`)
+      const text = (await line(item, 'sftp', { '/<path>': '' })).replace(/^sftp /, `sftp -b ${join(dir, 'batch')} `)
+      return sh(text).then(
+        () => 0,
+        (e: { code?: number }) => e.code ?? 1,
+      )
+    }
+    const got = (name: string) => join(dir, name)
+    assert.equal(await sftp('folder:pics', `get /pics/hello.txt ${got('a')}`, `ls /pics`), 0)
+    assert.equal(await readFile(got('a'), 'utf8'), 'hello from pics\n')
+    for (const [name, remote] of [
+      ['dotdot', '/pics/../outside.txt'],
+      ['absolute', join(world, 'outside.txt')],
+      ['symlink', '/pics/escape'],
+    ])
+      assert.notEqual(await sftp('folder:pics', `get ${remote} ${got(name)}`), 0, name)
+    for (const name of ['dotdot', 'absolute', 'symlink']) assert.equal(existsSync(got(name)), false, name)
+    assert.notEqual(await sftp('folder:pics', `put ${got('up.txt')} /pics/new.txt`), 0)
+    assert.equal(existsSync(join(world, 'pics', 'new.txt')), false)
+    assert.equal(await sftp('folder:docs:rw', `put ${got('up.txt')} /docs/new.txt`), 0)
+    assert.equal(await readFile(join(world, 'docs', 'new.txt'), 'utf8'), 'upload\n')
+    assert.notEqual(await sftp('folder:docs:rw', `put ${got('up.txt')} /docs/../pics/hijack.txt`), 0)
+    assert.equal(existsSync(join(world, 'pics', 'hijack.txt')), false)
+    await f.revoke('folder:pics')
+    assert.deepEqual(
+    (await a.catalog()).ssh.map((e: { item: string }) => e.item),
+    ['folder:docs:rw'],
+  )
+})
   await f.saveService('a:b', { baseUrl: `${f.upstreamUrl}/base/sub` })
   const a = await f.enrol()
   const first = (await body(await a.as('/a/x'))).request
