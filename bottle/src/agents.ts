@@ -517,7 +517,6 @@ export class Agents {
     });
   }
 
-  /** Close writes trusted records before it removes only the disposable agent work tree. */
   /** Starts Pi again on the agent's session when the owner had quit it; true when it had to. */
   async resume(agent: Agent) {
     if (!["idle", "busy"].includes(agent.state)) throw new StatusError(409, `agent ${agent.id} is ${agent.state}`);
@@ -527,6 +526,7 @@ export class Agents {
     return true;
   }
 
+  /** Close writes trusted records before it removes only the disposable agent work tree. */
   close(agent: Agent): Promise<void> {
     agent.jobs.close ??= this.#close(agent).finally(() => {
       agent.jobs.close = undefined;

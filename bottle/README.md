@@ -194,7 +194,7 @@ docker save <image> | msb load --tag <guestImage>   # into ~/.bottle/microsandbo
 
 <sub>AI-written</sub>
 
-Each agent runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime.
+Each agent runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. It was chosen (2026-11-11, over Gondolin, Firecracker, smolvm and other sandboxes) as the only one that offers, from one Node library on Linux and macOS, a guest with no network device, vsock routes to host unix sockets, exec with terminal attach, and resource limits; the comparison is in git history (`bottle/SANDBOX-OPTIONS.md`).
 {.ai}
 
 The guest has no network device. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
@@ -415,6 +415,7 @@ You trust the host, bottle, the sandbox runtime, the pinned image, and every pee
 
 - The host enforces grant expiry, revocation, network access, and shared-folder permissions independently of Pi. Validate those boundaries in a real guest before deployment.
 - Every approved destination can receive anything the guest can read. Placeholder substitution in speaker's proxy protects secret values. It does not prevent misuse of granted authority.
+- bottle's egress proxy is a high-value host process and needs the same care as speaker's proxy. Every client in the guest must honour the proxy settings and trust speaker's proxy certificate; one that ignores them simply gets no network.
 - The speaker exception permits the configured origin and agent-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
 - Provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or the duration of a single generation.
 - Review artifacts before you run them or promote them onto the host. Archives may contain private agent content.
