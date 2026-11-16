@@ -175,17 +175,16 @@ export default class Speaker extends View {
       try {
         ({ token, publicUrl } = await api("/signin", { password: this.password.value() }));
         this.password.set_value("");
-        this.reveal(cx, false);
+        this.reveal(false); // act re-renders afterwards
       } finally {
         this.signingIn = false;
       }
     });
   }
 
-  reveal(cx, on) {
+  reveal(on) {
     this.revealed = on;
     this.password.set_masked(!on);
-    cx.notify();
   }
 
   save(cx) {
@@ -307,7 +306,7 @@ export default class Speaker extends View {
       .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
       .when(ready && !token, (el) => el.child(heading("Sign in to see and decide requests"))
         .child(labeled("Owner password", withButton(this.password,
-          button("reveal", this.revealed ? "Hide" : "Show", false, (_e, cx) => this.reveal(cx, !this.revealed)),
+          button("reveal", this.revealed ? "Hide" : "Show", false, (_e, cx) => (this.reveal(!this.revealed), cx.notify())),
           button("signin", this.signingIn ? "Signing in…" : "Sign in", true, this.signingIn ? undefined : (_e, cx) => this.signIn(cx))))))
       .when(Boolean(token), (el) => el
         .child(heading(pending.length ? `${pending.length} waiting` : "Nothing waiting"))
