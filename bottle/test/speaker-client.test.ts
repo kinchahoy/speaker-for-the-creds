@@ -236,6 +236,18 @@ test("a template's want becomes the agent's first request, labelled and timed as
   assert.match(approvals, /<option value="1d" selected/);
 });
 
+test("extensions given at launch are recorded on the agent and shown in the Active panel, not granted", async (t) => {
+  const f = await fixture(t);
+  const { speaker } = await f.host(["ext"]);
+  await speaker.createAgent("sealed run", "Test LLM · Pi on test", ["ext:subagent"]);
+  const { grants } = await f.live();
+  assert.match(grants, /sealed run/);
+  assert.match(grants, /<code>ext:subagent<\/code><br><small>Given at launch by the template/);
+  assert.doesNotMatch(grants, /Revoke ext:subagent/);
+  // Only extensions can be given at launch.
+  await assert.rejects(speaker.createAgent("bad", "Test LLM · Pi on test", ["site:example.com"]), /400/);
+});
+
 test("registering learns speaker's proxy and SSH ports into config.json, and the host is approved only once the owner says so", async (t) => {
   const f = await fixture(t);
   const dir = await mkdtemp(join(tmpdir(), "bottle-register-"));

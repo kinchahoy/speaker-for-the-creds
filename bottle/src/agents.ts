@@ -291,7 +291,9 @@ export class Agents {
     };
     const guestToken = randomBytes(24).toString("hex");
     // The agent's label is the agent as the owner would say it: the launch name, else the template's label.
-    const speakerAgent = await upstream(this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`));
+    const speakerAgent = await upstream(
+      this.speaker.createAgent(input.name ?? template.label, `${model} · Pi on ${hostname()}`, launchExt.map((id) => `ext:${id}`)),
+    );
     let guest: Guest;
     try {
       // Speaker's proxy certificate, fetched once for the guest's trust store and bottle's own tunnel to the proxy.

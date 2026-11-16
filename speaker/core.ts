@@ -124,6 +124,11 @@ export const identitySchema = z.object({
   label: z.string().trim().min(1).max(200),
   agent: z.string().trim().min(1).max(120).default('unknown'),
 })
+// A sandbox host's agent also names the extensions its template gave at launch. The host enforces them without speaker
+// (the owner started the template), so speaker only records and shows them; they are not grants and cannot be revoked here.
+export const hostAgentSchema = identitySchema.extend({
+  launched: z.array(itemSchema.refine((item) => kindOf(item) === 'ext', 'Only extensions are given at launch')).max(50).default([]),
+})
 export const requestSchema = z.object({
   want: z.array(itemSchema).min(1).max(50),
   reason: reasonSchema,
@@ -196,6 +201,8 @@ export type Agent = Usage & {
   source: string
   // The sandbox host that created it, for a sandboxed agent.
   host?: string
+  // Extensions its template gave at launch, as that host reported (see hostAgentSchema).
+  launched?: string[]
   sshKey?: string
   createdAt: number
   lastSeen: number

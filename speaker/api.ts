@@ -17,6 +17,7 @@ import {
   type Host,
   hash,
   hostSchema,
+  hostAgentSchema,
   identitySchema,
   idSchema,
   invalid,
@@ -411,9 +412,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         if (caller.role !== 'host') return agentError(c, 403, 'denied', 'This route is for sandbox host tokens')
         return c.json({ id: caller.host.id, name: caller.host.name, status: 'approved' as const })
       })
-      .post('/_speaker/hosts/agents', json<z.input<typeof identitySchema>>(), async (c) => {
+      .post('/_speaker/hosts/agents', json<z.input<typeof hostAgentSchema>>(), async (c) => {
         const host = hostCaller(c)
-        const identity = identitySchema.parse(await c.req.json())
+        const identity = hostAgentSchema.parse(await c.req.json())
         const token = randomBytes(32).toString('base64url')
         const agent: Agent = {
           id: core.rid(),
@@ -429,7 +430,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           counts: noCounts(),
         }
         core.agents.set(agent.id, agent)
-        core.audit('agent_created', { agent: agent.id, host: host.id })
+        core.audit('agent_created', { agent: agent.id, host: host.id, ...(agent.launched?.length ? { launched: agent.launched } : {}) })
         return c.json({ id: agent.id, token }, 201)
       })
       .delete('/_speaker/hosts/agents/:id', (c) => {

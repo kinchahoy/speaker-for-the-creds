@@ -91,8 +91,9 @@ export const speakerClient = (config: Config, hostToken: string) => {
     return response.json();
   };
   return {
-    createAgent: async (label: string, agent: string) =>
-      SpeakerAgent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent } }, timeout()))),
+    /** `launched`: the extensions the template gave at launch, so speaker records and shows them (it does not grant them). */
+    createAgent: async (label: string, agent: string, launched: string[] = []) =>
+      SpeakerAgent.parse(await check("POST hosts/agents", await api.hosts.agents.$post({ json: { label, agent, launched } }, timeout()))),
     deleteAgent: async (id: string) => check(`DELETE hosts/agents/${id}`, await api.hosts.agents[":id"].$delete({ param: { id } }, timeout())),
     request: async (body: RequestBody) => RequestStatus.parse(await check("POST requests", await api.requests.$post({ json: body }, timeout()))),
   };
