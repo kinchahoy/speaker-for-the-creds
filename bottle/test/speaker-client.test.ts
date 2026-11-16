@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { readFileSync, readdirSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createHttpServer, request as httpRequest, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -73,7 +73,10 @@ setDefaultCACertificates([...getCACertificates("default"), upstreamIdentity.cert
 /** A real speaker in this process, its owner session, and an approved sandbox host. */
 async function fixture(t: TestContext, { groups = {} }: { groups?: object } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-speaker-"));
-  await writeFile(join(dataDir, "groups.json"), JSON.stringify(groups));
+  await writeFile(
+    join(dataDir, "config.json"),
+    JSON.stringify({ services: JSON.parse(await readFile(new URL("../../speaker/services.example.json", import.meta.url), "utf8")), groups }),
+  );
   const proxyPort = await freePort();
   const sshPort = await freePort();
   const app = await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: "http://localhost", PROXY_PORT: String(proxyPort), SSH_PORT: String(sshPort) }));
