@@ -253,7 +253,7 @@ export function adminApp(core: Core) {
         }),
       )
       const owned = core.ownerConfig.secrets
-      const ssh = core.jump.setup(c.req.query('sshError'))
+      const ssh = core.jump.setup(c.req.query('sshError'), c.req.query('sshNote'))
       const data = {
         services: core.services,
         keyed: new Set(Object.keys(core.services).filter((id) => core.credentialOf(id) !== undefined)),
@@ -263,6 +263,8 @@ export function adminApp(core: Core) {
         mcp,
         selected: c.req.query('service'),
         scope: c.req.query('scope'),
+        sshTarget: c.req.query('sshTarget'),
+        sshShare: c.req.query('sshShare'),
         error: c.req.query('error'),
       }
       return c.html(layout(nonce, 'services', setup(data), core.engine.cards().length))

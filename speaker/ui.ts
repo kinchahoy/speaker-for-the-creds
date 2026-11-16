@@ -16,6 +16,8 @@ export type Setup = {
   mcp: McpSummary
   selected?: string
   scope?: string
+  sshTarget?: string
+  sshShare?: string
   error?: string
 }
 const css = `
@@ -58,8 +60,8 @@ button,.action-btn{display:inline-flex;align-items:center;justify-content:center
 button.approve{background:var(--green-9);color:#fff;font-weight:750}button.secondary,.action-btn{background:var(--surface);color:var(--ink);border-color:var(--line)}button.secondary:hover,.action-btn:hover{background:var(--surface-2);filter:none}
 button.deny{background:transparent;color:var(--bad);border-color:var(--bad-line)}button.deny:hover{background:var(--bad-bg);filter:none}
 .ib{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 4px;border:0;background:transparent;color:var(--dim);font:650 .8rem var(--font-monospace-code);border-radius:var(--radius-2);text-decoration:none}.ib:hover{background:var(--surface-2);color:var(--ink);filter:none}.ib.revoke:hover,.ib.del:hover{color:var(--bad)}form:has(>.ib){display:contents}
-@media(pointer:fine){.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.rw:not(.sv) .acts{opacity:0}.sv .acts{opacity:.6}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn){min-height:30px}}
-@media(pointer:coarse){.gr{--ac:6rem}.rw.sv{--ac:11rem}.cs .c .ib{min-width:44px;min-height:44px;margin:-10px -12px -10px -6px}}
+@media(pointer:fine){.keyline button{min-height:32px}.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.rw:not(.sv) .acts{opacity:0}.sv .acts{opacity:.6}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn){min-height:30px}}
+@media(pointer:coarse){.gr{--ac:6rem}.rw.sv{--ac:14rem}.cs .c .ib{min-width:44px;min-height:44px;margin:-10px -12px -10px -6px}}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.stub button{flex:1;min-height:50px;font-size:1rem}.stub button:first-child{flex:1.6}
 .chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}.chips input[type=text]{flex:1 1 220px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer;transition:background-color .16s ease-out,border-color .16s ease-out}
 .chips label:has(:checked){background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.chips label input{position:absolute;opacity:0}
@@ -74,16 +76,17 @@ table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data
 .ah{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-height:32px}.ah .nt{display:flex;gap:8px;align-items:baseline;min-width:0}.ah .nt>*,.ah .md{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.ah .grow{flex:1}.ah q{color:var(--dim);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--dim);font-size:.84rem}.t .ic{width:14px;height:14px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .pop{position:relative}.pop>summary{min-height:28px;min-width:28px;justify-content:center}.pop>summary::after{content:none}.pop>div{position:absolute;right:0;z-index:5;width:min(92vw,420px);padding:10px 14px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);box-shadow:var(--shadow-3)}
 .gr{--ac:3.6rem;border-top:1px solid var(--line);font-size:.88rem}.gr.ph{opacity:.6}.sc{--in:1.4rem}.xb{display:none}
-.rw{--nw:12rem;display:grid;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1.8rem 1.8rem 2.6rem minmax(var(--ac),1fr);align-items:center;gap:0 8px;min-height:30px;color:var(--ink);font-weight:400;cursor:default}.rw>*{min-width:0}.rw::after{content:none}.rw>.k{justify-self:end}.rw code{font-size:.86rem}.rw.sv{--nw:14rem;--ac:7.2rem;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1fr var(--ac);min-height:34px}.rw.cs{grid-template-columns:20px minmax(0,1fr)}.n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis}.nm>*{flex:none}.nm strong{flex:0 1 auto}.ok{color:light-dark(var(--green-9),var(--green-4))}
+.rw{--nw:12rem;display:grid;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1.8rem 1.8rem 2.6rem minmax(var(--ac),1fr);align-items:center;gap:0 8px;min-height:30px;color:var(--ink);font-weight:400;cursor:default}.rw>*{min-width:0}.rw::after{content:none}.rw>.k{justify-self:end}.rw code{font-size:.86rem}.rw.sv{--nw:14rem;--ac:9rem;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1fr var(--ac);min-height:34px}.rw.cs{grid-template-columns:20px minmax(0,1fr)}.n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis}.nm>*{flex:none}.nm strong{flex:0 1 auto}.ok{color:light-dark(var(--green-9),var(--green-4))}
 .lv{font:700 .72rem var(--font-monospace-code);color:var(--dim)}.lv.w{color:var(--warn)}
 .cs div{display:flex;flex-wrap:wrap;gap:3px 6px;padding:2px 0}.cs span.c{display:inline-flex;align-items:center;gap:4px;padding:0 0 0 9px;border:1px solid var(--line);border-radius:var(--radius-round);font:.82rem var(--font-monospace-code);min-height:24px}.cs span.c.held{padding-right:9px}.cs .c .ib{opacity:.6}.cs .c:hover .ib{opacity:1}
 .ev>summary{display:grid;grid-template-columns:6.5rem 8rem minmax(0,1fr) 7rem 1rem;gap:0 10px;min-height:28px;color:var(--ink);font-weight:400;font-size:.84rem;border-top:1px solid var(--line)}.ev>summary>*{min-width:0}.ev>summary::after{margin:0}.ev time .dim{opacity:.6}.ev .kv{padding:6px 0 6px 6.5rem}.ev.g>summary{grid-template-columns:4.4rem minmax(0,1fr) 7rem 1rem}.ev.g .kv{padding-left:4.4rem}.more summary{justify-content:flex-start;gap:6px}.more summary::after{content:none}
 .gh{display:flex;gap:10px;align-items:baseline;margin:14px 0 2px;font-size:.92rem}.gh .r{margin-left:auto}
+.keyline{display:flex;gap:8px;align-items:center;margin:0 0 12px}.keyline input{margin:0;min-height:36px;min-width:0;font:.84rem var(--font-monospace-code)}.keyline button{flex:none}
 .seg{display:inline-flex;margin:0 0 8px auto}.seg a{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:.84rem}.seg a:first-child{border-radius:var(--radius-2) 0 0 var(--radius-2)}.seg a:last-child{border-radius:0 var(--radius-2) var(--radius-2) 0;border-left:0}.seg a[aria-current]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .auth-wrap{min-height:100dvh;display:grid;place-items:center;padding:20px}.auth{width:100%;max-width:420px;margin:0}.auth-brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;font-size:1.35rem;font-weight:800;letter-spacing:-.03em}.auth-brand em{font-weight:700}.auth-brand .logo{background:light-dark(var(--indigo-10),var(--indigo-4));color:light-dark(#fff,oklch(16% .04 265))}.auth button{width:100%}.auth h2{align-items:center}
 dialog{max-width:440px;width:calc(100% - 32px);padding:20px;border:1px solid var(--line);border-radius:var(--radius-3);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-4)}dialog::backdrop{background:oklch(12% .02 262 / .58)}dialog h3{margin:0 0 8px}dialog p{margin:0 0 18px;color:var(--dim)}dialog .actions{justify-content:flex-end}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-@media(max-width:640px){.rw,.ev>summary{display:flex;gap:8px;min-height:44px;font-size:.94rem}.sc{padding-left:1.4rem}.rw code,.ev code{font-size:inherit}.rw>.mc,.rw>.n,.rw>.acts,.ev>summary>.ag{display:none}.rw>.nm1,.ev>summary>.w{flex:1 1 0}.rw.cs{min-height:0}.cs div{flex:1}.cs span.c{font-size:.9rem}details[open]>.xb{display:grid;gap:8px;padding:2px 0 10px 28px;font-size:.94rem}.xb .bt{display:flex;gap:8px}.xb .bt>*{flex:1}.xb .bt button,.xb .bt .action-btn{width:100%}.ev .kv{padding-left:0}.ah .nt{flex:1 1 100%}.ah .md{flex:1 1 0}.reason{margin:6px 0 8px;padding:6px 10px}.stub button{min-height:44px}.pop>div{right:auto;left:0}.top .in{padding:0 8px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}.bar small{margin-left:auto}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:12px 12px 0}.stub{margin:10px -12px 0;padding:10px 12px 12px}.panel.region{padding:8px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--dim);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
+@media(max-width:640px){.rw,.ev>summary{display:flex;gap:8px;min-height:44px;font-size:.94rem}.sc{padding-left:1.4rem}.rw code,.ev code{font-size:inherit}.rw>.mc,.rw>.n,.rw>.acts,.ev>summary>.ag{display:none}.rw>.nm1,.ev>summary>.w{flex:1 1 0}.rw.cs{min-height:0}.cs div{flex:1}.cs span.c{font-size:.9rem}details[open]>.xb{display:grid;gap:8px;padding:2px 0 10px 28px;font-size:.94rem}.xb .bt{display:flex;flex-wrap:wrap;gap:8px}.xb .bt>*{flex:1 1 40%}.xb .bt button,.xb .bt .action-btn{width:100%}.ev .kv{padding-left:0}.ah .nt{flex:1 1 100%}.ah .md{flex:1 1 0}.reason{margin:6px 0 8px;padding:6px 10px}.stub button{min-height:44px}.keyline{flex-wrap:wrap}.keyline input{flex:1 1 100%}.pop>div{right:auto;left:0}.top .in{padding:0 8px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}.bar small{margin-left:auto}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:12px 12px 0}.stub{margin:10px -12px 0;padding:10px 12px 12px}.panel.region{padding:8px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--dim);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 `
 export const icons: Record<string, [icon: string, hue: number]> = {
@@ -104,6 +107,7 @@ export const icons: Record<string, [icon: string, hue: number]> = {
   extend: ['clock-plus', 0],
   more: ['ellipsis', 0],
   add: ['plus', 0],
+  check: ['refresh-cw', 0],
   left: ['hourglass', 0],
   used: ['activity', 0],
 }
@@ -123,6 +127,8 @@ const syncHeaderField = () => {
   const sel = document.querySelector('select[name=authType]')
   const box = document.querySelector('[data-auth-header]')
   if (sel && box) box.hidden = sel.value !== 'header'
+  const root = document.querySelector('[data-root]')
+  if (root) root.hidden = document.querySelector('[name=account]')?.value.trim() !== 'root'
 }
 const reveal = () => {
   const target = document.getElementById(decodeURIComponent(location.hash.slice(1)))
@@ -187,6 +193,12 @@ document.addEventListener('change', (e) => {
   if (e.target.matches('[name=kind]')) tick()
 })
 document.addEventListener('click', (e) => {
+  if (e.target.matches('[data-copy]')) {
+    const b = e.target
+    b.closest('.keyline').querySelector('input').select()
+    const done = () => { const was = b.textContent; b.textContent = 'Copied'; setTimeout(() => { b.textContent = was }, 1500) }
+    if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy).then(done, () => {})
+  }
   if (e.target.matches('[data-clear-filter]')) {
     const q = document.querySelector('[name=q]')
     const all = document.querySelector('[name=kind][value=""]')
@@ -300,6 +312,7 @@ const labels: Record<string, string> = {
   '': 'No: it has its own key',
   permanent: 'Until revoked',
   none: 'None (keyless)',
+  path: 'Path (the key is a URL segment)',
   ask: 'Ask the owner',
   open: 'Open (any agent may read)',
   never: 'Never',
@@ -539,14 +552,26 @@ const preview = (items: string[], mono = false) => {
   return html`${items.slice(0, 2).map(one)}${items.length > 2 ? html`<details><summary>${items.length - 2} more</summary>${items.slice(2).map(one)}</details>` : ''}`
 }
 const consequence = (text: string) => html`<p><small>${text}</small></p>`
-export function setup({ services, keyed, owned, groups, ssh, mcp, selected, scope, error }: Setup) {
+export function setup({
+  services,
+  keyed,
+  owned,
+  groups,
+  ssh,
+  mcp,
+  selected,
+  scope,
+  sshTarget,
+  sshShare,
+  error,
+}: Setup) {
   const chosen = selected && Object.hasOwn(services, selected) ? services[selected] : undefined
   const authType = chosen?.auth.type ?? 'bearer'
   // Adding a scope starts the form at `parent:` with the parent's address; a scope uses the parent's key and authentication.
   const prefix = !chosen && scope && Object.hasOwn(services, scope) ? `${scope}:` : ''
   const formId = chosen ? (selected ?? '') : prefix
   const hasAdvanced = Boolean(chosen?.readPaths?.length || chosen?.mcp || chosen?.notes)
-  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id (parent:scope for a scope)', 'text', formId)}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl ?? (prefix ? services[scope ?? ''].baseUrl : undefined))}${formId.includes(':') ? hidden('authType', 'bearer') : html`${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}`}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'POST paths that only read, one per line (for example a search endpoint)', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
+  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id (parent:scope for a scope)', 'text', formId)}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl ?? (prefix ? services[scope ?? ''].baseUrl : undefined))}${formId.includes(':') ? hidden('authType', 'bearer') : html`${select('authType', 'Authentication', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}`}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'Read-only POST paths, one per line', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server: classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
   const tools = (id: string) =>
     html`<div class="actions">${error === 'tools' ? html`<p class="warn" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<small>${mcp[id] ? `Tools: ${mcp[id].read} read · ${mcp[id].write} write${mcp[id].unannotated ? ` (${mcp[id].unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</small>${button('/admin/services/tools', hidden('id', id), 'Refresh tools')}</div>`
   // A scope `parent:name` is listed under its parent.
@@ -557,6 +582,29 @@ export function setup({ services, keyed, owned, groups, ssh, mcp, selected, scop
     value === 'ask'
       ? html`<span class="vh" data-label="${label}">ask</span>`
       : html`<span class="lv ${value === 'open' ? 'w' : ''}">${letter} <span data-label="${label}">${value}</span></span>`
+  // One Setup line (a service, a scope, an SSH target or share): kind icon, name, address or path, marks, and its
+  // actions, each an icon on the line and a button in the open body on a phone.
+  type Act = [Html, Html]
+  const go = (href: string, icon: string, label: string, text: string): Act => [
+    html`<a class="ib" href="${href}" aria-label="${label}" title="${label}">${glyph(icon)}</a>`,
+    html`<a class="action-btn" href="${href}">${text}</a>`,
+  ]
+  const post = (action: string, fields: Html, icon: string, label: string, text: string, confirm = ''): Act => [
+    button(action, fields, label, confirm, icon),
+    button(action, fields, text, confirm),
+  ]
+  const entry = (
+    kind: string,
+    sub: boolean,
+    name: Html,
+    shown: string,
+    title: string,
+    marks: Html | string,
+    acts: Act[],
+  ) =>
+    html`<details class="gr ${sub ? 'sc' : ''}"><summary class="rw sv">${ico(kind)}<span class="nm nm1">${name}</span><code class="clip mc" title="${title}">${shown}</code><span class="nm">${marks}</span><span class="acts">${acts.map((a) => a[0])}</span></summary><div class="xb"><code>${shown}</code><div class="bt">${acts.map((a) => a[1])}</div></div></details>`
+  const nameOf = (label: string, sub: boolean, title = label) =>
+    html`<strong title="${title}">${sub ? html`<span class="dim">:</span>` : ''}${label}</strong>`
   const serviceRow = (id: string, parent?: string) => {
     const s = services[id]
     const q = encodeURIComponent(id)
@@ -570,17 +618,29 @@ export function setup({ services, keyed, owned, groups, ssh, mcp, selected, scop
             ? html`<small title="uses the key of ${s.auth.secret}">key of ${s.auth.secret}</small>`
             : ''
     const kids = Object.keys(services).filter((k) => parentOf(k) === id)
-    const shown = under(addr(s.baseUrl), parent && addr(services[parent].baseUrl))
-    const edit = `/admin?section=services&amp;service=${q}`
-    const del = (text = false) =>
-      button(
-        '/admin/services/delete',
-        hidden('id', id),
-        text ? 'Delete' : `Delete ${id}`,
-        `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.${kids.length ? ` ${kids.join(', ')} use${kids.length === 1 ? 's' : ''} its key and will stop working.` : ''}`,
-        text ? '' : 'del',
-      )
-    return html`<details class="gr ${parent ? 'sc' : ''}"><summary class="rw sv">${ico('service')}<span class="nm nm1"><strong title="${id}">${parent ? html`<span class="dim">:</span>${id.slice(parent.length + 1)}` : id}</strong>${s.mcp ? html`<span class="badge">MCP</span>` : ''}</span><code class="clip mc" title="${s.baseUrl}">${shown}</code><span class="nm">${rule('R', 'Read policy', s.read)}${rule('W', 'Write policy', s.write)}${key}</span><span class="acts">${own && !id.includes(':') ? html`<a class="ib" href="/admin?section=services&amp;scope=${q}" aria-label="Add a scope to ${id}" title="Add a scope to ${id}">${glyph('add')}</a>` : ''}<a class="ib" href="${edit}" aria-label="Edit ${id}" title="Edit ${id}">${glyph('edit')}</a><a class="ib" href="/admin/log?service=${q}" aria-label="Activity of ${id}" title="Activity of ${id}">${glyph('log')}</a>${del()}</span></summary><div class="xb"><code>${shown}</code><div class="bt"><a class="action-btn" href="${edit}">Edit</a><a class="action-btn" href="/admin/log?service=${q}">Activity</a>${del(true)}</div></div></details>`
+    return entry(
+      'service',
+      Boolean(parent),
+      html`${nameOf(parent ? id.slice(parent.length + 1) : id, Boolean(parent), id)}${s.mcp ? html`<span class="badge">MCP</span>` : ''}`,
+      under(addr(s.baseUrl), parent && addr(services[parent].baseUrl)),
+      s.baseUrl,
+      html`${rule('R', 'Read policy', s.read)}${rule('W', 'Write policy', s.write)}${key}`,
+      [
+        ...(own && !id.includes(':')
+          ? [go(`/admin?section=services&scope=${q}`, 'add', `Add a scope to ${id}`, 'Add scope')]
+          : []),
+        go(`/admin?section=services&service=${q}`, 'edit', `Edit ${id}`, 'Edit'),
+        go(`/admin/log?service=${q}`, 'log', `Activity of ${id}`, 'Activity'),
+        post(
+          '/admin/services/delete',
+          hidden('id', id),
+          'del',
+          `Delete ${id}`,
+          'Delete',
+          `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.${kids.length ? ` ${kids.join(', ')} use${kids.length === 1 ? 's' : ''} its key and will stop working.` : ''}`,
+        ),
+      ],
+    )
   }
   const serviceRows = Object.keys(services)
     .filter((id) => !parentOf(id))
@@ -597,26 +657,82 @@ export function setup({ services, keyed, owned, groups, ssh, mcp, selected, scop
     more(4, 'Edit', secretForm(name, o)),
   ])
   const targets = Object.entries(ssh.targets)
-  const shareRow = ([name, share]: [string, SshSetup['shares'][string]]) =>
-    html`<tr class="share">${td('Name', html`${ico('folder')}<strong>${name}</strong>`)}${td('Address', html`<code>${share.path}</code>`)}${td('Files', 'Delivered over SSH')}${td('Warnings', ssh.targets[share.target] ? (ssh.targets[share.target].home === share.path ? html`<mark>home directory</mark>` : '') : html`<mark>unknown target ${share.target}</mark>`)}${act(button('/admin/ssh/shares/delete', hidden('name', name), `Delete ${name}`, `Delete share ${name}? Open sessions and grants for it end.`, 'del'))}</tr>`
   const shares = Object.entries(ssh.shares)
+  const shareRow = ([name, share]: [string, SshSetup['shares'][string]]) => {
+    const home = ssh.targets[share.target]?.home === share.path
+    const q = encodeURIComponent(name)
+    return entry(
+      'folder',
+      Boolean(ssh.targets[share.target]),
+      nameOf(name, Boolean(ssh.targets[share.target])),
+      share.path,
+      share.path,
+      ssh.targets[share.target]
+        ? home
+          ? html`<mark>home directory</mark>`
+          : ''
+        : html`<mark>unknown target ${share.target}</mark>`,
+      [
+        go(`/admin/log?share=${q}`, 'log', `Activity of ${name}`, 'Activity'),
+        post(
+          '/admin/ssh/shares/delete',
+          hidden('name', name),
+          'del',
+          `Delete ${name}`,
+          'Delete',
+          `Delete share ${name}? Open sessions and grants for it end.`,
+        ),
+      ],
+    )
+  }
+  const targetRow = ([alias, t]: (typeof targets)[number]) => {
+    const q = encodeURIComponent(alias)
+    const mates = shares.filter(([, share]) => share.target === alias).map(([name]) => name)
+    return entry(
+      'ssh',
+      false,
+      html`<strong title="${alias}">${alias}</strong>`,
+      `${t.account}@${t.host}:${t.port}`,
+      `host key ${t.fingerprint}`,
+      html`${t.account === 'root' ? html`<mark title="root has no limits">root</mark>` : ''}${t.sudo ? html`<mark title="passwordless sudo works">sudo</mark>` : ''}${t.sftp ? '' : html`<mark title="no sftp-server found: no file delivery">no sftp</mark>`}`,
+      [
+        go(`/admin?section=services&sshShare=${q}`, 'add', `Add a share to ${alias}`, 'Add share'),
+        go(`/admin?section=services&sshTarget=${q}`, 'edit', `Details of ${alias}`, 'Details'),
+        post('/admin/ssh/targets/check', hidden('alias', alias), 'check', `Re-check ${alias}`, 'Re-check'),
+        go(`/admin/log?target=${q}`, 'log', `Activity of ${alias}`, 'Activity'),
+        post(
+          '/admin/ssh/targets/delete',
+          hidden('alias', alias),
+          'del',
+          `Delete ${alias}`,
+          'Delete',
+          `Delete target ${alias}?${mates.length ? ` Its shares (${mates.join(', ')}) go too, and open` : ' Open'} sessions and grants for it end.`,
+        ),
+      ],
+    )
+  }
   const sshRows = [
-    ...targets.flatMap(([alias, t]) => [
-      html`<tr>${td('Name', html`${ico('ssh')}<strong>${alias}</strong>`)}${td('Address', `${t.account}@${t.host}:${t.port}`)}${td('Files', t.sftp ? 'SFTP available' : 'None')}${td('Warnings', html`${t.account === 'root' ? html`<mark>root</mark> ` : ''}${t.sudo ? html`<mark>passwordless sudo works</mark> ` : ''}${t.sftp ? '' : html`<mark>no file delivery: no sftp-server found</mark>`}`)}${act(button('/admin/ssh/targets/delete', hidden('alias', alias), `Delete ${alias}`, `Delete target ${alias}? Its shares go too, and open sessions and grants for them end.`, 'del'))}</tr>`,
-      more(
-        5,
-        'Details',
-        html`<p><small>Host key <code>${t.fingerprint}</code><br>${t.sftp ? html`sftp-server <code>${t.sftp}</code><br>` : ''}authorized_keys line <code>${t.line}</code></small></p><form method="post" action="/admin/ssh/targets/from" class="actions">${hidden('alias', alias)}${input('from', 'Addresses speaker connects from (comma-separated)', 'text', t.from)}<button class="secondary">Save addresses</button></form>`,
-      ),
-      ...shares.filter(([, share]) => share.target === alias).map(shareRow),
+    ...targets.flatMap((target) => [
+      targetRow(target),
+      ...shares.filter(([, share]) => share.target === target[0]).map(shareRow),
     ]),
     ...shares.filter(([, share]) => !ssh.targets[share.target]).map(shareRow),
   ]
-  const sshPanel = html`${ssh.error ? html`<p class="warn" role="alert">${ssh.error}</p>` : ''}<p><small>Speaker's public key is <code>${ssh.publicKey ?? 'available after sign-in'}</code>. On each target, add <code>from="&lt;speaker's address&gt;",restrict &lt;that key&gt;</code> to the <code>authorized_keys</code> of the account speaker should use; a limited account (not root, no sudo) is best. Adding a target pins its host key, so add the line first.</small></p>${sshRows.length ? table(['Target / share', 'Address / path', 'Files', 'Warnings', 'Actions'], sshRows) : empty('No SSH targets.')}<details><summary>Add a target</summary><form method="post" action="/admin/ssh/targets/add">${input('alias', 'Name agents ask for (ssh:NAME)')}${input('host', 'Host name or address')}${input('port', 'SSH port', 'number', '22')}${input('account', 'Account speaker uses there')}${input('from', 'Addresses speaker connects from (blank: detected)')}${input('sftp', 'sftp-server path (blank: probed)')}<label><input type="checkbox" name="confirmRoot"> I understand: root has no limits</label><button>Add target</button></form></details><details><summary>Add a share</summary><form method="post" action="/admin/ssh/shares/save">${input('name', 'Name agents ask for (folder:NAME)')}${select(
-    'target',
-    'Target',
-    targets.map(([alias]) => alias),
-  )}${input('path', 'Absolute path on the target')}<button>Save share</button></form></details>`
+  // The line to paste into a target's authorized_keys, with a copy button for it and for a shell command that adds it.
+  const keyLine = (line: string) =>
+    html`<div class="keyline"><input readonly value="${line}" aria-label="Line for authorized_keys" spellcheck="false" data-1p-ignore><button type="button" class="secondary" data-copy="${line}">Copy</button><button type="button" class="secondary" data-copy="echo '${line}' >> ~/.ssh/authorized_keys">Copy as command</button></div>`
+  const picked = sshTarget && ssh.targets[sshTarget]
+  const targetForm = html`<form method="post" action="/admin/ssh/targets/add">${input('alias', 'Name (agents ask for ssh:NAME)')}${input('host', 'Host name or address')}${input('account', 'Account (a limited login, not root)')}<label data-root hidden><input type="checkbox" name="confirmRoot"> I understand: root has no limits</label><details class="sub-details"><summary>Advanced</summary>${input('port', 'SSH port', 'number', '22')}${input('from', 'Addresses speaker connects from (blank: detected)')}${input('sftp', 'sftp-server path (blank: probed)')}</details><button>Add target and pin its host key</button></form>`
+  const sshPanel = html`${ssh.error ? html`<p class="warn" role="alert">${ssh.error}</p>` : ''}${ssh.note ? html`<p role="status"><mark>${ssh.note}</mark></p>` : ''}${ssh.publicKey ? keyLine(`from="${targets[0]?.[1].from ?? "<speaker's address>"}",restrict ${ssh.publicKey}`) : ''}${picked && sshTarget ? html`<article><h3>${sshTarget}</h3>${keyLine(picked.line)}<p><small>Host key <code>${picked.fingerprint}</code>${picked.sftp ? html` · sftp-server <code>${picked.sftp}</code>` : ''}</small></p><form method="post" action="/admin/ssh/targets/from" class="actions">${hidden('alias', sshTarget)}${input('from', 'Addresses speaker connects from (comma-separated)', 'text', picked.from)}<button class="secondary">Save addresses</button></form></article>` : ''}${sshRows.length ? html`<div>${sshRows}</div>` : ''}${
+    targets.length
+      ? html`<details><summary>Add a target</summary>${targetForm}</details><details ${raw(sshShare ? 'open' : '')}><summary>Add a share</summary><form method="post" action="/admin/ssh/shares/save">${input('name', 'Name (agents ask for folder:NAME)')}${select(
+          'target',
+          'Target',
+          targets.map(([alias]) => alias),
+          sshShare,
+        )}${input('path', 'Absolute path on the target')}<button>Save share</button></form></details>`
+      : targetForm
+  }`
   const groupForm = (id: string, group: Group) =>
     html`<form method="post" action="/admin/groups/save">${input('id', 'Group id', 'text', id)}${input('description', 'Description (one line, optional)', 'text', group.description)}${area('items', 'Items, one per line', group.items.join('\n'), 5)}<button>Save group</button></form>`
   const groupRows = Object.entries(groups).flatMap(([id, group]) => [
