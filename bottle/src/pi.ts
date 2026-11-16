@@ -321,10 +321,10 @@ const keys = (text: string) => `printf '${text}' | dtach -p /run/pi.dtach`;
 /**
  * True while a live pi process exists. A pi that has died stays a zombie (the guest's init never reaps it), so `pgrep` alone
  * would wait forever. Pi names itself `pi` only once loaded; on a cold disk it runs for a while as node with
- * /usr/local/bin/pi in its arguments, and before that pi-launch is still copying its config; all three count (the `[i]` keeps
- * this shell's own command line from matching).
+ * /usr/local/bin/pi in its arguments, and before that pi-launch is still copying its config; all three count. Shells named
+ * `sh` never count: the restart's own `sh -c` names pi-launch in its command line and would otherwise wait on itself forever.
  */
-const alive = "ps -eo stat=,comm=,args= | grep -v '^Z' | grep -qE '^[^ ]+ +pi |/usr/local/bin/p[i]( |-launch)'";
+const alive = "ps -eo stat=,comm=,args= | grep -v '^Z' | grep -vE '^[^ ]+ +sh ' | grep -qE '^[^ ]+ +pi |/usr/local/bin/p[i]( |-launch)'";
 /** pi-launch sends Pi's stderr here, since dtach's terminal is gone once Pi exits. */
 const stderrLog = "/run/pi.err";
 const running = async (guest: Guest) => (await guest.exec(alive)).exitCode === 0;

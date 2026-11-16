@@ -43,6 +43,7 @@ const agentTable: Table<AgentState, AgentEvent> = {
   archived: {},
   "failed-archive": {},
 };
+const piExited = "Pi exited; attach to restart it on the same session";
 export const closed = (agent: Pick<Agent, "state">) => ["closing", "archived", "failed-archive"].includes(agent.state);
 
 /** The newest finished agents, read from their archive folders (<time>--<name>--<id>): each one's final agent.json plus its folder. */
@@ -381,6 +382,16 @@ export class Agents {
       );
     }
     this.#apply(agent);
+    // Pi can exit on its own (a crash, /quit) and then reports nothing, so an agent would stay busy forever: check, and say so.
+    agent.timers.add(
+      setInterval(async () => {
+        if ((agent.state !== "idle" && agent.state !== "busy") || agent.jobs.restart || agent.lastMessage === piExited) return;
+        if (await pi.running(guest).catch(() => true)) return;
+        note(live, "Pi exited");
+        agent.lastMessage = piExited;
+        this.#move(agent, "rest");
+      }, 30_000).unref(),
+    );
     agent.timers.add(
       setTimeout(() => {
         note(live, "deadline reached");
@@ -532,6 +543,7 @@ export class Agents {
     if (!["idle", "busy"].includes(agent.state)) throw new StatusError(409, `agent ${agent.id} is ${agent.state}`);
     if (await pi.running(agent.guest)) return false;
     await pi.restart(agent.guest);
+    if (agent.lastMessage === piExited) agent.lastMessage = undefined;
     note(agent.live, "Pi restarted after the owner quit it");
     return true;
   }

@@ -85,7 +85,8 @@ const piRunning = (agent: Agent) => {
 const attachHere = (agent: Agent) =>
   new Promise<void>((done, fail) => {
     console.error(`Attaching to ${agent.name} (${agent.id}). Ctrl-\\ detaches, and Pi keeps running.`);
-    const terminal = attach(agent.sessionId, ["dtach", "-a", "/run/pi.dtach"]);
+    // dtach's default redraw sends Ctrl-L, which is Pi's model selector; a resize signal redraws Pi without it.
+    const terminal = attach(agent.sessionId, ["dtach", "-a", "/run/pi.dtach", "-r", "winch"]);
     const child = spawn(terminal.file, terminal.args, { stdio: "inherit" });
     child.on("error", (error) => fail(new Error(`cannot start the terminal: ${error.message}`)));
     child.on("exit", () => done());
