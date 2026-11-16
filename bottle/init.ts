@@ -7,16 +7,19 @@ import {
   constants,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   statfsSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, platform } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, hostname, platform } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type parseArgs } from "node:util";
 import * as p from "@clack/prompts";
@@ -38,6 +41,7 @@ export const bottleFlags = {
   "skip-build": { type: "boolean" },
   "skip-register": { type: "boolean" },
   "skip-smoke": { type: "boolean" },
+  "skip-link": { type: "boolean" },
 } as const;
 export type BottleFlags = ReturnType<typeof parseArgs<{ options: typeof bottleFlags }>>["values"];
 
@@ -46,10 +50,28 @@ const MIN_FREE_GIB = 20;
 const WAIT_MS = 10 * 60_000;
 const SMOKE_PROMPT = "write the word hello to /output/hello.txt, then finish";
 
-const command = (cmd: string, args: string[]) => spawnSync(cmd, args, { stdio: "ignore" }).status === 0;
+const command = (cmd: string, args: string[], cwd?: string) => spawnSync(cmd, args, { stdio: "ignore", cwd }).status === 0;
 const stop = (message: string): never => {
   p.cancel(message);
   process.exit(1);
+};
+/** Links `bottle` into ~/.local/bin, so the Herdr mod, Herdr's + menu and the owner can type `bottle` anywhere. */
+const linkCli = () => {
+  const dir = join(homedir(), ".local", "bin");
+  const link = join(dir, "bottle");
+  const cli = join(here, "src", "cli.ts");
+  const found = lstatSync(link, { throwIfNoEntry: false });
+  if (!found) {
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(cli, link);
+    ok(`Linked ${link} -> ${cli}.`);
+  } else if (found.isSymbolicLink() && readlinkSync(link) === cli) ok(`bottle is already linked at ${link}.`);
+  else return p.log.warn(`${link} exists and is not this checkout's CLI; remove it, then run init again to link ${cli}`);
+  // Outside this repository the link runs on mise's global node.
+  if (!command("node", ["--version"], homedir()))
+    p.log.warn("No global node outside this repository, so `bottle` will not start there. Fix: mise use -g node@latest");
+  if (!(process.env.PATH ?? "").split(delimiter).includes(dir))
+    p.log.warn(`${dir} is not on PATH. Add it in your shell profile: export PATH="$HOME/.local/bin:$PATH"`);
 };
 /** At a terminal, asks to update an existing install; under --yes it needs --force. Returns true when it asked. */
 const confirmUpdate = async (what: string, fix: string, force: boolean, yes: boolean) => {
@@ -354,6 +376,12 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
   ok(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
+
+  if (
+    !flags["skip-link"] &&
+    (yes || answered(await p.confirm({ message: "Link `bottle` into ~/.local/bin so it runs from any folder (the Herdr mod needs it)?", initialValue: true })))
+  )
+    linkCli();
 
   const env = { ...process.env, BOTTLE_CONFIG: configPath };
   if (!flags["skip-build"]) {

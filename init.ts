@@ -24,7 +24,7 @@ const HELP = {
   --model ID            the model to use (needed when the server lists several)
   --image TAG           guest image tag (bottle-guest)
   --password-stdin      read speaker's owner password from standard input
-  --skip-build | --skip-register | --skip-smoke   leave out that step`,
+  --skip-link | --skip-build | --skip-register | --skip-smoke   leave out that step (link: bottle into ~/.local/bin)`,
 };
 const USAGE = `usage: mise run init [speaker | bottle] [flags]
 

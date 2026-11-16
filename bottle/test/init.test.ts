@@ -39,7 +39,7 @@ const scratch = (t: TestContext) => {
 
 // Asynchronous: the fake speaker and model servers live in this process and must keep answering.
 const run = async (args: string[], home: string) => {
-  const flags = [init, "bottle", "--yes", "--skip-build", "--skip-register", "--skip-smoke", ...args];
+  const flags = [init, "bottle", "--yes", "--skip-link", "--skip-build", "--skip-register", "--skip-smoke", ...args];
   return promisify(execFile)(process.execPath, flags, { env: { ...process.env, BOTTLE_HOME: home, BOTTLE_CONFIG: "", MSB_HOME: "" } }).then(
     (done) => ({ status: 0, ...done }),
     (failed: { code: number; stdout: string; stderr: string }) => ({ status: failed.code, stdout: failed.stdout, stderr: failed.stderr }),
@@ -129,7 +129,7 @@ const registering = async (t: TestContext, owner: string, typed: string) => {
   const dir = scratch(t);
   const speaker = await lockedSpeaker(t, owner);
   const model = await listen(t, "127.0.0.1", (_request, response) => response.end(JSON.stringify({ data: [{ id: "small" }] })));
-  const args = [init, "bottle", "--yes", "--skip-build", "--skip-smoke", "--password-stdin"];
+  const args = [init, "bottle", "--yes", "--skip-link", "--skip-build", "--skip-smoke", "--password-stdin"];
   args.push("--control-port", "7401", "--guest-port", "7402", "--speaker-url", `http://${lan}:${speaker.port}`, "--model-endpoint", `127.0.0.1:${model}`);
   const child = execFile(process.execPath, args, { env: { ...process.env, BOTTLE_HOME: join(dir, "h"), BOTTLE_CONFIG: "", MSB_HOME: "" } });
   child.stdin?.end(`${typed}\n`);

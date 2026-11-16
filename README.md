@@ -101,7 +101,7 @@ Ready for supervised use on your own network. bottle runs on macOS once `setsid`
 | `mise run bottle build bottle-guest` | Build the guest image and load it into microsandbox |
 | `mise run speaker:up` | Build and run speaker in its hardened container |
 
-Every `mise run bottle <command>` also works as plain `bottle <command>` once the CLI is on `PATH`: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle` from the repository root, with a global Node from `mise use -g node@latest` (see [bottle's README](bottle/README.md#build-and-run)). `mise run bottle help` lists the commands.
+Every `mise run bottle <command>` also works as plain `bottle <command>` once the CLI is on `PATH`: `mise run init bottle` offers to link it into `~/.local/bin`, and it needs a global Node (`mise use -g node@latest`; see [bottle's README](bottle/README.md#build-and-run)). `mise run bottle help` lists the commands.
 
 <!-- author: ai -->
 
