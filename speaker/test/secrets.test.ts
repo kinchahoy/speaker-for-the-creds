@@ -273,12 +273,8 @@ test('the catalog lists every secret to a direct agent, and an unknown secret is
   const agent = await s.agent('lister')
   const before = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as {
     secrets: Record<string, object>
-    text: string
   }
   assert.deepEqual(before.secrets, { GITHUB_TOKEN: { hosts: ['localhost'], env: 'GH_TOKEN', state: 'ask' } })
-  assert.match(before.text, /^- secret:GITHUB_TOKEN — for localhost \(set GH_TOKEN\)\. Not granted\.$/m)
-  assert.match(before.text, /^- folder:<share> and ssh:<target> — names are not listed;/m)
-  assert.doesNotMatch(before.text, /site:<any hostname>|\/me\b|curl/)
   const refused = await s.call('/_speaker/requests', {
     method: 'POST',
     headers: agent.headers,
@@ -489,10 +485,8 @@ test('a released secret: saved without hosts, read only after approval, audited 
   // Before approval: the catalog lists it as released with the route, no placeholder or variable; the read is refused.
   const before = (await (await s.call('/_speaker/catalog', { headers: agent.headers })).json()) as {
     secrets: Record<string, object>
-    text: string
   }
   assert.deepEqual(before.secrets['wifi-otnow'], { release: true, state: 'ask' })
-  assert.match(before.text, /^- secret:wifi-otnow — released: once granted you read the value yourself\. Not granted\.$/m)
   assert.equal((await s.call(route, { headers: agent.headers })).status, 403)
   // An inserted secret and an unknown one answer like an unknown route.
   for (const path of ['/_speaker/secrets/GITHUB_TOKEN', '/_speaker/secrets/NOPE'])

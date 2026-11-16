@@ -51,7 +51,7 @@ Your token works only from the address you enrolled from, so a leaked token is u
 
 ## What you can ask for
 
-`GET $SPEAKER_URL/_speaker/catalog` lists everything you may ask for, each with your state: granted (until a time), `ask` (not granted yet), or `never` (the owner blocks it). It lists services, secrets, and groups, plus your grants, SSH commands and requests. Its `text` field is the same list in plain English.
+`GET $SPEAKER_URL/_speaker/catalog` lists everything you may ask for, each with your state: granted (until a time), `ask` (not granted yet), or `never` (the owner blocks it). It lists services, secrets, and groups, plus your grants, SSH commands and requests.
 
 Two kinds are deliberately not listed: folders and SSH targets. Anyone who can reach speaker can enroll, so speaker does not hand out the names of the owner's machines. Use the exact name your task or the owner gave you. A name speaker does not know is refused with 400 and nothing reaches the owner.
 
@@ -81,7 +81,7 @@ After approval, the catalog lists complete command lines under `ssh`. Run its `k
 
 ## Secrets
 
-Ask for `secret:<NAME>`, with a name from the catalog. After approval, the catalog shows it under `secrets` with `environment` (a placeholder, not the token, plus `HTTPS_PROXY` and `SSL_CERT_FILE`), the allowed hosts, and the one-time `certificate` and `git` commands. Run those once. Then set the variables only on the command that needs them, so the placeholder goes nowhere else:
+Ask for `secret:<NAME>`, with a name from the catalog. After approval, the catalog shows it under `secrets` with `environment` (a placeholder, not the token, plus `HTTPS_PROXY` and `SSL_CERT_FILE`), the allowed hosts, and the one-time `certificate` and `git` commands. Run those once. In `HTTPS_PROXY`, `<token>` is the part after `Bearer ` in your header file; do not print it. Then set the variables only on the command that needs them, so the placeholder goes nowhere else:
 
 `GH_TOKEN=<placeholder> HTTPS_PROXY=<value> SSL_CERT_FILE=<value> gh pr list`
 

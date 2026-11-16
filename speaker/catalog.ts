@@ -3,7 +3,7 @@ import { type Agent, type Core, type Group, plural } from './core.ts'
 import type { Request } from './engine.ts'
 import { kindOf } from './items.ts'
 
-// What an agent sees of its own standing: GET /_speaker/catalog, as JSON and as plain markdown.
+// What an agent sees of its own standing: GET /_speaker/catalog, as JSON.
 
 // Per secret grant, everything the agent needs to use it through the proxy (the value is never shown).
 const secretsView = (core: Core, c: Context, agent: Agent) => {
@@ -37,7 +37,6 @@ const secretsView = (core: Core, c: Context, agent: Agent) => {
               until,
               environment: { [env]: placeholder },
               ...gitHint(hosts),
-              note: "Set the variable on the command that needs it, for example GH_TOKEN=... gh pr list. You need no proxy settings or certificate: your sandbox sends requests to these hosts through speaker's proxy, which swaps the placeholder for the secret.",
             }
           : {
               hosts,
@@ -48,81 +47,13 @@ const secretsView = (core: Core, c: Context, agent: Agent) => {
                 HTTPS_PROXY: `http://agent:<token>@${new URL(base).hostname}:${config.PROXY_PORT}`,
                 SSL_CERT_FILE: ca,
               },
-              token: '<token> is the part after "Bearer " in your header file; do not print it',
               certificate: `Run once: curl -s ${base}/_speaker/proxy/ca.pem -o "${ca}". SSL_CERT_FILE is for gh. For git, set GIT_SSL_CAINFO to the same file, or run git config --global http.sslCAInfo "${ca}".`,
               ...gitHint(hosts),
-              note: 'Set these only on the command that needs them, for example HTTPS_PROXY=... gh pr list. The proxy refuses every host except these.',
             },
       ]
     }),
   )
 }
-
-type Held = { state: string; until?: string | null }
-const heldText = ({ state, until }: Held) =>
-  state === 'granted'
-    ? until
-      ? `Granted until ${until} (UTC).`
-      : 'Granted, with no end.'
-    : state === 'never'
-      ? 'The owner never grants this.'
-      : 'Not granted.'
-// The catalog as plain markdown for a weak model; the sandbox tool pastes it into its own description, so it names no
-// routes and assumes nothing else was read.
-function catalogText(input: {
-  services: { id: string; mcp: boolean; read: Held; full: Held }[]
-  secrets: Record<string, { hosts?: string[]; env?: string; release?: boolean; read?: string } & Held>
-  groups: Record<string, { description?: string; items: string[]; also?: string }>
-  sandboxed: boolean
-  extensions: Record<string, { label: string; description: string; tools: string[]; sites: string[] } & Held>
-  mcp: Record<string, { label: string; tools: string[] } & Held>
-}) {
-  const section = (title: string, lines: string[]) => (lines.length ? ['', `${title}:`, ...lines] : [])
-  const tools = (names: string[]) => (names.length ? ` Tools: ${names.join(', ')}.` : '')
-  return [
-    'Things you can ask the owner for, and where each stands now. Name them exactly as written.',
-    ...section(
-      'Services',
-      input.services.map(
-        ({ id, mcp, read, full }) =>
-          `- ${id}.read — read${mcp ? ' (remote MCP server)' : ''}. ${heldText(read)} ${id}.full — read and change. ${heldText(full)}`,
-      ),
-    ),
-    ...section(
-      'Secrets (you use them without seeing them, except a released one)',
-      Object.entries(input.secrets).map(([name, { hosts, env, release, read, ...held }]) =>
-        release
-          ? `- secret:${name} — released: once granted you read the value yourself${read ? ` with ${read}` : ''}. ${heldText(held)}`
-          : `- secret:${name} — for ${hosts?.join(', ')} (set ${env}). ${heldText(held)}`,
-      ),
-    ),
-    ...section('Websites', input.sandboxed ? ['- site:<any hostname> — any website; ask for the exact hostname.'] : []),
-    ...section('Folders and SSH', [
-      '- folder:<share> and ssh:<target> — names are not listed; use the exact name your task or the owner gave you.',
-    ]),
-    ...section(
-      'Groups (one decision for several items)',
-      Object.entries(input.groups).map(
-        ([name, { description, items, also }]) =>
-          `- group:${name} — ${description ? `${description}. ` : ''}Contains: ${[...items, ...(also ? [also] : [])].join(', ')}.`,
-      ),
-    ),
-    ...section(
-      'Extensions',
-      Object.entries(input.extensions).map(
-        ([id, { label, description, tools: names, sites, ...held }]) =>
-          `- ext:${id} — ${label}: ${description}${tools(names)}${sites.length ? ` Needs sites: ${sites.join(', ')}.` : ''} ${heldText(held)}`,
-      ),
-    ),
-    ...section(
-      'MCP servers',
-      Object.entries(input.mcp).map(
-        ([id, { label, tools: names, ...held }]) => `- mcp:${id} — ${label}.${tools(names)} ${heldText(held)}`,
-      ),
-    ),
-  ].join('\n')
-}
-// Everything an agent may ask for and where it stands. Open services, targets and shares are never listed.
 
 // Everything an agent may ask for and where it stands. Open services, targets and shares are never listed.
 export function catalogView(
@@ -182,10 +113,6 @@ export function catalogView(
   )
   return {
     agent: {
-      id: agent.id,
-      label: agent.label,
-      agent: agent.agent,
-      source: agent.source,
       kind: agent.host ? 'sandboxed' : 'direct',
       status: mine.length ? 'active' : requests.some((r) => engine.statusOf(r) === 'pending') ? 'pending' : 'idle',
     },
@@ -206,18 +133,5 @@ export function catalogView(
     ssh: jump.commands(agent.id, new URL(baseOf(c)).hostname.replace(/^\[|\]$/g, '')),
     groups: groupsView,
     requests: requests.map((request) => ({ ...outcome(request), want: request.want, reason: request.reason })),
-    text: catalogText({
-      services: listed.map(([id, service]) => ({
-        id,
-        mcp: Boolean(service.mcp),
-        read: state(id, false),
-        full: state(id, true),
-      })),
-      secrets,
-      groups: groupsView,
-      sandboxed: Boolean(agent.host),
-      extensions,
-      mcp,
-    }),
   }
 }

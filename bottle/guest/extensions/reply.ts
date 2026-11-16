@@ -2,9 +2,9 @@
 
 /** The part of GET /_speaker/catalog the reply reads. */
 export type CatalogView = {
-  text?: string;
   secrets?: Record<string, { hosts: string[]; environment?: Record<string, string>; git?: string }>;
   services?: Record<string, { mcp?: boolean }>;
+  groups?: object;
   ssh?: { item: string; commands: string[] }[];
   grants?: { item: string; applying?: boolean }[];
   extensions?: Record<string, { tools: string[] }>;
@@ -22,7 +22,8 @@ export const FIXED_GUIDANCE = [
   "When the owner decides, you get a message starting `[speaker]` with one line per item saying what to do next. Do what the line says. A request can stay open for hours.",
 ].join("\n");
 
-export const toolDescription = (catalogText: string) => `${FIXED_GUIDANCE}\n\nWhat you can ask for right now:\n${catalogText}`;
+/** What the model sees of the catalog: the things it can ask for, each with its state (`ask`, `granted` until a time, or `never`). */
+export const toolDescription = (catalog: object) => `${FIXED_GUIDANCE}\n\nWhat you can ask for right now, as JSON (a site is asked for as site:<hostname>):\n${JSON.stringify(catalog, null, 1)}`;
 
 const until = (iso: string | undefined, now = Date.now()) => {
   if (!iso) return "";

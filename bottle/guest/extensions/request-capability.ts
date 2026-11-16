@@ -181,8 +181,8 @@ export default async function (pi: ExtensionAPI) {
   let catalogText: string;
   let catalogFailed = false;
   try {
-    catalogText = ((await call(speaker, "GET", "catalog")) as CatalogView).text ?? "";
-    if (!catalogText) throw new Error("speaker's catalog has no text");
+    const { services, secrets, groups, extensions, mcp } = (await call(speaker, "GET", "catalog")) as CatalogView;
+    catalogText = toolDescription({ services, secrets, groups, extensions, mcp });
   } catch (error) {
     catalogFailed = true;
     catalogText = `ERROR: could not read the list of what you can ask for from speaker (${(error as Error).message}). Tell the owner; do not guess item names.`;
@@ -192,7 +192,7 @@ export default async function (pi: ExtensionAPI) {
     defineTool({
       name: "request_capability",
       label: "Request capability",
-      description: toolDescription(catalogText),
+      description: catalogText,
       parameters: Type.Object({
         want: Type.Array(Type.String(), { description: "Items to ask for, written exactly as in this tool's description." }),
         reason: Type.String({ description: "One sentence on what this unblocks." }),

@@ -68,7 +68,7 @@ Both are explicit tables with one `transition()` (`lifecycle.ts`).
 
 **Denials.** A denied item tells the agent to stop. If it asks again anyway the owner sees it again, up to three denials; then speaker answers `denied` with `retry_after` (15 minutes, ISO 8601) without asking the owner, and the count restarts. Agents are not told asking again is possible.
 
-**Knowing where it stands.** `GET /_speaker/catalog` returns everything the agent may ask for with its state: services, live grants (`applying` until a sandbox host reports one in force), every secret (name, hosts, variable, state; the placeholder only once granted), exact SSH and folder commands, groups, its requests, and for sandboxed agents the host's `extensions` and `mcp`. `text` is the same as plain markdown for a weak model; `request_capability` pastes it into its description.
+**Knowing where it stands.** `GET /_speaker/catalog` returns everything the agent may ask for with its state: services, live grants (`applying` until a sandbox host reports one in force), every secret (name, hosts, variable, state; the placeholder only once granted), exact SSH and folder commands, groups, its requests, and for sandboxed agents the host's `extensions` and `mcp`. `request_capability` pastes the services, secrets, groups, extensions and mcp parts into its description as JSON.
 
 **Errors.** Every error is JSON: `error` (code), `message`, and where useful `next` (the exact call to make, or "stop"; when it points at docs it names a section) and `tell_user` (one line with the approval link). 401s carry `WWW-Authenticate` and a `Link` to help. `enroll` does not disclose why a token failed. Shape and codes are defined once (`errorBody`, `ErrorCode` in `items.ts`); bottle reuses them.
 
