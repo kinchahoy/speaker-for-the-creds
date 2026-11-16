@@ -70,6 +70,10 @@ const ATTACHABLE = ["starting", "idle", "busy", "reconfiguring"];
 const CLOSED = ["closing", "archived", "failed-archive"];
 const attachCommand = (id: string) => (SELF === "bottle" ? `bottle attach ${id}` : `cd '${root}' && ${SELF} attach ${id}`);
 
+/** What the owner reads after Pi quits: the agent (its VM, files, and grants) is still up; only Pi is not. */
+const piQuit = (id: string) =>
+  `Pi quit, but agent ${id} is still running: its VM, files, and grants are kept. ${SELF} attach ${id} restarts Pi on the same session; ${SELF} stop ${id} archives the agent and shuts its VM down.`;
+
 /** Whether Pi still runs in the guest: dtach removes its socket when Pi exits (the owner quit it). */
 const piRunning = (agent: Agent) => {
   const check = attach(agent.sessionId, ["test", "-S", "/run/pi.dtach"]);
@@ -266,7 +270,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     await attachHere(agent);
     const after = await byId(id);
     if (!after || CLOSED.includes(after.state)) return void console.log(`${id} is ${after?.state ?? "archived"}. Archive: ${outputDir}`);
-    if (!piRunning(after)) return void console.log(`Pi exited; ${id} stays open. ${SELF} attach ${id} resumes the session, ${SELF} stop ${id} archives it.`);
+    if (!piRunning(after)) return void console.log(piQuit(id));
     console.log(`Detached; ${id} keeps running.`);
     await openTab(config, id);
     console.log(`Attach: ${attachCommand(id)}`);
@@ -307,8 +311,7 @@ async function main(command: Command_, values: Values, positionals: string[]) {
     if ((await api(controlApi.agents[":id"].resume.$post({ param: { id: agent.id } }))).resumed)
       console.log("Pi had exited; restarted it on the same session.");
     await attachHere(agent);
-    if (!piRunning(agent))
-      console.log(`Pi exited; ${agent.id} stays open. ${SELF} attach ${agent.id} resumes the session, ${SELF} stop ${agent.id} archives it.`);
+    if (!piRunning(agent)) console.log(piQuit(agent.id));
   } else if (command === "stop") {
     const agent = await resolveAgent(positionals[0]);
     await api(controlApi.agents[":id"].close.$post({ param: { id: agent.id } }));
