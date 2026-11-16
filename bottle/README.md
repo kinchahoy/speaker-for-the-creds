@@ -13,7 +13,7 @@ bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/
 
 <sub>AI-written</sub>
 
-The Linux host needs hardware virtualization, KVM access, Docker for image builds, and `setsid`. Add the service account to the `kvm` group, then start a new login session. Run the service as the owner account that holds its configuration and archives.
+The host needs hardware virtualization, Docker for image builds, and `setsid`. On Linux, add the service account to the `kvm` group, then start a new login session. bottle also runs on macOS (Hypervisor.framework) once `setsid` is installed with `brew install util-linux`; `start.sh` finds Homebrew's keg-only copy. Run the service as the owner account that holds its configuration and archives.
 {.ai}
 
 From the repository root, run `mise trust && mise install` once, then:
@@ -78,7 +78,7 @@ bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whet
 
 `bottle register` names the host after the machine (`--name` overrides). Registering again from the same machine and name leaves the old entry until you approve the new one, which then replaces it.
 
-To type `bottle` instead of `mise run bottle`, link the CLI onto `PATH` once: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle` (from the repository root). The Herdr mod and the Herdr + menu program below need it.
+To type `bottle` instead of `mise run bottle`, link the CLI into a folder on your `PATH` once, from the repository root: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle`. Outside this repository the link runs with mise's global `node`, so set one once with `mise use -g node@latest`. mise and uv have no command that puts a local Node script on `PATH` (mise's `[env] _.path` applies only inside the repository, and `uv tool install` is for Python), and pnpm's global link needs pnpm itself installed globally. On macOS, `~/.local/bin` is not on `PATH` by default; add it, or link into another folder that is. The Herdr mod and the Herdr + menu program below need `bottle` on `PATH`.
 
 Launch and inspect an agent:
 {.ai}
@@ -93,7 +93,6 @@ bottle stop [<id>]
 bottle help run         # per-command usage
 ```
 
-Every `mise run bottle <command>` also works as plain `bottle <command>` after `pnpm -C bottle link --global` (run `pnpm setup` once first if pnpm's global bin directory is not on your PATH).
 
 To keep the service running across logouts and reboots, run it as a systemd user service. Replace `<repo>` with this checkout's path, and `/usr/bin/mise` with what `command -v mise` prints:
 
@@ -397,7 +396,7 @@ Before deployment, verify register, launch, request, approval, expiry, revocatio
 - certificate inheritance through dtach
 - terminal behavior
 
-Not yet verified: macOS (entitlements and FUSE in the guest kernel), many concurrent VMs, and terminal resize.
+bottle runs on macOS (confirmed 2026-11-15). Not yet verified: folder mounts (FUSE in the guest) on macOS, many concurrent VMs, and terminal resize.
 {.ai}
 
 - A missing `setsid` stops startup with a clear error. So does a microsandbox storage folder or parent that is group- or world-writable.

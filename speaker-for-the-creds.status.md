@@ -14,10 +14,11 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 ## 2026-11-15 22:30 · paused
 
 **Next**
-- Owner: decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button on the Herdr inbox's finished rows); written up under Future work in `plan.md`.
+- Owner: decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button on the Herdr inbox's finished rows); written up under Future work in the root README (`plan.md` is removed; it was all done).
 
 **Open**
-- Docs pass done against the latest commits (Pi load wait, attach restarting a quit Pi, init's Enter-to-check, the mod's bottle machine and 10 s inbox poll, `mod.open:speaker`). Two ways to put `bottle` on PATH stay documented (`ln -s` in bottle's README, `pnpm link --global` in both READMEs).
+- bottle runs on macOS with `setsid` (util-linux) installed; docs say so. One documented way to put `bottle` on PATH: symlink into `~/.local/bin` plus a mise global Node.
+- Docs pass done against the latest commits (Pi load wait, attach restarting a quit Pi, init's Enter-to-check, the mod's bottle machine and 10 s inbox poll, `mod.open:speaker`).
 
 ## 2026-11-15 21:10 · paused
 

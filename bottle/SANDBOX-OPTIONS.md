@@ -24,7 +24,7 @@
 - Every client in the guest must honour the proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`) and trust speaker's proxy CA for secret hosts.
 - microsandbox refuses a storage folder that other accounts could write; its storage must be mode 700.
 - The egress gateway is a high-value host process and needs the same care as speaker's proxy.
-- Not yet verified: macOS (entitlements and FUSE in the guest kernel), `sshfs` throughput over vsock, many concurrent VMs, terminal resize.
+- Runs on macOS (confirmed 2026-11-15, with `setsid` from util-linux). Not yet verified: FUSE in the guest on macOS, `sshfs` throughput over vsock, many concurrent VMs, terminal resize.
 
 **Later: pre-warmed snapshots (idea, 2026-11-15).** A launch takes a few seconds: the VM boots in about 2 s, then Pi loads from a cold guest disk (it runs as `node-MainThread` until loaded). microsandbox 0.7.15 can restore a full snapshot (memory included) with `Sandbox.restore()`, rebinding host folders, and can copy a running VM with `fork()`; `cowMemory()` lets restored VMs share unchanged memory pages (an idle agent holds about 410 MiB today).
 {.ai}

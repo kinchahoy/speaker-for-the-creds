@@ -16,12 +16,12 @@ This repository lets you approve each use of your API keys, SSH hosts and folder
 
 <sub>AI-written</sub>
 
-You need a Linux machine with these installed:
+You need a Linux machine or a Mac with these installed:
 {.ai}
 
 - `mise`
 - Docker, to build the guest image
-- `setsid` and access to `/dev/kvm`, to run the VMs
+- `setsid` (on macOS: `brew install util-linux`), and on Linux access to `/dev/kvm`, to run the VMs
 
 Optional: `sshd`, so you have an SSH target to test, and `sshfs`, to give direct agents folders. Without `sshfs` they use `sftp` or `scp`.
 {.ai}
@@ -70,7 +70,7 @@ Pi needs a model server. `init` asks for an OpenAI-compatible one. To use a host
 
 <sub>AI-written</sub>
 
-Ready for supervised use on your own network. Not yet tested on macOS or for long unattended runs. Before you rely on it, check the real upstream URL, TLS, private routing, and the approval flow. To run speaker in Docker, see [its README](speaker/README.md#docker-and-home-server-deployment).
+Ready for supervised use on your own network. bottle runs on macOS once `setsid` is installed (confirmed 2026-11-15). Not yet tested for long unattended runs. Before you rely on it, check the real upstream URL, TLS, private routing, and the approval flow. To run speaker in Docker, see [its README](speaker/README.md#docker-and-home-server-deployment).
 {.ai}
 
 <!-- author: ai -->
@@ -101,7 +101,19 @@ Ready for supervised use on your own network. Not yet tested on macOS or for lon
 | `mise run bottle build bottle-guest` | Build the guest image and load it into microsandbox |
 | `mise run speaker:up` | Build and run speaker in its hardened container |
 
-Every `mise run bottle <command>` also works as plain `bottle <command>` after `pnpm -C bottle link --global` (run `pnpm setup` once first if pnpm's global bin directory is not on your PATH). `mise run bottle help` lists the commands.
+Every `mise run bottle <command>` also works as plain `bottle <command>` once the CLI is on `PATH`: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle` from the repository root, with a global Node from `mise use -g node@latest` (see [bottle's README](bottle/README.md#build-and-run)). `mise run bottle help` lists the commands.
+
+<!-- author: ai -->
+
+## Future work
+
+<sub>AI-written</sub>
+
+Ideas, not decided. None is started until the owner says go.
+
+- **Save chosen agents to Atuin threads.** Most bottle runs are throwaway tests, so nothing is pushed automatically. A `bottle thread <id>` command pushes one archived agent's `_control/pi-session.jsonl` to Atuin threads, with `agent.json` (id, name, template, model, closed time) and the launch folder as metadata, and writes `_control/atuin.json` so a second push is caught. The Herdr inbox's Recently finished rows get a **Save to Atuin** button that runs the command on the bottle machine (as Stop does), and show "in Atuin" once saved; `finishedAgents()` reads the marker. Saved agents then appear in Atuin's own Herdr mod (herdr-atuin-threads) beside other agent sessions. About 30 lines. Limits: the inbox lists only the last five finished agents, and Atuin must be installed where bottle runs. Before building: check Atuin's push command and flags, and keep it local-only; uploading transcripts to Atuin's backend is a boundary question for the owner.
+- **Model calls to Langfuse.** Every model call already passes the model door and lands in `model-calls.jsonl`, whatever the harness. An exporter run at archive could send them to Langfuse with the agent id as the session. Harness-native OpenTelemetry (Codex, Gemini CLI, Claude Code) adds tool spans but needs new egress from the VM, so it would go through a bottle door.
+- **Pre-warmed VM snapshots** for faster launches: see [bottle/SANDBOX-OPTIONS.md](bottle/SANDBOX-OPTIONS.md).
 
 <!-- author: ai -->
 
