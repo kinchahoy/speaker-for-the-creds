@@ -2,6 +2,8 @@
 
 <sub>AI-written · 2026-11-15 · Proposal only; no implementation authorized by this document.</sub>
 
+**Implementation note:** These are detailed design recommendations based on the code and screenshots reviewed on the date above. By implementation time, the codebase, available integrations, or product behavior may have changed. The implementing agent should re-check the current behavior and adapt the proposed layouts and implementation where a different approach better serves the owner's intent. Preserve the information priorities, capabilities, and security boundaries; explain material departures rather than mechanically implementing a stale design. Illustrative labels and data below are examples, not additional verified runtime facts.
+
 ## Product intent
 
 The owner needs command and control over several agents: usually one or two, commonly four or five, occasionally eight to ten. The everyday questions are: **What is running? What is it doing? Does it need a decision? How can the owner join it? What access does it retain?**
@@ -45,8 +47,8 @@ Agents has this reading order:
 
 1. Compact status line: `4 agents · 2 requests need approval`, plus an honest refresh/connection state.
 2. **Needs attention**, only when present: pending agent requests, new host registration requests, and actionable runtime/enforcement failures. Visually distinguish approval requests from faults; a fault never receives an approval button.
-3. **Current agents**, ordered consistently, with work summary, runtime status where known, a Join action where supported, and a concise access summary.
-4. **No current access**, collapsed by default when populated: enrolled agents without live grants, launch-held capabilities, or open sessions. Do not label them stopped merely because access expired.
+3. **Current agents**, ordered consistently, with work summary, runtime status where known, a Join action where supported, and visible endpoint/access rows.
+4. **No current access**, collapsed by default when populated: other enrolled agents without live grants, launch-held capabilities, or open sessions. Known-running agents stay in Current agents even without access. Do not label agents stopped merely because access expired.
 5. A compact **Hosts** disclosure with connection/enforcement health and a route to host management. Healthy hosts are supporting infrastructure; pending host trust decisions remain prominent above.
 
 When nothing needs attention, omit that region entirely or show one quiet inline `No decisions waiting`. Current agents become the page's first substantive content. Do not retain a large empty Inbox panel.
@@ -67,13 +69,14 @@ Needs attention
   [Review capabilities]                [Approve for 1h] [Deny]
 
 Current agents
-  Notes research     Waiting for approval             [Join]
+  Agent/task           Machine   Endpoint                Access  Expires
+  Notes research       laptop    notes.example/api       R       42m
+  Waiting for approval [Join]    search.example/mcp      Tools   42m
   Latest message: Found two sources; needs search access
-  Access: 3 grants · next expiry in 42m                 [Details]
 
-  Home audit         Working                          [Join]
+  Home audit           server    home.example/api        R       18m
+  Working [Join]
   Latest message: Checking device configuration
-  Access: 2 grants · next expiry in 18m                 [Details]
 
 No current access (2) ▸     Hosts (1) ▸
 ```
@@ -115,7 +118,7 @@ These are presentation structures, not instructions to fabricate unavailable fie
 - Implement the Agents destination using the same authoritative speaker view for pending and current access. Derive counts from that view rather than separately timed panel snapshots.
 - Preserve `request-*`, `agent-*`, `grant-*`, and host registration deep links. A link to collapsed content must open and reveal it below the sticky header.
 - Keep ordering stable during review. Place newly relevant attention items prominently without jumping the focused card or moving an approval button under the pointer. On initial load use oldest pending first; runtime faults have their own labeled group.
-- Use a simple list of agent sections rather than a grid of equally weighted dashboard tiles. Ten agents should remain scannable without ten fully expanded grant lists.
+- Use aligned agent row groups rather than a grid of equally weighted dashboard tiles. Keep the compact endpoint/access rows visible; reserve expanded detail for diagnostics and longer descriptions.
 - Retain search and capability filters in a compact disclosure/tool row. Filtering must show a visible filtered state and clear action; distinguish “no matches” from “no agents.” A global attention count must not disappear just because a filter hides a request.
 
 **Acceptance:** with zero pending requests and four current agents, the owner immediately sees those agents. With a pending request for an existing agent, its current access is available in place, without a tab change. Existing bookmarked request links still reach the intended decision.
@@ -229,9 +232,322 @@ These are presentation structures, not instructions to fabricate unavailable fie
 - Keep the existing general identity and light/dark support. Reduce the header's visual dominance and use restrained borders/spacing to group agent content. A rebrand or new component framework is unnecessary.
 - Four text roles suffice: page/section title, agent/resource name, body/scope, metadata. Reserve bold for identity, decisions, and meaningful exceptions. Use monospace for exact identifiers and commands, not every URL or description.
 - Primary emphasis belongs to the current approval or Join/Start context; routine Delete/Remove/Revoke controls should not form a repeated red column in the overview. Dangerous scope remains explicit when those controls are opened.
-- Keep desktop lists reasonably dense while retaining generous decision controls on phones. Target four or five collapsed agent summaries in a typical desktop panel when practical; validate at the actual Herdr dialog size rather than forcing a fixed row height.
+- Keep desktop lists reasonably dense while retaining generous decision controls on phones. Validate scanning four or five agents with representative permission rows at the actual panel size, without forcing fixed heights or hiding their endpoints to meet an arbitrary row count.
 - Use color plus text for status, enforce visible focus, preserve keyboard order, and announce decision outcomes without reading every polling update. Check actual light/dark contrast rather than judging screenshots alone.
 - Independent failures need independent messages: speaker sign-in expired, speaker unreachable, bottle unreachable, model unavailable, archive failed. `Nothing waiting` is only valid after a successful authenticated request. Keep last-known data with its timestamp rather than clearing it into a false empty state.
+
+## Detailed surface layouts and behavior
+
+The layouts below make the recommendations executable. They supersede earlier shorthand wherever that shorthand suggests hiding current permissions behind a count. Brackets indicate controls; example values are illustrative. Use existing supported fields and actions; unavailable integrations remain subject to the implementation boundaries below.
+
+### A. Shared shell and navigation
+
+**Before:** large brand header, Live/Refresh, Inbox/Active/Setup/Log tabs, explanatory sentence, then page controls.
+
+**After, wide web:** one compact brand/status row, then `Agents [2] | Activity | Setup`. The badge counts undecided requests, not capabilities. Put page title and relevant page action on one line below navigation; omit repeated explanatory prose once the screen labels explain the task. Keep Refresh beside the connection state. Setup is always reachable.
+
+**Phone:** use the same three visible navigation destinations, with smaller branding rather than a horizontally scrolling tab strip. Place the page action alongside its title when it fits, otherwise directly below. Connection problems appear as a text banner below navigation, with last-successful-refresh time and Retry. Do not attach a global green Live state to a screen whose data has not refreshed successfully.
+
+**Long/error states:** navigation labels never truncate; status can wrap. A failure banner occupies document flow rather than obscuring a decision. Signing in returns to the intended request or section when possible.
+
+### B. Current agents and live access
+
+**Before:** agent name, model/harness, uses, full last-used timestamp, five counters, then indented grants with duplicate scope names, URLs, meters, timestamps, and large buttons.
+
+**After, wide web:**
+
+```text
+Agent / task             Machine        Endpoint / target         Access  Expires  Actions
+Notes research           MacBook Air    notes.invariant.cc/api     R       55m      Extend · Revoke
+Working · Pi / deepseek                 hoarder.invariant.cc       R/W     1h 20m   Extend · Revoke
+[Join] [Details] [⋯]
+Latest message: Comparing the saved sources
+2 uses · last used 5m ago
+──────────────────────────────────────────────────────────────────────────────────────────
+Home audit               PrimeX         home.example/api           R       18m      Extend · Revoke
+Idle · Pi / kimi
+[Join] [Details] [⋯]
+Latest message: Waiting for the next instruction
+```
+
+- Give Agent and Endpoint the most width; Machine, Access, Expires, and Actions have consistent narrower columns. Repeat the column header once per collection. Use semantic row groups or equivalent accessible associations, not arrow characters as the only parent relationship.
+- Agent cell contains task label, runtime state, short harness/model, Join, Details, and an accessible Agent actions menu. Machine is a distinct column; unknown machine is explicitly Unknown, not inferred from the source IP.
+- Each endpoint row has its own scope, expiry, and controls. Wrap a long endpoint within that column; do not hide its distinguishing path or stretch the whole page. For non-URL targets show meaningful account/host/share/extension identity. Tool scope must reflect the actual grant rather than an invented generic permission.
+- Put latest message and usage on separate full-width supporting lines within the row group, after the access rows. The message shows two lines plus Expand when longer; warnings and enforcement faults remain fully readable in their affected rows. Details reveals original name, stable ID, full model/identity, exact timestamps, and tallies.
+- Place `Until revoked`, `Applying`, and `Host unavailable; enforcement unconfirmed` in the expiry/state area as text. A state label can add a second line; never conceal it behind a status dot.
+- Agent actions contains Revoke agent and, for bottle runs, Stop and archive. Keep them separate and explain consequences in confirmation. Join reuses the existing run/session.
+
+**Phone/narrow Herdr:** agent heading, machine/state line, Join/Details/Actions; then latest message; then a mini-list `Endpoint | Access | Expires`, with each row's Extend/Revoke immediately beneath it. Full endpoint may wrap. This is a structural reflow, not a horizontally scrolling six-column table. Agent identity is repeated once per group, not per permission.
+
+**States:** no permissions says `No current grants` while preserving launch-held capabilities or sessions below; known-running agents with no grants stay in Current agents. The collapsed No current access section is for other enrolled identities, not a way to hide known-running processes. No agents shows one enrollment/launch hint, not an empty card per subsection. A pending request adds a link to its sole decision form in Needs attention. Ten agents preserve stable ordering and scroll naturally.
+
+### C. Approval requests and host trust requests
+
+**Before:** full self-reported identity/source line, reason block, every capability's exact ID and explanatory text, duration selector and approval controls.
+
+**After:**
+
+```text
+Notes research                         MacBook Air · requested 2m ago
+research bundle · 6 capabilities        Duration [1h ▾]
+Target / scope: notes.example/api R · search.example MCP · 4 more [Review]
+Reason: Find sources for the comparison
+Warning: [any consequential server-reported warning, fully visible]
+[Approve for 1h] [Deny]                 [Identity details]
+```
+
+- Unbundled requests show each requested target/access row by default; do not conceal the sole target behind Review. Bundles show recognizable scope context and a member count; Review opens the complete member table directly above the same decision controls.
+- Review columns: selection checkbox, endpoint/target, access/kind, dependency/lifetime warning. Group heading includes the existing select-group checkbox. Exact item IDs and descriptions may occupy a secondary line. All individual selection remains available on web; Herdr can deep-link to web until native subset selection is implemented.
+- Duration and action stay within this request, never in a global footer. Selected subsets change the action text to `Approve selected for 1h`. Preserve server-supported durations. An edited form remains open and unchanged through polling.
+- Identity details contains agent-reported harness/model versus speaker-known host, source, key identity, and duplicate-enrollment notice. Put any identity warning that changes the decision outside the disclosure too.
+- Host registration uses the same alignment but says `Trust sandbox host`, shows host name/source, requested enforcement kinds, and consequences of trust. It has no task reason or duration selector unless the backend actually supports those fields. Label actions Approve host and Deny host.
+
+**Phone:** identity, machine, bundle/targets, reason, warnings, duration, then full-width Approve and secondary Deny; Review stays immediately next to the scope summary. Long reasons expand, but meaningful requested scope and warnings do not truncate.
+
+**States:** deciding disables only that form; already-decided requests show their actual outcome and then leave attention after acknowledgment/refresh without a false success toast. A failure stays beside its form with choices retained. No pending requests removes the region. Runtime faults use a separate fault row with Inspect/Retry where supported, never Approve.
+
+### D. Herdr operating dialog and docked bar
+
+**Before:** pending list → bottle agents → finished list → launch matrix → separate grants → settings, all in one scroll.
+
+**After, approximately 520px dialog:**
+
+```text
+Speaker                 [New agent] [Web] [Close]
+Speaker: connected      bottle: connected · refreshed 4s ago
+
+Needs attention (1)
+[compact request from layout C]
+
+Current agents (4)
+Notes research                       [Join] [⋯]
+MacBook Air · Working · Pi / deepseek
+Latest message: Comparing saved sources
+Endpoint                         Access  Expires
+notes.invariant.cc/api           R       55m
+                                 [Extend] [Revoke]
+[Details]
+
+Recently finished (3) ▸
+Connections and sign-in ▸
+```
+
+- Use the stacked agent layout by default at the current dialog width; use parallel columns only when the actual available width supports them. Do not enlarge the dialog solely to avoid responsive design.
+- Web opens the same product location; contextual request/agent links retain their target. New agent opens layout E, with Back restoring prior scroll and disclosures. Settings does not occupy the normal scroll until opened.
+- The bar says `Speaker · 1 approval · 4 bottle agents`; clicking opens attention when present, otherwise current agents. Signed out and connection failures replace reassuring empty-state copy. A compact count never claims coverage of direct agents absent from its data.
+
+**States:** speaker failure does not erase usable bottle rows, and bottle failure does not hide speaker requests. Keep last-known data labeled stale. An archive failure is an attention item even with finished history collapsed. Do not focus the password field when already signed in or move focus on routine polls.
+
+### E. Launch form
+
+**Before:** optional prompt and comma-separated folder input followed by one instant-launch button for every template/model combination.
+
+**After:**
+
+```text
+New agent                                      [Back]
+Machine        MacBook Air [current configured bottle machine]
+Template       [builder ▾]     Model [deepseek ▾]
+Template scope: [selected template description and requested bundle]
+Task           [optional prompt, multiline]
+Name           [optional owner name; otherwise agent proposes label]
+Execution      Detached / unattended [actual configured semantics]
+
+Folders                         Guest destination        Access
+~/agent-space                   [actual destination]     R/W
+[extra folder input; existing syntax supported]
+Launch-held capabilities: [actual extension list]
+
+[Start agent] [Cancel]
+```
+
+- Template and model selections do not execute. Changing template applies its existing default model only while the owner has not explicitly overridden it. Show missing/unavailable model status beside Model.
+- Machine is read-only if only one bottle machine is currently configured; selecting arbitrary remote hosts is not a new feature in this pass. Execution is read-only if Herdr only supports the current detached launch behavior; expose choices only when semantics are implemented.
+- Display known default and extra mount scope. Do not manufacture guest destinations before they can be resolved; label unresolved preview explicitly. Extra folder parsing errors appear next to that input. Advanced syntax remains available.
+- Start and Cancel are bottom actions. Start hands off to a launch-progress region/terminal link; it does not announce Working before runtime confirms it. Preserve inputs on failure, clear after successful handoff, and prevent duplicate launches.
+
+**Phone/narrow:** Template and Model stack; folder rows become path/destination/access blocks. Keep this launch UI in Herdr initially; adding web/phone launch controls requires the authorized control integration, not direct browser access to bottle. No templates shows a templates-loading/error state with Retry; never an empty unlabeled button grid.
+
+### F. Setup navigation and service catalogue/editor
+
+**Before:** anchor buttons above a long page containing every configuration section; service name/URL/policy/notes metadata in one paragraph and Edit/Log/Delete beside every row.
+
+**After:** Setup section navigation selects one resource collection at a time: Services, Secrets, Groups, SSH targets/shares, Hosts, Owner security. Desktop uses a small side navigation; phone uses a labeled section selector. Retain linkable sections and legacy links. Collection heading has Add; editing replaces or opens a dedicated labeled editor region with Back, not a form appended above a distant list.
+
+```text
+Services                                         [Add service]
+Name          Endpoint                         Read   Write  Credential  Actions
+obsidian      notes.invariant.cc/api            Ask    Ask    Set         Edit · ⋯
+context7      mcp.context7.com/mcp              Ask    Ask    Not needed  Edit · ⋯
+              MCP
+homeassistant homeassistant.example.com/api    Ask    Ask    Missing     Edit · ⋯
+```
+
+- Read/Write are policy columns (`Ask`, `Open`, `Never` as supported), not R/RW grants. Missing remains readable; configured/keyless states are neutral text. Overflow contains Activity and Delete with existing confirmation. Notes content belongs in the editor, not `notes yes/no` in every overview row.
+- Editor field order: Identity (service ID, full upstream URL); Authentication (type, conditional header name, blank-keeps-current credential); Policy (read rule, write rule); advanced Read POST paths; MCP classification; Notes. Configured advanced sections start open so current behavior is not hidden. Keep MCP enabled state and classification summary visible when relevant, with Refresh tools and exact failure message nearby.
+- Save service and Cancel/Back sit after fields, followed by a separate destructive action region when editing. Show actual grant-changing consequences before Save. Do not change edit/rename semantics just to match the sketch.
+
+**Phone:** Name, endpoint, labeled Read/Write/Credential line, Edit/More. Editor is one column. Long endpoints wrap, long notes use their own textarea. Empty catalogue shows Add service plus one explanatory sentence. Validation preserves all nonsecret inputs and identifies any secret that must be re-entered; never render a saved credential into the form.
+
+### G. Secrets catalogue/editor
+
+**Before:** name plus `Agent sees ENV · sent only to host, host...`; separate Add or change form requires remembering the name; Delete is the row action.
+
+**After:**
+
+```text
+Secrets                                                   [Add secret]
+Name           Allowed destinations          Agent variable   Actions
+GITHUB_TOKEN   api.github.com                GITHUB_TOKEN     Edit · ⋯
+               github.com
+```
+
+- Keep allowed hosts in their own column, one per line rather than embedded in prose. For unusually long lists show first two plus `N more` opening the full list in place; the editor always shows all hosts. Do not treat a host count as sufficient identification.
+- Edit prefills the current name, allowed hosts, and environment-variable mapping using the existing save operation; value remains empty. Field order: Name, Agent variable, Allowed hosts, Value. Label Value `Replace value; blank keeps current`. Adding uses `Value`, with applicable validation.
+- Save secret/Cancel follow the fields. Put the existing warning about host additions ending grants next to the host field and Save. Delete moves to More and retains its confirmation. Only display configured/missing state if established by the available secret metadata; existence of an entry is not a new health check.
+
+**Phone:** name/actions, Allowed destinations block, Agent variable line. Long hosts wrap independently. No secrets shows Add secret and the explanation of host-bound injection. Host validation errors stay beside Allowed hosts; never show saved secret text in confirmation, diagnostics, or success messages.
+
+### H. Groups catalogue/editor
+
+**Before:** group name, description, and entire comma-separated member list, then Delete and an Edit items disclosure.
+
+**After:**
+
+```text
+Groups                                                     [Add group]
+Group         Purpose                 Scope preview              Actions
+research      Read sources and notes  notes.example/api R         Edit · ⋯
+                                      search.example MCP
+                                      4 more [Members]
+```
+
+- Scope preview uses resolved descriptions where available plus exact membership in Members. Do not silently replace a missing/unresolvable member with a guessed endpoint. Member count alone is insufficient.
+- Members expands an aligned Target/Kind-or-access/Exact item table beneath that group, not a line of identifiers. Edit opens Group ID, Description, then one-item-per-line membership editor using existing parsing. Keep the identifier syntax reference beside the field. Save group/Cancel follow it.
+- State visibly that group edits affect new requests, pending requests retain their items, and deleting a group does not revoke existing grants. Delete remains secondary with its actual confirmation.
+
+**Phone:** group/purpose, up to two scope preview rows, Members/Edit/More. Long descriptions have their own expandable line. Empty groups offers Add group; invalid members preserve the input and show the validation explanation beside the member editor.
+
+### I. SSH targets and nested shares
+
+**Before:** account/address, sudo/root warning, sftp path, fingerprint, authorized_keys line, and addresses form all appear in each target; shares are a second unrelated list.
+
+**After:**
+
+```text
+SSH targets                                             [Add target]
+Target   Host:port        Account  File access       Warnings  Actions
+nas      nas.local:22     agent    SFTP available    —         Details · ⋯
+  Shares                                      [Add share]
+  Name       Path                         Delivery             Actions
+  scans      /srv/scans                   Over SSH             Details · ⋯
+  reports    /srv/reports                 Over SSH             Details · ⋯
+```
+
+- Root, passwordless sudo, unavailable file delivery, and home-directory share warnings stay visible beside the affected target/share. Show R/RW on share rows only if the current configuration actually defines that policy; a request's access mode is not an inferred share setting.
+- Target Details contains fingerprint, exact sftp-server path, authorized_keys line, and source-address restrictions. Source restrictions remain editable with Save addresses inside this detail region. Public-key installation instructions appear in Add target and a page-level Setup instructions disclosure, not repeated in full on every row.
+- Add target field order: name, host/port, account, source restrictions, optional sftp path; keep the explicit root acknowledgment and actual host-key pinning behavior. Errors in probing/trust remain visible beside this form.
+- Add share from within a target prefills its target; fields are name, target, absolute path. Changing target remains available. Shares with an unknown target appear in a labeled unresolved group rather than disappearing. Delete share/target stays in More with its actual cascading consequences.
+
+**Phone:** target name, host/account on separate labeled lines, file access and warnings, Details/More, then indented share rows. Long fingerprint/setup lines wrap or use selectable code blocks inside Details without causing page-wide overflow. With no targets, show Add target and instructions; with no shares, show Add share under each existing target.
+
+### J. Host management
+
+**Before:** healthy approved hosts are mixed into Active with supported kinds, source, and full registration timestamp in one line and a large Remove button.
+
+**After:**
+
+```text
+Hosts
+Host                Trust      Connection   Supported kinds                 Actions
+MacBook-Air.local   Approved   Connected    Secret Site Folder MCP Ext      Details · ⋯
+```
+
+- Trust and connection are independent columns. Show Unknown or Unavailable when current data cannot establish connection health. Supported kinds wrap as short text labels, not an overflowing sentence.
+- Details contains stable host ID, source address, registered timestamp, and available diagnostics. More contains Remove host, with explicit scope covering affected agents/grants. Pending trust requests live in Needs attention, with a route here after approval.
+- Phone stacks Host/Trust/Connection, then kinds and actions. No healthy hosts is a quiet empty state; pending hosts still display their decision forms. Lost connection immediately becomes visible both here and on affected access rows when established by the backend.
+
+### K. Activity and filter behavior
+
+**Before:** six always-visible filters above a table with repeated full identities and dates; results mix status, latency, and grant provenance in one cell.
+
+**After:**
+
+```text
+Activity                            201 entries · newest first
+[Search events                         ] [Filters ▾] [Apply]
+Agent: Notes research [×]             [Clear filters]
+Time    Agent / task    Machine       Operation / target                      Result
+19:01   Notes research MacBook Air   GET hoarder.invariant.cc/api/v1/bookmarks HTTP 200
+19:01   Notes research MacBook Air   GET hoarder.invariant.cc/api/bookmarks    HTTP 404
+19:00   Notes research MacBook Air   karakeep · R                             Granted
+```
+
+- Each event row has a Details disclosure. Put latency, exact timestamp, exact path/command, full identities, and grant provenance there. Preserve the distinguishable destination in the overview; method/path alone is insufficient across services. If historical endpoint/machine cannot be recovered, show the recorded service/identity, not a falsely current mapping.
+- Filters opens the existing Agent, Grant, Service, Target, Share fields as a two-column area on desktop and one column on phone. Apply uses existing server filtering; search submits with Enter too. Active filters remain visible outside the disclosure. Invalid/retired IDs retain their filter context instead of becoming Any.
+- Phone event order: time/result; agent/machine; operation/target; Details. Keep events in chronological order with separators. A full-width result label identifies HTTP error versus access denial versus refused request.
+
+**States:** no events and no filtered matches have distinct copy; filtered empty shows Clear filters. Display `Newest 500 of N matches` when capped. Query changes reset only results, not page navigation. An event detail does not close during unrelated refresh. Preserve records; no automatic grouping that removes audit evidence.
+
+### L. Recently finished runs
+
+**Before:** repeated template-like names, raw lifecycle state, full model ID; clicking the row implicitly opens an archive.
+
+**After:**
+
+```text
+Recently finished (3) ▾
+Task                    Machine       Outcome         Finished   Actions
+Compare inference costs MacBook Air   Archived        5m ago     Open archive · Details
+Fix checkout tests      PrimeX        Archive failed  12m ago    Inspect error
+```
+
+- Task uses the preserved label plus short ID on collisions. Details holds model, exact finish time, output path, and recorded error. Open archive respects the machine where the output resides; if remote opening is unsupported, show its location and explain that limit rather than opening an unrelated local path.
+- Archive failed remains in attention until genuinely resolved; merely opening its error must not mark it successful. No Resume action for archives unless implemented separately. Missing archives receive an explicit unavailable state, with no automatic deletion or recreation.
+- Phone stacks task/outcome, machine/time, explicit action. History disclosure can remain collapsed by default; failures are still surfaced above. No finished runs means omit the region or show one quiet line inside an opened history section.
+
+### M. Connections, owner sign-in, and password change
+
+**Before:** Herdr always shows three endpoint/machine inputs and Save near the bottom; owner password UI appears alongside other operational content when signed out.
+
+**After, Herdr Connections disclosure:**
+
+```text
+Component     Address                     Runs on        State
+Speaker       speaker.example.com         configured     Signed in
+bottle        127.0.0.1:7001               This computer  Reachable
+[Edit connections] [Open web]
+```
+
+- Edit connections opens the existing Speaker URL, Bottle URL, and Bottle machine fields in that order, with separate labels and their current default semantics. Save/Cancel are directly below. Changing speaker address keeps the existing token invalidation behavior; explain required sign-in beside Save. Do not pretend the configured control address is necessarily the public browser address.
+- Signed-out Herdr shows Speaker address, masked password, Show/Hide, and Sign in near the top. Keep bottle-only functions usable where already supported; do not claim that access decisions were fetched before authentication. On 401 offer sign-in; on 429 show retry guidance; do not automatically resubmit the password.
+- Web sign-in retains its focused single-column form and first-run distinction. Keep the plain-HTTP exposure warning visible, plus errors directly above the form. Preserve intended destination on successful sign-in where possible.
+- Setup → Owner security has a Change password form ordered Current password, New password, Repeat new password, then Change password/Cancel. Do not add session-expiry promises without checking current backend behavior. Secrets and password fields stay write-only/masked as appropriate; form state never persists credentials to disk.
+
+**Phone/narrow:** component rows stack labels; password fields remain at least 16px. Long URLs wrap in summaries and remain fully editable in inputs. Unknown/failed connection state is separate from signed-out state, with Retry targeting only the failed component.
+
+### N. CLI output
+
+**Before:** wide ID/STATE/MODE/PENDING/AGE/MODEL/NAME/LAST MESSAGE table, then long launch-extension and request lines; lifecycle messages repeat URLs and archive information.
+
+**After, wide `bottle ls`:**
+
+```text
+ID      TASK                      MACHINE      STATE              MODEL     AGE
+a12     Compare inference costs   MacBook Air  Awaiting approval  deepseek  19m
+        Latest: Found two sources; needs search access
+        Request r34: research bundle · requested 1h
+        Approve: https://speaker.example/admin#request-r34
+        Launch-held: ext:subagent, ext:pi-cc-monitor
+```
+
+- Keep command-ready ID first. Mode stays a labeled continuation field when it does not fit the header. If current output lacks task labels or machine metadata, preserve existing identity and label unknown values; implement transport only within the agreed scope. Use full model ID on its own line when no alias is available.
+- At narrow terminal widths switch to repeated labeled blocks, not an ever-wider table. Wrap summaries separately from IDs/URLs; never truncate command-ready identifiers or approval links. No interactivity or new TUI.
+- `run` prints the observed phase (`Starting`/`Waiting for approval`), then ID/task, machine/model/mode, and relevant next actions: Attach command, precise approval URL, archive destination. Attached runs preserve their existing attach behavior; this format does not introduce a new launch confirmation prompt.
+- `attach` states Reconnected or Restarted Pi on the same live session as appropriate. Detach explicitly says the run continues. `stop` prints Closing/archiving plus `bottle ls` as the existing progress route; Archived appears only once confirmed.
+- Finished output uses ID/task, outcome, and archive path on distinct fields; archive failure includes the existing recorded error/inspection location. `templates` keeps template ID/default model/description and a separate model availability list, rather than a matrix of implied launch actions. Help keeps current command names and syntax, grouped into Run/join, Inspect, and Host operations.
+
+**States:** no running agents differentiates bottle stopped from an empty running service. Errors identify the component/operation and retain useful ID/context. CLI examples do not imply new subcommands, flags, or recovery operations exist.
 
 ## Implementation boundaries and handoff
 
@@ -243,7 +559,7 @@ The following is proposed work for a subsequent agent, not a claim that the exis
 | Herdr correlation | bottle state includes `speakerAgentId`; requests include subjects | Owner payloads with explicit stable agent IDs and enough agent/enforcement context; never join by label |
 | Herdr access controls | Owner API currently lists grants, approves/denies whole requests, revokes grants | Narrow authenticated extension and agent-revocation routes; reuse existing core decisions, validation, audit behavior |
 | Phone work status | bottle state includes `summary`, `done`, runtime state; speaker web lacks this feed | Optional bounded host-reported telemetry through the existing authenticated host channel |
-| Herdr layout/launch | `herdr/mods/speaker/main.js`, `mod.json` | Reorder existing controls, agent disclosures, explicit launch form; use native Herdr theme and controls |
+| Herdr layout/launch | `herdr/mods/speaker/main.js`, `mod.json` | Reorder controls, visible permission rows, supporting-detail disclosures, explicit launch form; use native Herdr theme and controls |
 | CLI | `bottle/src/cli.ts` | Responsive text layout, lifecycle copy, precise approval links |
 
 Before adding an owner endpoint, inspect the current core path and preserve its semantics, server validation, authorization, and audit trail. Do not broaden grants, token binding, credential exposure, origin handling, or share containment. Browser sessions and owner bearer tokens remain separate. Herdr's token remains in memory. Do not persist passwords/tokens to make sign-in quieter.
@@ -252,7 +568,7 @@ Keep the present lightweight Hono/htmx, Commander, and Herdr components. Do not 
 
 Suggested execution sequence:
 
-1. Web Agents hierarchy, bundle-first request presentation, access disclosures, accurate state labels, and route compatibility.
+1. Web Agents hierarchy, bundle-first request presentation, visible endpoint/access rows, supporting-detail disclosures, accurate state labels, and route compatibility.
 2. Small owner payload/control additions, then Herdr supervision hierarchy and explicit launch form. Match identities before moving grants into rows.
 3. Phone telemetry integration if included in approved scope; otherwise clearly mark the visibility limit.
 4. Setup/Activity density, CLI consistency, and visual polish.
