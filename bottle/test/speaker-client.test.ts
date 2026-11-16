@@ -208,7 +208,7 @@ test("watchGrants receives granted items and reports applied ids to speaker", as
   reportApplied([grant.id]);
   const active = async () => {
     const grants = await (await fetch(`${url}/admin/panel/active`, { headers: owner })).text();
-    return grants.includes('<tr id="grant-') && !grants.includes("data-state=");
+    return grants.includes(' id="grant-') && !grants.includes("data-state=");
   };
   await until(active);
 });
@@ -242,7 +242,7 @@ test("extensions given at launch are recorded on the agent and shown in the Acti
   await speaker.createAgent("sealed run", "Test LLM · Pi on test", ["ext:subagent"]);
   const { grants } = await f.live();
   assert.match(grants, /sealed run/);
-  assert.match(grants, /<code>ext:subagent<\/code><br><small>Given at launch by the template/);
+  assert.match(grants, /title="ext:subagent: held for the task by the launch template/);
   assert.doesNotMatch(grants, /Revoke ext:subagent/);
   // Only extensions can be given at launch.
   await assert.rejects(speaker.createAgent("bad", "Test LLM · Pi on test", ["site:example.com"]), /400/);
@@ -547,7 +547,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
     assert.ok(!haystack.includes(realToken));
 
   // Revoked: the proxy refuses at once, and once the sandbox host drops the grant its route is gone too.
-  const grantId = (await f.live()).grants.match(/<tr id="grant-([^"]+)"/)?.[1];
+  const grantId = (await f.live()).grants.match(/ id="grant-([^"]+)"/)?.[1];
   assert.ok(grantId);
   await f.ownerForm("/grants/revoke", { id: grantId });
   // Inside a kept-alive tunnel the proxy answers 403 with its message; a new tunnel is refused at CONNECT.

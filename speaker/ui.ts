@@ -71,7 +71,7 @@ details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;l
 .log-filter{display:flex;flex-wrap:wrap;gap:0 8px;align-items:end;margin-bottom:8px}.log-filter>label{flex:1 1 220px}.log-filter button{margin-bottom:14px}.log-filter>details{flex-basis:100%}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
 .on{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}.on a:not(.action-btn){display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-round);color:var(--ink);text-decoration:none;font-size:.88rem}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:0 0 8px;font-size:.88rem}.kv dt{color:var(--dim)}.kv dd{margin:0;font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
-table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data-table th{text-align:left;color:var(--dim);font-size:.82rem;white-space:nowrap}table.data-table th,table.data-table td{padding:4px 12px 4px 0;border-top:1px solid var(--line);vertical-align:top}table.data-table td{overflow-wrap:anywhere}table.data-table td>details{margin:0}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more,table.data-table tr.more td{border-top:0;padding-top:0}.share td:first-child{padding-left:18px}
+table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data-table th{text-align:left;color:var(--dim);font-size:.82rem;white-space:nowrap}table.data-table th,table.data-table td{padding:4px 12px 4px 0;border-top:1px solid var(--line);vertical-align:top}table.data-table td{overflow-wrap:anywhere}table.data-table td>details{margin:0}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more,table.data-table tr.more td{border-top:0;padding-top:0}
 .dim{color:var(--dim)}.clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ah{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-height:32px}.ah .nt{display:flex;gap:8px;align-items:baseline;min-width:0}.ah .nt>*,.ah .md{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.ah .grow{flex:1}.ah q{color:var(--dim);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--dim);font-size:.84rem}.t .ic{width:14px;height:14px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .pop{position:relative}.pop>summary{min-height:28px;min-width:28px;justify-content:center}.pop>summary::after{content:none}.pop>div{position:absolute;right:0;z-index:5;width:min(92vw,420px);padding:10px 14px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);box-shadow:var(--shadow-3)}
@@ -361,6 +361,16 @@ const level = (item: string) => (/\.full$|:rw$/.test(item) ? 'RW' : /\.read$|^fo
 const addr = (url: string) => url.replace(/^https?:\/\//, '').replace(/\/$/, '')
 const under = (full: string, parent?: string) => (parent && full.startsWith(parent) ? full.slice(parent.length) : full)
 
+// An action, as an icon on a row and as a button in the row's open body on a phone.
+type Act = [Html, Html]
+const go = (href: string, icon: string, label: string, text: string): Act => [
+  html`<a class="ib" href="${href}" aria-label="${label}" title="${label}">${glyph(icon)}</a>`,
+  html`<a class="action-btn" href="${href}">${text}</a>`,
+]
+const post = (action: string, fields: Html, icon: string, label: string, text: string, confirm = ''): Act => [
+  button(action, fields, label, confirm, icon),
+  button(action, fields, text, confirm),
+]
 // The Agents panel: what needs a decision, then each agent with its access beneath it, then the quiet rest. The one
 // view gives every count; the panel is morphed every 5 seconds. Request cards are hx-preserve, so unticked items, a
 // chosen duration and an open Review stay.
@@ -443,24 +453,16 @@ export function agents(
     }
     const extendable = (g: Grant) => g.expiresAt !== null && g.grantedMs !== undefined
     const span1 = (g: Grant) => span(g.grantedMs ?? 0)
-    const extend = (g: Grant, text = false) =>
-      extendable(g)
-        ? button(
-            '/admin/grants/extend',
-            hidden('id', g.id),
-            text ? `Extend by ${span1(g)}` : `Extend ${g.item} by ${span1(g)}`,
-            '',
-            text ? '' : 'extend',
-          )
-        : ''
-    const revoke = (g: Grant, text = false) =>
-      button(
-        '/admin/grants/revoke',
-        hidden('id', g.id),
-        text ? 'Revoke' : `Revoke ${g.item}`,
-        `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`,
-        text ? '' : 'revoke',
-      )
+    const acts = (g: Grant): Act[] => {
+      const id = hidden('id', g.id)
+      const gone = `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`
+      return [
+        ...(extendable(g)
+          ? [post('/admin/grants/extend', id, 'extend', `Extend ${g.item} by ${span1(g)}`, `Extend by ${span1(g)}`)]
+          : []),
+        post('/admin/grants/revoke', id, 'revoke', `Revoke ${g.item}`, 'Revoke', gone),
+      ]
+    }
     const tag = (g: Grant) => html`id="grant-${g.id}" data-item="${g.item}" data-expires="${g.expiresAt ?? ''}"`
     const bundled = (g: Grant) =>
       g.bundledWith.length ? `comes with ${g.bundledWith.join(', ')} and ends with it` : ''
@@ -472,7 +474,7 @@ export function agents(
       const n = g.uses
         ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>`
         : ''
-      return html`<details class="gr ${cls}" ${tag(g)} title="${bundled(g)}"><summary class="rw">${ico(g.kind)}<span class="clip nm1">${name}</span><span class="clip dim mc">${note}</span><span class="lv ${lv === 'RW' ? 'w' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span><span class="n">${n}</span><span class="dim">${when(g)}</span><span class="acts">${extend(g)}${revoke(g)}</span></summary><div class="xb"><span class="dim">${note}</span>${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}">${plural(g.uses, 'use', 'uses')}</a>` : ''}<div class="bt">${extend(g, true)}${revoke(g, true)}</div></div></details>`
+      return html`<details class="gr ${cls}" ${tag(g)} title="${bundled(g)}"><summary class="rw">${ico(g.kind)}<span class="clip nm1">${name}</span><span class="clip dim mc">${note}</span><span class="lv ${lv === 'RW' ? 'w' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span><span class="n">${n}</span><span class="dim">${when(g)}</span><span class="acts">${acts(g).map((a) => a[0])}</span></summary><div class="xb"><span class="dim">${note}</span>${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}">${plural(g.uses, 'use', 'uses')}</a>` : ''}<div class="bt">${acts(g).map((a) => a[1])}</div></div></details>`
     }
     const addrOf = (id: string) => (services[id] ? addr(services[id].baseUrl) : id)
     // A service is its name; a scope `parent:name` sits under its parent, which is always shown (dimmed when this
@@ -508,7 +510,11 @@ export function agents(
       })
     const others = mine.filter((g) => !['service', 'site', 'ext'].includes(g.kind))
     const chip = (g: Grant) =>
-      html`<span class="c" ${tag(g)} title="${[g.item, bundled(g), g.detail.warning].filter(Boolean).join(' · ')}">${g.item.replace(/^\w+:/, '')}${when(g)}${state(g)}${when(g) ? extend(g) : ''}${revoke(g)}</span>`
+      html`<span class="c" ${tag(g)} title="${[g.item, bundled(g), g.detail.warning].filter(Boolean).join(' · ')}">${g.item.replace(/^\w+:/, '')}${when(g)}${state(g)}${acts(
+        g,
+      )
+        .slice(when(g) ? 0 : -1)
+        .map((a) => a[0])}</span>`
     const chips = (kind: string, list: Html[]) =>
       list.length ? html`<div class="gr rw cs">${ico(kind)}<div>${list}</div></div>` : ''
     const ids = (list: Grant[]) => list.map((g) => hidden('id', g.id))
@@ -539,13 +545,13 @@ const groupErrors: Record<string, string> = {
   id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
   description: 'Group not saved: keep the description to one line of at most 200 characters.',
 }
-const td = (label: string, body: Html | string, cls = '') => html`<td data-label="${label}" class="${cls}">${body}</td>`
+const td = (label: string, body: Html | string) => html`<td data-label="${label}">${body}</td>`
 const act = (...buttons: (Html | string)[]) => html`<td class="act"><div class="actions">${buttons}</div></td>`
 // A disclosure row under its table row, spanning every column.
 const more = (cols: number, summary: string, body: Html) =>
   html`<tr class="more"><td colspan="${cols}"><details><summary aria-label="${summary}" title="${summary}">${glyph(summary === 'Edit' ? 'edit' : 'more')}</summary>${body}</details></td></tr>`
-const table = (heads: string[], rows: Html[], cls = '') =>
-  html`<table class="data-table ${cls}"><thead><tr>${heads.map((h) => html`<th scope="col" ${raw(h === 'Actions' ? 'aria-label="Actions"' : '')}>${h === 'Actions' ? '' : h}</th>`)}</tr></thead><tbody>${rows}</tbody></table>`
+const table = (heads: string[], rows: Html[]) =>
+  html`<table class="data-table"><thead><tr>${heads.map((h) => html`<th scope="col" ${raw(h === 'Actions' ? 'aria-label="Actions"' : '')}>${h === 'Actions' ? '' : h}</th>`)}</tr></thead><tbody>${rows}</tbody></table>`
 // The first two entries, one per line; the rest behind "N more".
 const preview = (items: string[], mono = false) => {
   const one = (i: string) => html`<div>${mono ? html`<code>${i}</code>` : i}</div>`
@@ -583,16 +589,7 @@ export function setup({
       ? html`<span class="vh" data-label="${label}">ask</span>`
       : html`<span class="lv ${value === 'open' ? 'w' : ''}">${letter} <span data-label="${label}">${value}</span></span>`
   // One Setup line (a service, a scope, an SSH target or share): kind icon, name, address or path, marks, and its
-  // actions, each an icon on the line and a button in the open body on a phone.
-  type Act = [Html, Html]
-  const go = (href: string, icon: string, label: string, text: string): Act => [
-    html`<a class="ib" href="${href}" aria-label="${label}" title="${label}">${glyph(icon)}</a>`,
-    html`<a class="action-btn" href="${href}">${text}</a>`,
-  ]
-  const post = (action: string, fields: Html, icon: string, label: string, text: string, confirm = ''): Act => [
-    button(action, fields, label, confirm, icon),
-    button(action, fields, text, confirm),
-  ]
+  // actions.
   const entry = (
     kind: string,
     sub: boolean,
