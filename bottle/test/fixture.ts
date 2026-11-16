@@ -12,13 +12,31 @@ import type { TestContext } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { serve } from "../../speaker/node_modules/@hono/node-server/dist/index.mjs";
 import { createApp, readConfig } from "../../speaker/server.ts";
-import { freePort, freePorts, ownerPassword, sessionCookie, setOwnerPassword } from "../../speaker/test/owner.ts";
+import { freePort, ownerPassword } from "../../speaker/test/fixture.ts";
 import { Agents } from "../src/agents.ts";
 import type { Config } from "../src/config.ts";
 import { Template } from "../src/grants.ts";
 import { startControl } from "../src/server.ts";
 import { Catalog, pi } from "../src/pi.ts";
 import { modelDoor, speakerDoor, type Boot, type Guest, type Live } from "../src/sandbox.ts";
+
+const freePorts = async () => ({ PROXY_PORT: String(await freePort()), SSH_PORT: String(await freePort()) });
+const sessionCookie = (response: Response) => {
+  const cookie = response.headers.getSetCookie().find((value) => value.startsWith("speaker_session="));
+  if (!cookie) throw new Error("No session cookie in the response");
+  return cookie.split(";")[0];
+};
+/** Sets the owner password through the first-run form and returns the session cookie. */
+const setOwnerPassword = async (call: (path: string, init?: RequestInit) => Promise<Response>) => {
+  const response = await call("/admin/setup", {
+    method: "POST",
+    headers: { origin: "http://localhost" },
+    body: new URLSearchParams({ password: ownerPassword, confirm: ownerPassword }),
+    redirect: "manual",
+  });
+  if (response.status !== 303) throw new Error(`Setting the owner password answered ${response.status}`);
+  return sessionCookie(response);
+};
 
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
 const { WebSocketServer } = createRequire(import.meta.url)("../../speaker/node_modules/ws") as Ws;
