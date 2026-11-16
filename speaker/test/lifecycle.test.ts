@@ -116,7 +116,7 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
   await f.json('/_speaker/requests', { want: ['demo.full'], reason: 'r', duration: '30m' }, agent)
   assert.match(
     await (await f.call('/admin/panel/agents', { headers: owner })).text(),
-    /<article id="request-\w+" hx-preserve/,
+    /<article id="request-\w+" data-kind/,
   )
   await f.call('/admin/grants/revoke', { method: 'POST', headers: owner, body: new URLSearchParams({ id: grantId }) })
   assert.equal((await me()).grants.length, 0)
