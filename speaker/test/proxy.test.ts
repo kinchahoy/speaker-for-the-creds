@@ -114,12 +114,12 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   }
   const grants = async (): Promise<Grant[]> =>
     (await live()).grants
-      .split('<tr id="grant-')
+      .split(' id="grant-')
       .slice(1)
       .map((row) => ({
         id: row.slice(0, row.indexOf('"')),
-        item: /<code>(.*?)<\/code>/.exec(row)?.[1] ?? '',
-        expiresAt: /<time datetime="([^"]*)"/.exec(row)?.[1] ?? null,
+        item: /data-item="([^"]*)"/.exec(row)?.[1] ?? '',
+        expiresAt: /data-expires="([^"]*)"/.exec(row)?.[1] || null,
         enforcement: /data-state="([a-z-]+)"/.exec(row)?.[1] ?? 'enforced',
       }))
   const saved = await ownerForm('/services/save', {

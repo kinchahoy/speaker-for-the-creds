@@ -221,18 +221,24 @@ export function adminApp(core: Core) {
       layout(
         c.get('secureHeadersNonce'),
         'log',
-        log(matches.slice(0, 500), matches.length, query, {
-          agent: now.agents.map((a) => [a.id, a.title ? `${a.label} · ${a.title}` : a.label]),
-          grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
-          service: ids(core.services),
-          target: ids(ssh.targets),
-          share: ids(ssh.shares),
-        }),
+        log(
+          matches.slice(0, 500),
+          matches.length,
+          query,
+          {
+            agent: now.agents.map((a) => [a.id, a.title ? `${a.label} · ${a.title}` : a.label]),
+            grant: now.grants.map((g) => [g.id, `${g.label} · ${g.item}`]),
+            service: ids(core.services),
+            target: ids(ssh.targets),
+            share: ids(ssh.shares),
+          },
+          Object.fromEntries(now.agents.map((a) => [a.id, a.sandboxHost])),
+        ),
         core.engine.cards().length,
       ),
     )
   })
-  const panel = (view: View) => agents(view, core.groups, new Set(core.connections.keys()))
+  const panel = (view: View) => agents(view, core.groups, new Set(core.connections.keys()), core.services)
   admin.get('/', (c) => {
     const section = c.req.query('section') ?? (c.req.query('service') ? 'services' : 'agents')
     const nonce = c.get('secureHeadersNonce')
@@ -438,8 +444,11 @@ export function adminApp(core: Core) {
     core.endAgent(c.req.param('id'))
     return redirect(c)
   })
+  // One grant id, or several (an agent's extend-all and revoke-all): each goes through the same per-grant operation.
+  const grantIds = async (c: Context) =>
+    [z.object({ id: z.union([idSchema, z.array(idSchema)]) }).parse(await fields(c)).id].flat()
   admin.post('/grants/extend', async (c) => {
-    core.engine.extend(z.object({ id: idSchema }).parse(await fields(c)).id)
+    for (const id of await grantIds(c)) core.engine.extend(id)
     return redirect(c)
   })
   admin.post('/requests/:id/approve', async (c) => {
@@ -453,7 +462,7 @@ export function adminApp(core: Core) {
     return redirect(c)
   })
   admin.post('/grants/revoke', async (c) => {
-    core.engine.revoke(z.object({ id: idSchema }).parse(await fields(c)).id)
+    for (const id of await grantIds(c)) core.engine.revoke(id)
     return redirect(c)
   })
   core.jump.routes(admin, fields, core.engine.reconcile)

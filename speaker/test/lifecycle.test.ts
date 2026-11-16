@@ -109,7 +109,7 @@ test('requests, grants and agents move through explicit lifecycles, and repeated
   assert.equal((await me()).grants.length, 1)
 
   const active = await (await f.call('/admin/panel/agents', { headers: owner })).text()
-  const grantId = /<tr id="grant-(\w+)"/.exec(active)?.[1] ?? ''
+  const grantId = / id="grant-(\w+)"/.exec(active)?.[1] ?? ''
   assert.ok(grantId)
   // Local-time stamps the page script rewrites; request cards survive a panel refresh with the owner's choices.
   assert.match(active, /<time datetime="[^"]+" data-local data-rel="Expires ">/)
