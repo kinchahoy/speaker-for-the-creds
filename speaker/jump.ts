@@ -100,6 +100,8 @@ export type SshSetup = {
   port?: number
   publicKey?: string
   error?: string
+  // The result of an action that succeeded, such as a re-check.
+  note?: string
   targets: Record<string, Target & { line: string; fingerprint: string }>
   shares: Record<string, Share>
 }
@@ -249,6 +251,27 @@ export async function createJump(env: Env) {
         socket.close()
       })
     })
+  // What the account on a target can do: its home directory, passwordless sudo and sftp-server.
+  async function probe(alias: string, target: Target) {
+    const lines = (await onTarget(alias, target, `sh -c ${sh(probeScript)}`)).split('\n')
+    if (lines[0] !== target.account) throw new SetupError(`Logged in as ${lines[0]}, not ${target.account}`)
+    const value = (name: string) => lines.find((line) => line.startsWith(`${name}=`))?.slice(name.length + 1)
+    return { home: value('home') ?? '', sudo: lines.includes('sudo=yes'), sftp: value('sftp') }
+  }
+  // Is the target still reachable with the pinned host key and the key line, and what can the account do now?
+  async function recheck(form: Record<string, unknown>) {
+    const { alias } = parsed(z.object({ alias: aliasSchema }).safeParse(form))
+    const target = settings.targets[alias]
+    if (!target) throw new SetupError('Unknown target')
+    const key = await scanHostKey(target.host, target.port)
+    if (key !== target.hostKey)
+      throw new SetupError(
+        `The host key of ${alias} changed (pinned ${fingerprint(target.hostKey)}, now ${fingerprint(key)}). Delete the target and add it again only if you expect that`,
+      )
+    Object.assign(target, await probe(alias, target))
+    await persist()
+    return `${alias}: reachable, host key matches${target.sudo ? ', passwordless sudo works' : ''}${target.sftp ? '' : ', no sftp-server'}`
+  }
   async function addTarget(form: Record<string, unknown>) {
     const { alias, host, port, account, from, sftp, confirmRoot } = parsed(
       z
@@ -276,15 +299,17 @@ export async function createJump(env: Env) {
       sudo: false,
       home: '',
     }
-    const output = await onTarget(alias, target, `sh -c ${sh(probeScript)}`).catch((error: Error) => {
-      throw new SetupError(
-        `${error.message}. Add this line to that account's authorized_keys, then try again: ${authorizedLine(target)}`,
-      )
-    })
-    const lines = output.split('\n')
-    const value = (name: string) => lines.find((line) => line.startsWith(`${name}=`))?.slice(name.length + 1)
-    if (lines[0] !== account) throw new SetupError(`Logged in as ${lines[0]}, not ${account}`)
-    Object.assign(target, { home: value('home') ?? '', sudo: lines.includes('sudo=yes'), sftp: sftp || value('sftp') })
+    Object.assign(
+      target,
+      await probe(alias, target).catch((error: Error) => {
+        throw new SetupError(
+          error.message.startsWith('Could not run')
+            ? `${error.message}. Add this line to that account's authorized_keys, then try again: ${authorizedLine(target)}`
+            : error.message,
+        )
+      }),
+    )
+    if (sftp) target.sftp = sftp
     settings.targets[alias] = target
     await persist()
     env.audit('ssh_target_added', { target: alias, host, port, account, sudo: target.sudo, sftp: target.sftp ?? null })
@@ -374,10 +399,11 @@ export async function createJump(env: Env) {
       warning: host.home === share.path ? "this share is the account's home directory" : undefined,
     }
   }
-  const setup = (error?: string): SshSetup => ({
+  const setup = (error?: string, note?: string): SshSetup => ({
     port: env.port,
     publicKey: publicKey || undefined,
     error,
+    note,
     targets: Object.fromEntries(
       Object.entries(settings.targets).map(([alias, target]) => [
         alias,
@@ -621,9 +647,12 @@ export async function createJump(env: Env) {
   function routes(admin: Hono, fields: (c: Context) => Promise<Record<string, unknown>>, changed: () => void) {
     const guarded = (action: (form: Record<string, unknown>) => Promise<unknown>) => async (c: Context) => {
       try {
-        await action(await fields(c))
+        const note = await action(await fields(c))
         changed()
-        return c.redirect('/admin?section=services', 303)
+        return c.redirect(
+          `/admin?section=services${typeof note === 'string' ? `&sshNote=${encodeURIComponent(note)}` : ''}`,
+          303,
+        )
       } catch (error) {
         if (!(error instanceof SetupError)) throw error
         return c.redirect(`/admin?section=services&sshError=${encodeURIComponent(error.message.slice(0, 600))}`, 303)
@@ -631,6 +660,7 @@ export async function createJump(env: Env) {
     }
     admin.post('/ssh/targets/add', guarded(addTarget))
     admin.post('/ssh/targets/from', guarded(setFrom))
+    admin.post('/ssh/targets/check', guarded(recheck))
     admin.post(
       '/ssh/targets/delete',
       guarded((form) => removeTarget(String(form.alias))),

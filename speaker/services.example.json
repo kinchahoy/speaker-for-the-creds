@@ -27,7 +27,7 @@
     "read": "ask",
     "write": "ask"
   },
-  "ha-todo": {
+  "homeassistant:todo": {
     "baseUrl": "https://homeassistant.example.com/api/services/todo",
     "notes": "Home Assistant to-do lists only: speaker refuses calls outside this path, so the token cannot reach other Home Assistant services. Which list a call edits is in its body, so every to-do list is reachable. POST /get_items?return_response lists a list's items.",
     "auth": { "type": "bearer", "secret": "homeassistant" },
@@ -96,14 +96,14 @@
     "write": "ask",
     "readPaths": ["/search/simple"]
   },
-  "obsidian-tasks": {
+  "obsidian:tasks": {
     "baseUrl": "https://notes.example.com/api/vault/Tasks",
     "notes": "The Tasks folder of the Obsidian vault only (the owner's to-do list), for an agent that keeps it up to date and reads the rest through obsidian.read.",
     "auth": { "type": "bearer", "secret": "obsidian" },
     "read": "ask",
     "write": "ask"
   },
-  "obsidian-planning": {
+  "obsidian:planning": {
     "baseUrl": "https://notes.example.com/api/vault/Planning",
     "notes": "The Planning folder of the Obsidian vault only (the agent's own plans, questions for the owner, and its log), for an agent that writes there and reads the rest through obsidian.read.",
     "auth": { "type": "bearer", "secret": "obsidian" },

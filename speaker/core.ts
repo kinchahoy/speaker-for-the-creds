@@ -24,6 +24,11 @@ import { createJump } from './jump.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
 import { createStore, generateSshKey, openStore, type OwnerSecret, type Store, type Vault } from './store.ts'
 
+// A service id: a name, or a scope `name:scope` of a service that holds its own key (checked when it is saved).
+export const serviceIdSchema = z
+  .string()
+  .regex(/^[a-zA-Z0-9_-]{1,64}(:[a-zA-Z0-9_-]{1,64})?$/)
+  .refine((id) => !['__proto__', 'constructor', 'prototype'].includes(id.split(':')[0]))
 export const idSchema = z
   .string()
   .regex(/^[a-zA-Z0-9_-]{1,64}$/)
@@ -182,7 +187,7 @@ export const ownerSecretSchema = z.object({
 })
 // config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
 export const configSchema = z.object({
-  services: z.record(idSchema, serviceSchema),
+  services: z.record(serviceIdSchema, serviceSchema),
   groups: groupsSchema.default({}),
   secrets: z
     .record(ownerSecretSchema.shape.name, z.object({ hosts: secretHostsSchema, env: envNameSchema }))
@@ -596,8 +601,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const catalogOf = (agentId: string) => connections.get(agentById(agentId)?.host ?? '')?.catalog
   const secretHosts = (name: string) => (Object.hasOwn(ownerSecrets(), name) ? ownerSecrets()[name].hosts : [])
   const serviceItem = (item: string) => {
-    const [, id, level] = /^([a-zA-Z0-9_-]+)\.(read|full)$/.exec(item) ?? []
-    return id ? { id, write: level === 'full' } : undefined
+    return kindOf(item) === 'service' ? { id: item.slice(0, -5), write: item.endsWith('.full') } : undefined
   }
   // Item kinds an agent may ask for: services, groups, secrets, SSH and folders, plus what its sandbox host enforces.
   const allowedKinds = (agent: Agent): string[] => [

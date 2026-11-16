@@ -128,6 +128,9 @@ async function fixture(t: TestContext) {
     ['account', user],
   ])
   assert.equal(added.headers.get('location'), '/admin?section=services')
+  // Re-checking a target confirms the pinned host key and the key line still work, and says so.
+  const checked = await ownerForm('/ssh/targets/check', [['alias', 'box']])
+  assert.match(decodeURIComponent(checked.headers.get('location') ?? ''), /sshNote=box: reachable, host key matches/)
   for (const name of ['pics', 'docs'])
     await ownerForm('/ssh/shares/save', [
       ['name', name],
@@ -207,10 +210,10 @@ test('a command runs through the jump server as the target account and is logged
     errors += chunk
   })
   const live = async () => ({ grants: await f.ownerGet('/admin/panel/active') })
-  for (let i = 0; i < 60 && !(await live()).grants.includes('SSH session open'); i++) await sleep(100)
+  for (let i = 0; i < 60 && !(await live()).grants.includes('End SSH session'); i++) await sleep(100)
   const panel = (await live()).grants
   assert.match(panel, /End/)
-  const grant = panel.match(/id="grant-([a-f0-9]+)"[\s\S]*?<code>ssh:box<\/code>/)?.[1]
+  const grant = panel.match(/id="grant-([a-f0-9]+)" data-item="ssh:box"/)?.[1]
   assert.ok(grant)
   const started = Date.now()
   assert.equal((await f.ownerForm('/grants/revoke', [['id', grant]])).status, 303)
@@ -372,8 +375,7 @@ test('a folder needs an sshKey, is delivered over SSH, and the sandbox host hear
   assert.deepEqual(await host.overSsh(), ['folder:mixed'])
 })
 
-const grantCount = async (f: Fixture) =>
-  ((await f.ownerGet('/admin/panel/active')).match(/<tr id="grant-/g) ?? []).length
+const grantCount = async (f: Fixture) => ((await f.ownerGet('/admin/panel/active')).match(/ id="grant-/g) ?? []).length
 
 test('a share whose path changes loses its folder grants', async (t) => {
   const f = await fixture(t)

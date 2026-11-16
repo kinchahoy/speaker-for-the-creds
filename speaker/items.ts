@@ -1,9 +1,12 @@
 // The item grammar speaker and bottle share: what an item looks like, how long a grant may last, and how a host
 // pattern matches a host. Pure functions only; both packages import this file.
 
+// A service is `name` or a scope `name:scope` (the part before the colon is the service whose key it uses); the other
+// kinds' prefixes can never be a scope's parent, so `site:x.read` stays a site.
+export const kindPrefixes = ['site', 'secret', 'ssh', 'folder', 'mcp', 'ext', 'group', 'host']
 // Items are strings; the pattern table doubles as the list of accepted forms in error messages.
 export const itemPatterns = {
-  service: /^[a-zA-Z0-9_-]+\.(read|full)$/,
+  service: new RegExp(`^(?!(?:${kindPrefixes.join('|')}):)[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+)?\\.(read|full)$`),
   site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
   secret: /^secret:[A-Za-z0-9_]+$/,
   ssh: /^ssh:[a-zA-Z0-9_-]+$/,
@@ -18,6 +21,7 @@ export type ItemKind = keyof typeof itemPatterns
 export const itemForms = [
   '<service>.read',
   '<service>.full',
+  '<service>:<scope>.read',
   'site:<host>',
   'secret:<NAME>',
   'ssh:<target>',

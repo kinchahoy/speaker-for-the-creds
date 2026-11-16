@@ -156,7 +156,7 @@ async function setup(t: TestContext) {
     return { token, headers, ask, me }
   }
   const grantIds = async () =>
-    [...(await (await call('/admin/panel/active', { headers: owner })).text()).matchAll(/<tr id="grant-([^"]+)"/g)].map(
+    [...(await (await call('/admin/panel/active', { headers: owner })).text()).matchAll(/ id="grant-([^"]+)"/g)].map(
       (m) => m[1],
     )
   const revokeAll = async () => {

@@ -188,7 +188,7 @@ test("an approved grant reaches the agent's live view and is reported to speaker
   // Speaker hears it applied: the grant is no longer marked as waiting or granted-not-applied.
   await until(async () => {
     const active = await f.panel("active");
-    return active.includes("<code>site:example.com</code>") && !active.includes("data-state=");
+    return active.includes('data-item="site:example.com"') && !active.includes("data-state=");
   });
 });
 

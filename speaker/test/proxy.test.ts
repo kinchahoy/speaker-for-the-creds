@@ -11,6 +11,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { serve } from '@hono/node-server'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createApp, readConfig } from '../server.ts'
+import { kindOf } from '../items.ts'
 import { freePorts, quiet, setOwnerPassword } from './owner.ts'
 
 const upstreamSecret = 'secret-only-the-upstream-should-see'
@@ -114,12 +115,12 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   }
   const grants = async (): Promise<Grant[]> =>
     (await live()).grants
-      .split('<tr id="grant-')
+      .split(' id="grant-')
       .slice(1)
       .map((row) => ({
         id: row.slice(0, row.indexOf('"')),
-        item: /<code>(.*?)<\/code>/.exec(row)?.[1] ?? '',
-        expiresAt: /<time datetime="([^"]*)"/.exec(row)?.[1] ?? null,
+        item: /data-item="([^"]*)"/.exec(row)?.[1] ?? '',
+        expiresAt: /data-expires="([^"]*)"/.exec(row)?.[1] || null,
         enforcement: /data-state="([a-z-]+)"/.exec(row)?.[1] ?? 'enforced',
       }))
   const saved = await ownerForm('/services/save', {
@@ -1153,24 +1154,32 @@ test('approving a host that registers again from the same address and name repla
   assert.equal((await f.ownerForm(`/hosts/${first.id}/remove`, {})).status, 404)
 })
 
-test('a service can use the key of a wider service it narrows, down to one address, with its own rules', async (t) => {
+test('a scope `parent:name` uses its parent key, down to one address, with its own rules', async (t) => {
   const f = await setup(t)
-  const save = (id: string, baseUrl: string, more: Record<string, string>) =>
+  const save = (id: string, baseUrl: string, more: Record<string, string> = {}) =>
     f.ownerForm('/services/save', { id, baseUrl, authType: 'bearer', read: 'never', write: 'never', ...more })
-  // The wider service only holds the key: no agent may use it.
+  // The parent only holds the key: no agent may use it.
   assert.equal((await save('whole', `${f.upstreamOrigin}/base`, { secret: 'whole-key' })).status, 303)
-  assert.equal((await save('part', `${f.upstreamOrigin}/base/sub/one`, { keyFrom: 'whole', read: 'open' })).status, 303)
+  assert.equal((await save('whole:part', `${f.upstreamOrigin}/base/sub/one`, { read: 'open' })).status, 303)
   await enroll(f, 'tok')
   assert.equal((await f.call('/whole/sub/one', { headers: bearer('tok') })).status, 403)
-  assert.equal((await f.call('/part', { headers: bearer('tok') })).status, 200)
+  assert.equal((await f.call('/whole:part', { headers: bearer('tok') })).status, 200)
   assert.deepEqual([f.calls[0].url, f.calls[0].headers.authorization], ['/base/sub/one', 'Bearer whole-key'])
-  assert.equal((await f.call('/part/x?q=1', { headers: bearer('tok') })).status, 200)
+  assert.equal((await f.call('/whole:part/x?q=1', { headers: bearer('tok') })).status, 200)
   assert.equal(f.calls[1].url, '/base/sub/one/x?q=1')
-  // Not under the wider address, another site, or a service that has no key of its own: refused.
-  assert.equal((await save('out', `${f.upstreamOrigin}/based`, { keyFrom: 'whole' })).status, 400)
-  assert.equal((await save('away', 'http://127.0.0.1:1/base/sub', { keyFrom: 'whole' })).status, 400)
-  assert.equal((await save('deeper', `${f.upstreamOrigin}/base/sub/one/x`, { keyFrom: 'part' })).status, 400)
-  // Moving the wider service away leaves the narrow one without a key.
-  await save('whole', `${f.upstreamOrigin}/elsewhere`, {})
-  assert.equal((await f.call('/part', { headers: bearer('tok') })).status, 503)
+  assert.equal((await f.call('/_speaker/help/whole:part', { headers: bearer('tok') })).status, 200)
+  // Items name a scope too; a kind prefix is never a parent.
+  assert.equal(kindOf('whole:part.full'), 'service')
+  assert.equal(kindOf('site:x.read'), 'site')
+  // Not under the parent's address, another site, a parent that is itself a scope, a missing parent, a kind prefix
+  // as parent, or two colons: refused.
+  assert.equal((await save('whole:out', `${f.upstreamOrigin}/based`)).status, 400)
+  assert.equal((await save('whole:away', 'http://127.0.0.1:1/base/sub')).status, 400)
+  assert.equal((await save('whole:part:deeper', `${f.upstreamOrigin}/base/sub/one/x`)).status, 400)
+  assert.equal((await save('nobody:part', `${f.upstreamOrigin}/base/sub`)).status, 400)
+  assert.equal((await save('site', `${f.upstreamOrigin}/s`, { secret: 'k' })).status, 303)
+  assert.equal((await save('site:x', `${f.upstreamOrigin}/s/x`)).status, 400)
+  // Moving the parent away leaves the scope without a key.
+  await save('whole', `${f.upstreamOrigin}/elsewhere`)
+  assert.equal((await f.call('/whole:part', { headers: bearer('tok') })).status, 503)
 })
