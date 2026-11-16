@@ -205,7 +205,7 @@ The guest has no network device. Its only doors are host unix sockets on guest v
 - speaker (`SPEAKER_URL`)
 - the control channel that Pi's status reports use
 
-A fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below).
+A fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below). The guest runs in the bottle machine's time zone: `TZ` is set from the host, and the image carries `tzdata`.
 {.ai}
 
 Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle as a transition table, see `ls` states above; also the archive writer), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).

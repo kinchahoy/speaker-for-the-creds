@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ffmpeg imagemagick poppler-utils qpdf tesseract-ocr tesseract-ocr-eng graphviz mediainfo libimage-exiftool-perl \
       fonts-dejavu-core fonts-liberation \
       strace lsof iproute2 procps zip unzip xz-utils file tree less rsync vim-tiny \
-      fd-find ripgrep
+      fd-find ripgrep tzdata
 
 # 2. Node, via mise (checksum from the release SHASUMS256.txt). Playwright needs it. `mise use -g` writes
 # /etc/mise/config.toml; the later layers add their tools as /etc/mise/conf.d/*.toml. Shims are on PATH.

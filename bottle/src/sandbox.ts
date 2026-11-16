@@ -479,6 +479,7 @@ export async function boot(
     const noProxy = `127.0.0.1,localhost,${config.localModel.guestHost}`;
     const guestEnv: Record<string, string> = {
       BOTTLE: "1",
+      TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, // the host's zone (tzdata is in the image), so local time matches the owner's
       SPEAKER_URL: `http://127.0.0.1:${DOORS.speaker[1]}`,
       SPEAKER_TOKEN: "placeholder: the host adds the task's token",
       HTTP_PROXY: localProxy,
