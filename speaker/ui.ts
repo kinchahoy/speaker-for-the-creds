@@ -495,12 +495,10 @@ export function agents(
     // agent holds only scopes), as `:name` with the address beyond the parent's.
     const service = (g: Grant, parent?: string) => {
       const id = sid(g)
-      const key = services[id]?.auth
-      const legacy = !parent && key && key.type !== 'none' && key.secret !== id ? key.secret : ''
       return line(
         g,
         parent ? html`<span class="dim">:</span>${id.slice(parent.length + 1)}` : id,
-        html`<code title="${services[id]?.baseUrl ?? ''}">${under(addrOf(id), parent && addrOf(parent))}</code>${legacy ? html` <small title="uses the key of ${legacy}">key of ${legacy}</small>` : ''}`,
+        html`<code title="${services[id]?.baseUrl ?? ''}">${under(addrOf(id), parent && addrOf(parent))}</code>`,
         parent ? 'sc' : '',
       )
     }
@@ -631,9 +629,7 @@ export function setup({
         ? html`<mark data-label="Credential">no key</mark>`
         : own
           ? html`<span class="vh" data-label="Credential">Set</span>`
-          : s.auth.type !== 'none' && !parent
-            ? html`<small title="uses the key of ${s.auth.secret}">key of ${s.auth.secret}</small>`
-            : ''
+          : ''
     const kids = Object.keys(services).filter((k) => parentOf(k) === id)
     return entry(
       'service',

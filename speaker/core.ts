@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 import { lookup } from 'node:dns/promises'
-import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
@@ -195,8 +195,6 @@ export const configSchema = z.object({
   groups: groupsSchema.default({}),
   secrets: z.record(ownerSecretSchema.shape.name, secretSetupSchema).default({}),
 })
-// A secret as stores before config.json held it.
-const legacySecretSchema = z.object({ value: z.string(), hosts: z.array(z.string()), env: z.string() })
 // What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 export const decisionSchema = z.object({
   duration: adminDurationSchema,
@@ -335,8 +333,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   // config.json: everything the owner set up except the values (services, groups, what each secret may reach), so it
-  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services. One made
-  // before config.json (services.json and groups.json) is moved into it once.
+  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services.
   const configFile = file('config.json')
   const json = async (path: string | URL) => {
     const text = await optionalFile(path)
@@ -348,17 +345,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return services
   }
   const stored = await json(configFile)
-  const ownerConfig = configSchema.parse(
-    stored ?? {
-      services: (await json(file('services.json'))) ?? (await starter()),
-      groups: await json(file('groups.json')),
-    },
-  )
+  const ownerConfig = configSchema.parse(stored ?? { services: await starter() })
   const saveConfig = () => save(configFile, ownerConfig)
-  if (!stored) {
-    await saveConfig()
-    await Promise.all(['services.json', 'groups.json'].map((name) => rm(file(name), { force: true })))
-  }
+  if (!stored) await saveConfig()
   const { services, groups } = ownerConfig
   const hostsFile = file('hosts.json')
   const storedHosts = z.array(hostSchema).parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
@@ -387,22 +376,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     )
   }
   const unlock = async (opened: Store) => {
-    // A store from before config.json kept each secret's hosts and variable with its value: move them out, once,
-    // keeping the old store beside it as store.json.bak.
-    const moved = Object.entries(opened.vault.secrets as Record<string, unknown>).flatMap(([name, entry]) => {
-      const old = legacySecretSchema.safeParse(entry)
-      return old.success ? [{ name, ...old.data }] : []
-    })
-    if (moved.length) {
-      await copyFile(storeFile, `${storeFile}.bak`)
-      for (const { name, value, hosts, env } of moved) {
-        ownerConfig.secrets[name] ??= { hosts, env }
-        opened.vault.secrets[name] = value
-      }
-      await saveConfig()
-      await opened.save()
-      audit('secrets_moved_to_config', { secrets: moved.map(({ name }) => name) })
-    }
     vault = { state: 'unlocked', store: opened }
     // Speaker's SSH key goes into a stock ssh-agent; nothing else holds it in clear.
     await jump.start(opened.vault.ssh)

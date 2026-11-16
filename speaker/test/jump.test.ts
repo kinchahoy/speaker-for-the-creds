@@ -56,8 +56,11 @@ async function fixture(t: TestContext) {
   const world = join(dir, 'world')
   await mkdir(join(dir, 'data'))
   await writeFile(
-    join(dir, 'data', 'groups.json'),
-    JSON.stringify({ ops: { description: 'Ops', items: ['ssh:box', 'folder:pics', 'folder:docs:rw'] } }),
+    join(dir, 'data', 'config.json'),
+    JSON.stringify({
+      services: JSON.parse(await readFile(new URL('../services.example.json', import.meta.url), 'utf8')),
+      groups: { ops: { description: 'Ops', items: ['ssh:box', 'folder:pics', 'folder:docs:rw'] } },
+    }),
   )
   for (const name of ['pics', 'docs']) await mkdir(join(world, name), { recursive: true })
   await writeFile(join(world, 'pics', 'hello.txt'), 'hello from pics\n')

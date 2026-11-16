@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -56,7 +56,8 @@ async function setup(t: TestContext, groups: object = {}, env: Record<string, st
   }).listen(0, '127.0.0.1')
   await once(upstream, 'listening')
   const dataDir = await mkdtemp(join(tmpdir(), 'speaker-test-'))
-  await writeFile(join(dataDir, 'groups.json'), JSON.stringify(groups))
+  const services = JSON.parse(await readFile(new URL('../services.example.json', import.meta.url), 'utf8'))
+  await writeFile(join(dataDir, 'config.json'), JSON.stringify({ services, groups }))
   const app = quiet(
     await createApp(readConfig({ DATA_DIR: dataDir, PUBLIC_URL: 'http://localhost', ...(await freePorts()), ...env })),
   )
