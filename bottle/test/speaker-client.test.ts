@@ -23,7 +23,7 @@ import type { Config } from "../src/config.ts";
 import { modelDoor, secretRoute, type Live } from "../src/sandbox.ts";
 import { launchRequest, Template } from "../src/grants.ts";
 import { Catalog, writeGuestConfig } from "../src/pi.ts";
-import { hostApproved, registerHost, SPEAKER_LIMITS, type Snapshot, speakerClient, speakerCa, speakerProxy, watchGrants as watch } from "../src/speaker.ts";
+import { hostApproved, registerHost, DROP_MS, type Snapshot, speakerClient, speakerCa, speakerProxy, watchGrants as watch } from "../src/speaker.ts";
 
 // speaker's own WebSocket library, typed from speaker's @types/ws.
 type Ws = typeof import("../../speaker/node_modules/@types/ws/index.d.ts");
@@ -166,26 +166,8 @@ test("watchGrants receives granted items and reports applied ids to speaker", as
   await assert.rejects(speaker.createAgent("pi", "Test LLM · Pi on test"), /401/);
   await ownerPost(`/hosts/${id}/approve`);
 
-  // A token speaker doesn't know (data reset, other speaker) is fatal at once instead of a reconnect loop.
-  const fatal: string[] = [];
-  watchGrants(
-    t,
-    config,
-    "unknown-token",
-    () => {},
-    (message) => fatal.push(message),
-  );
-  await until(() => fatal.length === 1);
-  assert.match(fatal[0], /rejects this sandbox host's token \(HTTP 401\).*bottle register/);
-
   const snapshots: Snapshot[] = [];
-  const reportApplied = watchGrants(
-    t,
-    config,
-    token,
-    (snapshot) => snapshots.push(snapshot),
-    (message) => assert.fail(`unexpected fatal speaker error: ${message}`),
-  );
+  const reportApplied = watchGrants(t, config, token, (snapshot) => snapshots.push(snapshot));
   const subject = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({
     agentId: subject.id,
@@ -267,19 +249,12 @@ test("registering learns speaker's proxy and SSH ports into config.json, and the
 });
 
 test("without word from speaker for 30 seconds the grants are dropped until it is back", async (t) => {
-  assert.equal(SPEAKER_LIMITS.dropMs, 30_000);
+  assert.equal(DROP_MS, 30_000);
   const f = await fixture(t);
   const { token, speaker } = await f.host(["site"]);
   const received: Snapshot[] = [];
   const dropMs = 600;
-  watchGrants(
-    t,
-    f.config,
-    token,
-    (snapshot) => received.push(snapshot),
-    (message) => assert.fail(message),
-    { ...SPEAKER_LIMITS, dropMs, retryMs: 100 },
-  );
+  watchGrants(t, f.config, token, (snapshot) => received.push(snapshot), undefined, { dropMs, retryMs: 100 });
   const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: speakerAgent.id, want: ["site:example.com"], reason: "docs", duration: "30m" });
   await f.approve(request.id, ["site:example.com"]);
@@ -305,7 +280,7 @@ test("without word from speaker for 30 seconds the grants are dropped until it i
   await until(() => received.at(-1)?.grants.length === 1);
 });
 
-test("after a speaker restart a known host is pending again: bottle resumes once the owner approves it, and gives up past the outage limit", async (t) => {
+test("after a speaker restart a known host is pending again: bottle reconnects once the owner approves it", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "bottle-restart-"));
   const speakerPort = await speakerFreePort();
   let running: { app: Awaited<ReturnType<typeof createApp>>; server: Server; wss: InstanceType<Ws["WebSocketServer"]> } | undefined;
@@ -348,23 +323,8 @@ test("after a speaker restart a known host is pending again: bottle resumes once
   const { id } = (await created.json()) as { id: string };
   assert.equal((await ownerPost(cookie, `/hosts/${id}/approve`)).status, 303);
 
-  const fatal: string[] = [];
   const snapshots: Snapshot[] = [];
-  // A pending host counts as an outage: approved within the limit the link resumes, left pending it is given up on.
-  watchGrants(
-    t,
-    config,
-    token,
-    (snapshot) => snapshots.push(snapshot),
-    (message) => fatal.push(message),
-    {
-      ...SPEAKER_LIMITS,
-      firstConnectMs: 400,
-      outageMs: 4_000,
-      retryMs: 50,
-      maxBackoffMs: 100,
-    },
-  );
+  watchGrants(t, config, token, (snapshot) => snapshots.push(snapshot), undefined, { retryMs: 50 });
   await until(() => snapshots.length > 0);
 
   await stop();
@@ -382,19 +342,6 @@ test("after a speaker restart a known host is pending again: bottle resumes once
   assert.equal(snapshots.length, pending, "nothing is heard while it is pending");
   assert.equal((await ownerPost(owner, `/hosts/${id}/approve`)).status, 303);
   await until(() => snapshots.length > pending);
-  assert.deepEqual(fatal, []);
-
-  // Restarted again and never approved: bottle gives up, naming the approval.
-  await stop();
-  await boot();
-  await fetch(`${url}/admin/signin`, {
-    method: "POST",
-    headers: { origin: "http://localhost" },
-    body: new URLSearchParams({ password: ownerPassword }),
-    redirect: "manual",
-  });
-  await until(() => fatal.length > 0, 15_000);
-  assert.match(fatal[0]!, /approve this sandbox host/);
 });
 
 test("a grant counts as decided for the agent only once the sandbox host reports it in force", async (t) => {
@@ -406,15 +353,7 @@ test("a grant counts as decided for the agent only once the sandbox host reports
     mcps: { filesystem: { label: "Files", transport: "stdio" as const, command: "/usr/bin/true", args: [], tools: ["read_file"], write: false } },
     extensions: {},
   };
-  const reportApplied = watchGrants(
-    t,
-    f.config,
-    token,
-    (snapshot) => snapshots.push(snapshot),
-    (message) => assert.fail(message),
-    SPEAKER_LIMITS,
-    catalog,
-  );
+  const reportApplied = watchGrants(t, f.config, token, (snapshot) => snapshots.push(snapshot), catalog);
   const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const ask = (want: string[]) =>
     fetch(`${f.url}/_speaker/requests`, {
@@ -483,13 +422,7 @@ test("a secret grant reaches the sandbox as hosts only; its requests go through 
   const { token, speaker } = await f.host(["secret"]);
   const wire: string[] = [];
   const snapshots: Snapshot[] = [];
-  watchGrants(
-    t,
-    f.config,
-    token,
-    (snapshot) => snapshots.push(snapshot),
-    (message) => assert.fail(message),
-  );
+  watchGrants(t, f.config, token, (snapshot) => snapshots.push(snapshot));
   const speakerAgent = await speaker.createAgent("pi", "Test LLM · Pi on test");
   const request = await speaker.request({ agentId: speakerAgent.id, want: ["secret:GITHUB_TOKEN"], reason: "open a pull request", duration: "30m" });
   await f.approve(request.id, ["secret:GITHUB_TOKEN"]);

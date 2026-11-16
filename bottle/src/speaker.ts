@@ -130,134 +130,74 @@ export const catalogReport = (catalog: Catalog) => ({
   extensions: Object.entries(catalog.extensions).map(([id, { label, description, tools, sites }]) => ({ id, label, description, tools, sites })),
 });
 
-/**
- * How long the service may run without reaching speaker: at startup, and after losing it. After `dropMs` without
- * speaker's snapshots the agents' grants are dropped until it is back.
- */
-export const SPEAKER_LIMITS = { firstConnectMs: 30_000, outageMs: 5 * 60_000, retryMs: 5_000, maxBackoffMs: 30_000, dropMs: 30_000 };
+/** When bottle has not heard from speaker for this long it can no longer hear a revoke, so every grant is dropped until speaker is back. */
+export const DROP_MS = 30_000;
 
 /**
- * Classifies why speaker can't be used: a 401 is fatal when the token is unknown (speaker data reset or a different
- * speaker); a host speaker knows but the owner has not approved (again) yet, a network error, a 5xx or a locked speaker
- * may clear up, so they count toward the outage limits like any other outage.
- */
-const probeSpeaker = async (config: Config, hostToken: string) => {
-  try {
-    const response = await fetch(`${config.speaker.url}/_speaker/hosts/self`, {
-      headers: { authorization: `Bearer ${hostToken}` },
-      signal: AbortSignal.timeout(5_000),
-    });
-    const body = await response.text();
-    if (response.status === 401 && body.includes('"approval_required"'))
-      return { fatal: false, message: `speaker is waiting for the owner to approve this sandbox host in /admin` };
-    if (response.status === 401)
-      return {
-        fatal: true,
-        message:
-          `speaker at ${config.speaker.url} rejects this sandbox host's token (HTTP ${response.status}): it was removed, ` +
-          `or speaker's data was reset. Run "mise run bottle register" again.`,
-      };
-    return { fatal: false, message: response.ok ? "speaker answered but the connection failed" : `speaker answered HTTP ${response.status}` };
-  } catch (error) {
-    const cause = (error as { cause?: { code?: string } }).cause?.code ?? (error as Error).message;
-    return { fatal: false, message: `cannot reach speaker at ${config.speaker.url} (${cause})` };
-  }
-};
-
-/**
- * The link to speaker. `connecting` until speaker first answers, `open` while connected, `down` after losing it,
- * `stopped` for good (stop() or a fatal error). `heardAt` is when speaker last spoke. `stale` is a link silent for
- * `dropMs`: every grant was dropped until the next snapshot, whatever the connection is doing (`was`). `since` is when the
- * outage began.
- */
-type Link =
-  | { state: "connecting" | "down"; since: number; heardAt: number }
-  | { state: "open"; heardAt: number }
-  | { state: "stale"; since: number; was: "connecting" | "down" | "open" }
-  | { state: "stopped" };
-type Outage = Exclude<Link, { state: "open" | "stopped" }>;
-
-/**
- * Holds the sandbox host WebSocket. Each snapshot replaces the grant set and request statuses. When speaker has not been
- * heard for `dropMs` (30 s: connection lost, or snapshots stopped) every grant is dropped until the next snapshot. It
- * reconnects with backoff, but calls `onFatal` instead of retrying forever: at once when speaker rejects the token, after
- * SPEAKER_LIMITS.firstConnectMs if speaker was never reached, and after SPEAKER_LIMITS.outageMs of continuous outage. On
- * every connection it reports its catalog. Returns the function that reports the in-effect grant ids; its `stop`
- * closes the connection and ends the reconnecting.
+ * Holds the sandbox host WebSocket, reconnecting for ever. Each snapshot replaces the grant set and request statuses.
+ * After `dropMs` without a word from speaker every grant is dropped until the next snapshot. The catalog, applied ids and
+ * titles are reported on every connect. `status()` is one line for people; it is logged when the link changes state.
  */
 export const watchGrants = (
   config: Config,
   hostToken: string,
   onSnapshot: (snapshot: Snapshot) => void,
-  onFatal: (message: string) => void,
-  limits = SPEAKER_LIMITS,
   catalog: Catalog = { mcps: {}, extensions: {} },
+  { dropMs = DROP_MS, retryMs = 5_000 } = {},
 ) => {
   const url = new URL("/_speaker/hosts/ws", config.speaker.url);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  let link: Link = { state: "connecting", since: Date.now(), heardAt: Date.now() };
   let socket: WebSocket | undefined;
-  let backoff = limits.retryMs;
-  let retryTimer: NodeJS.Timeout | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+  let heardAt = Date.now();
+  let dropped = false;
   let applied = "[]";
   let titles = "{}";
-  const fail = (message: string) => {
-    if (link.state === "stopped") return;
-    link = { state: "stopped" };
-    onFatal(message);
-  };
-  const retry = async (outage: Outage) => {
-    const probe = await probeSpeaker(config, hostToken);
-    if (link.state === "stopped") return;
-    if (probe.fatal) return fail(probe.message);
-    const down = Date.now() - outage.since;
-    const reached = outage.state === "stale" ? outage.was !== "connecting" : outage.state === "down";
-    if (down >= (reached ? limits.outageMs : limits.firstConnectMs))
-      return fail(
-        `${probe.message}; gave up after ${Math.round(down / 1000)} s without speaker. ` +
-          `Check that speaker is running and that speaker.url is right in the bottle config.json.`,
-      );
-    console.error(`${probe.message}; grants are dropped after ${limits.dropMs / 1000} s without speaker; retrying in ${backoff / 1000} s`);
-    retryTimer = setTimeout(open, backoff);
-    backoff = Math.min(backoff * 2, limits.maxBackoffMs);
+  let up = false;
+  let since = new Date();
+  let lastError = "not connected yet";
+  const status = () => (up ? `connected to ${config.speaker.url}` : `reconnecting since ${since.toLocaleTimeString()}: ${lastError}`);
+  const change = (next: boolean) => {
+    if (up === next) return;
+    up = next;
+    since = new Date();
+    console.log(`speaker: ${status()}`);
   };
   const send = (message: object) => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
   const open = () => {
-    if (link.state === "stopped") return;
     socket = new WebSocket(url, { headers: { authorization: `Bearer ${hostToken}` } });
     socket.onopen = () => {
-      if (link.state === "stopped") return;
-      if (link.state === "connecting") console.log(`speaker connected at ${config.speaker.url}`);
-      // A stale link stays stale until the first snapshot arrives.
-      link = link.state === "stale" ? { ...link, was: "open" } : { state: "open", heardAt: Date.now() };
-      backoff = limits.retryMs;
+      change(true);
       send({ type: "catalog", ...catalogReport(catalog) });
       send({ type: "applied", grantIds: JSON.parse(applied) });
       send({ type: "titles", titles: JSON.parse(titles) });
     };
     socket.onmessage = (event) => {
-      if (link.state === "stopped") return;
-      link = { state: "open", heardAt: Date.now() };
+      heardAt = Date.now();
+      dropped = false;
       const { grants, requests, secrets } = Snapshot.parse(JSON.parse(String(event.data)));
       onSnapshot({ grants, requests, secrets });
     };
+    socket.onerror = (event) => {
+      lastError = (event as ErrorEvent).message || "connection failed";
+    };
     socket.onclose = () => {
-      if (link.state === "stopped") return;
-      if (link.state === "open") link = { state: "down", since: Date.now(), heardAt: link.heardAt };
-      else if (link.state === "stale" && link.was === "open") link = { state: "stale", since: Date.now(), was: "down" };
-      void retry(link);
+      if (stopped) return;
+      change(false);
+      timer = setTimeout(open, retryMs);
     };
   };
   const dropTimer = setInterval(
     () => {
-      if (link.state === "stopped" || link.state === "stale" || Date.now() - link.heardAt < limits.dropMs) return;
-      link = { state: "stale", since: link.state === "open" ? Date.now() : link.since, was: link.state };
-      console.error(`no word from speaker for ${limits.dropMs / 1000} s; all grants dropped until it is back`);
+      if (dropped || Date.now() - heardAt < dropMs) return;
+      dropped = true;
+      console.error(`no word from speaker for ${dropMs / 1000} s; all grants dropped until it is back`);
       onSnapshot({ grants: [], requests: [] });
     },
-    Math.min(1_000, limits.dropMs / 4),
+    Math.min(1_000, dropMs / 4),
   ).unref();
   open();
   const report = (grantIds: string[]) => {
@@ -278,10 +218,10 @@ export const watchGrants = (
     send({ type: "titles", titles: next });
   };
   const stop = () => {
-    link = { state: "stopped" };
+    stopped = true;
     clearInterval(dropTimer);
-    clearTimeout(retryTimer);
+    clearTimeout(timer);
     socket?.close();
   };
-  return Object.assign(report, { stop, catalog: setCatalog, titles: setTitles });
+  return Object.assign(report, { stop, status, catalog: setCatalog, titles: setTitles });
 };
