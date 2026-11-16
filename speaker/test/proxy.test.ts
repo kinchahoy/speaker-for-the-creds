@@ -897,6 +897,17 @@ test('a trusted proxy names the caller with the last X-Forwarded-For entry', asy
   assert.ok(help.includes(`${f.url}/_speaker/agents`))
 })
 
+test('TRUSTED_PROXY may be a name: its resolved address is trusted, and a name that does not resolve trusts no one', async (t) => {
+  const named = await setup(t, {}, { TRUSTED_PROXY: 'localhost' })
+  await enrolled(named, 'tok', { 'x-forwarded-for': '100.64.0.7' })
+  const moved = await named.call('/_speaker/catalog', { headers: { ...bearer('tok'), 'x-forwarded-for': '100.64.0.9' } })
+  assert.equal(moved.status, 401)
+  const nowhere = await setup(t, {}, { TRUSTED_PROXY: 'no-such-proxy.invalid' })
+  await enrolled(nowhere, 'tok', { 'x-forwarded-for': '100.64.0.7' })
+  const spoofed = await nowhere.call('/_speaker/catalog', { headers: { ...bearer('tok'), 'x-forwarded-for': '1.2.3.4' } })
+  assert.equal(spoofed.status, 200)
+})
+
 test('public discovery answers without a token, uses the caller address, and names no service or group', async (t) => {
   const f = await setup(t, { secretgroup: { items: ['notes.read'] } })
   const root = await (await f.call('/')).text()

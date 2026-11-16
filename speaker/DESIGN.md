@@ -269,7 +269,7 @@ Placement:
 - **Default:** a published port on the LAN.
 - **Single laptop:** run it locally; agents on the same machine use `http://localhost`.
 - **Optional:** a compose profile with a Tailscale sidecar that serves speaker on the tailnet with HTTPS (with `TRUSTED_PROXY=127.0.0.1`, kernel networking so the relay reaches tailnet targets, and the SSH port exposed).
-- **Behind an existing reverse proxy:** set `TRUSTED_PROXY` to the proxy's address.
+- **Behind an existing reverse proxy:** set `TRUSTED_PROXY` to the proxy's address or name (a Docker service name follows the container).
 
 ## Security model
 

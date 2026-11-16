@@ -1,6 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
+import { lookup } from 'node:dns/promises'
 import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import type { Context } from 'hono'
@@ -272,8 +274,9 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       PROXY_PORT: z.coerce.number().int().min(1).max(65535),
       // The jump server's port (SSH and folders over SSH).
       SSH_PORT: z.coerce.number().int().min(1).max(65535),
-      // Address of the reverse proxy whose last X-Forwarded-For entry names the real caller; ignored from anyone else.
-      TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6()]).optional(),
+      // The reverse proxy whose last X-Forwarded-For entry names the real caller (ignored from anyone else): its address,
+      // or a name such as a Docker service name, which follows the container wherever it lands.
+      TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6(), z.hostname()]).optional(),
     })
     .parse(environment)
 }
@@ -898,10 +901,26 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     (
       c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined
     )?.incoming?.socket?.remoteAddress?.replace(/^::ffff:/, '')
+  // What TRUSTED_PROXY names now, looked up again every 30 s. A failed lookup keeps the last answer; one that never
+  // succeeded trusts no one.
+  let proxyAddresses = new Set<string>()
+  const resolveProxy = async (name = config.TRUSTED_PROXY) => {
+    if (!name) return
+    try {
+      proxyAddresses = new Set(isIP(name) ? [name] : (await lookup(name, { all: true })).map(({ address }) => address))
+    } catch (error) {
+      audit('trusted_proxy_unresolved', { name, error: (error as NodeJS.ErrnoException).code ?? String(error) })
+    }
+  }
+  await resolveProxy()
+  if (config.TRUSTED_PROXY && !isIP(config.TRUSTED_PROXY)) setInterval(resolveProxy, 30_000).unref()
+  // An in-process caller (app.fetch, no socket) counts as the proxy when none is configured, as it always has.
+  const trusted = (peer: string | undefined) =>
+    peer === undefined ? config.TRUSTED_PROXY === undefined : proxyAddresses.has(peer)
   const sourceOf = (c: Context) => {
     const peer = peerOf(c)
     if (peer === undefined) return 'unknown'
-    if (peer !== config.TRUSTED_PROXY) return peer
+    if (!trusted(peer)) return peer
     // The proxy appends the caller as the last entry; anything that is not an IP address leaves the proxy's own.
     const last = c.req
       .header('x-forwarded-for')
@@ -914,7 +933,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const baseOf = (c: Context) => {
     const url = new URL(c.req.url)
     const proto =
-      peerOf(c) === config.TRUSTED_PROXY
+      trusted(peerOf(c))
         ? z.enum(['http', 'https']).safeParse(c.req.header('x-forwarded-proto')).data
         : undefined
     return `${proto ?? url.protocol.slice(0, -1)}://${url.host}`

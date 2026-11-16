@@ -231,9 +231,9 @@ export async function initSpeaker(flags: SpeakerFlags) {
         )
       )?.replace(/\/$/, '') ?? fail('--yes with a reverse proxy needs the browser URL', 'pass --public-url')
     trustedProxy = await ask(flags['trusted-proxy'], yes, undefined, () =>
-      p.text({ message: "The reverse proxy's IP address (TRUSTED_PROXY)", placeholder: '172.18.0.2' }),
+      p.text({ message: "The reverse proxy's IP address or name, such as its Docker service (TRUSTED_PROXY)", placeholder: 'traefik' }),
     )
-    if (!trustedProxy) fail('a reverse proxy needs its IP address', 'pass --trusted-proxy <ip>')
+    if (!trustedProxy) fail('a reverse proxy needs its address or name', 'pass --trusted-proxy <ip or name>')
   }
 
   const password = await ownerPassword(flags, yes)
