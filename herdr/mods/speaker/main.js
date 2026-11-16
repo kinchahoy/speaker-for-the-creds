@@ -175,10 +175,17 @@ export default class Speaker extends View {
       try {
         ({ token, publicUrl } = await api("/signin", { password: this.password.value() }));
         this.password.set_value("");
+        this.reveal(cx, false);
       } finally {
         this.signingIn = false;
       }
     });
+  }
+
+  reveal(cx, on) {
+    this.revealed = on;
+    this.password.set_masked(!on);
+    cx.notify();
   }
 
   save(cx) {
@@ -248,7 +255,7 @@ export default class Speaker extends View {
     const field = (state) => Input.new(state).h(34).px(10).rounded(8).border_1().border_color(t.input).bg(t.background);
     // Every input has a label above it; one with an action has its button beside it (Enter does the same).
     const labeled = (label, input) => v_flex().gap(4).child(div().text_size(11.5).text_color(t.muted).child(label)).child(input);
-    const withButton = (state, btn) => h_flex().gap(8).items_center().child(div().flex_1().child(field(state))).child(btn);
+    const withButton = (state, ...btns) => h_flex().gap(8).items_center().child(div().flex_1().child(field(state))).children(btns);
     const card = (r) => v_flex().gap(6).p(12).rounded(9).border_1().border_color(this.highlight.has(r.id) ? t.accent : t.border).bg(t.surface)
       .child(h_flex().justify_between().child(div().font_semibold().child(r.who.label)).child(div().text_color(t.dim).text_size(11.5).child(ago(r.createdAt))))
       .child(div().text_color(t.dim).text_size(11.5).child([r.who.says, r.who.via && `via ${r.who.via}`, `from ${r.who.source || "unknown address"}`].filter(Boolean).join(" · ")))
@@ -300,6 +307,7 @@ export default class Speaker extends View {
       .when(Boolean(this.error), (el) => el.child(div().text_color(t.blocked).child(this.error)))
       .when(ready && !token, (el) => el.child(heading("Sign in to see and decide requests"))
         .child(labeled("Owner password", withButton(this.password,
+          button("reveal", this.revealed ? "Hide" : "Show", false, (_e, cx) => this.reveal(cx, !this.revealed)),
           button("signin", this.signingIn ? "Signing in…" : "Sign in", true, this.signingIn ? undefined : (_e, cx) => this.signIn(cx))))))
       .when(Boolean(token), (el) => el
         .child(heading(pending.length ? `${pending.length} waiting` : "Nothing waiting"))
