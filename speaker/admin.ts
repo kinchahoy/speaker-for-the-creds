@@ -13,6 +13,7 @@ import {
   groupDescriptionSchema,
   groupItemsSchema,
   idSchema,
+  serviceIdSchema,
   newPasswordSchema,
   ownerSecretSchema,
   serviceSchema,
@@ -20,6 +21,7 @@ import {
   urlSchema,
   type View,
 } from './core.ts'
+import { kindPrefixes } from './items.ts'
 import { WrongPassword } from './store.ts'
 import { agents, icons, layout, log, setPasswordPage, setup, signInPage } from './ui.ts'
 
@@ -260,6 +262,7 @@ export function adminApp(core: Core) {
         ssh,
         mcp,
         selected: c.req.query('service'),
+        scope: c.req.query('scope'),
         error: c.req.query('error'),
       }
       return c.html(layout(nonce, 'services', setup(data), core.engine.cards().length))
@@ -274,7 +277,7 @@ export function adminApp(core: Core) {
   admin.post('/services/save', async (c) => {
     const input = z
       .object({
-        id: idSchema,
+        id: serviceIdSchema,
         // A pasted URL after a typed scheme ("https:/https://…") is a valid URL with host "https"; refuse it here only, so a
         // stored one does not stop speaker from starting.
         baseUrl: urlSchema.pipe(
@@ -283,7 +286,6 @@ export function adminApp(core: Core) {
         authType: z.enum(['none', 'bearer', 'header', 'basic', 'path']),
         headerName: z.string().optional(),
         secret: z.string().optional(),
-        keyFrom: z.union([idSchema, z.literal('')]).optional(),
         notes: z.string().optional(),
         read: serviceSchema.shape.read,
         write: serviceSchema.shape.write,
@@ -297,35 +299,39 @@ export function adminApp(core: Core) {
           ctx.addIssue({ code: 'custom', message: 'A path credential must be one URL path segment' })
       })
       .parse(await fields(c))
-    const shared = input.authType !== 'none' && input.keyFrom
-    const wider = shared ? core.services[shared] : undefined
+    // A scope `parent:name` uses the key (and authentication) of its parent, which must hold its own key and be wider.
+    const parent = input.id.includes(':') ? input.id.split(':')[0] : undefined
+    const wider = parent ? core.services[parent] : undefined
     if (
-      shared &&
+      parent &&
       !(
         wider &&
         wider.auth.type !== 'none' &&
-        wider.auth.secret === shared &&
-        shared !== input.id &&
+        wider.auth.secret === parent &&
+        !kindPrefixes.includes(parent) &&
         within(input.baseUrl, wider.baseUrl)
       )
     )
       throw new HTTPException(400, {
-        message: `To use the key of ${shared}, the address must be on the same site and under that service's address, and ${shared} must hold its own key`,
+        message: `A scope ${input.id} needs ${parent} to hold its own key, and an address on the same site and under ${parent}'s address`,
       })
     const service = serviceSchema.parse({
       baseUrl: input.baseUrl,
       notes: input.notes?.trim() || undefined,
-      auth: { type: input.authType, secret: shared || input.id, headerName: input.headerName },
+      auth:
+        wider && parent
+          ? { ...wider.auth, secret: parent }
+          : { type: input.authType, secret: input.id, headerName: input.headerName },
       read: input.read,
       write: input.write,
       readPaths: input.readPaths.length ? input.readPaths : undefined,
       mcp: input.mcp ? true : undefined,
     })
-    if (input.secret && !shared) {
+    if (input.secret && !parent) {
       core.unlocked().vault.services[input.id] = input.secret
       await core.unlocked().save()
     }
-    if ((input.authType === 'none' || shared) && Object.hasOwn(core.unlocked().vault.services, input.id)) {
+    if ((input.authType === 'none' || parent) && Object.hasOwn(core.unlocked().vault.services, input.id)) {
       delete core.unlocked().vault.services[input.id]
       await core.unlocked().save()
     }
@@ -337,7 +343,7 @@ export function adminApp(core: Core) {
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/services/tools', async (c) => {
-    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    const { id } = z.object({ id: serviceIdSchema }).parse(await fields(c))
     if (!core.services[id]?.mcp) throw new HTTPException(404, { message: 'Not an MCP service' })
     const ok = await core.listMcpTools(id).then(
       () => true,
@@ -346,7 +352,7 @@ export function adminApp(core: Core) {
     return c.redirect(`/admin?section=services&service=${id}${ok ? '' : '&error=tools'}`, 303)
   })
   admin.post('/services/delete', async (c) => {
-    const { id } = z.object({ id: idSchema }).parse(await fields(c))
+    const { id } = z.object({ id: serviceIdSchema }).parse(await fields(c))
     if (!Object.hasOwn(core.services, id)) throw new HTTPException(404, { message: 'Unknown service' })
     delete core.services[id]
     delete core.unlocked().vault.services[id]

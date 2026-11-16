@@ -4,7 +4,6 @@ import { html, raw } from 'hono/html'
 import type { Group, LogEntry, Service, View } from './core.ts'
 import type { SshSetup } from './jump.ts'
 import type { OwnerSecret } from './store.ts'
-
 type Html = ReturnType<typeof html>
 type Owned = Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>
 export type McpSummary = Record<string, { read: number; write: number; unannotated: number }>
@@ -16,9 +15,9 @@ export type Setup = {
   ssh: SshSetup
   mcp: McpSummary
   selected?: string
+  scope?: string
   error?: string
 }
-
 const css = `
 .masked{-webkit-text-security:disc}
 :root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);caret-color:var(--accent);
@@ -59,8 +58,8 @@ button,.action-btn{display:inline-flex;align-items:center;justify-content:center
 button.approve{background:var(--green-9);color:#fff;font-weight:750}button.secondary,.action-btn{background:var(--surface);color:var(--ink);border-color:var(--line)}button.secondary:hover,.action-btn:hover{background:var(--surface-2);filter:none}
 button.deny{background:transparent;color:var(--bad);border-color:var(--bad-line)}button.deny:hover{background:var(--bad-bg);filter:none}
 .ib{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 4px;border:0;background:transparent;color:var(--dim);font:650 .8rem var(--font-monospace-code);border-radius:var(--radius-2);text-decoration:none}.ib:hover{background:var(--surface-2);color:var(--ink);filter:none}.ib.revoke:hover,.ib.del:hover{color:var(--bad)}form:has(>.ib){display:contents}
-@media(pointer:fine){.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.gr:not(.sv) .acts{opacity:0}.sv .acts{opacity:.6}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn){min-height:30px}}
-@media(pointer:coarse){.gr{--ac:6rem}.gr.sv{--ac:8.5rem}}
+@media(pointer:fine){.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.rw:not(.sv) .acts{opacity:0}.sv .acts{opacity:.6}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn){min-height:30px}}
+@media(pointer:coarse){.gr{--ac:6rem}.rw.sv{--ac:11rem}.cs .c .ib{min-width:44px;min-height:44px;margin:-10px -12px -10px -6px}}
 .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.stub button{flex:1;min-height:50px;font-size:1rem}.stub button:first-child{flex:1.6}
 .chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}.chips input[type=text]{flex:1 1 220px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer;transition:background-color .16s ease-out,border-color .16s ease-out}
 .chips label:has(:checked){background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.chips label input{position:absolute;opacity:0}
@@ -72,23 +71,21 @@ details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;l
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:0 0 8px;font-size:.88rem}.kv dt{color:var(--dim)}.kv dd{margin:0;font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
 table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data-table th{text-align:left;color:var(--dim);font-size:.82rem;white-space:nowrap}table.data-table th,table.data-table td{padding:4px 12px 4px 0;border-top:1px solid var(--line);vertical-align:top}table.data-table td{overflow-wrap:anywhere}table.data-table td>details{margin:0}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more,table.data-table tr.more td{border-top:0;padding-top:0}.share td:first-child{padding-left:18px}
 .dim{color:var(--dim)}.clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ah{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-height:32px}.ah .grow{flex:1}.ah q{color:var(--dim);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--dim);font-size:.84rem}.t .ic{width:14px;height:14px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.ah{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-height:32px}.ah .nt{display:flex;gap:8px;align-items:baseline;min-width:0}.ah .nt>*,.ah .md{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.ah .grow{flex:1}.ah q{color:var(--dim);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--dim);font-size:.84rem}.t .ic{width:14px;height:14px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 .pop{position:relative}.pop>summary{min-height:28px;min-width:28px;justify-content:center}.pop>summary::after{content:none}.pop>div{position:absolute;right:0;z-index:5;width:min(92vw,420px);padding:10px 14px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);box-shadow:var(--shadow-3)}
-.gr{--ac:3.6rem;display:grid;grid-template-columns:20px 1.8rem minmax(0,1fr) minmax(0,9rem) 1.8rem 2.6rem var(--ac);align-items:center;gap:0 8px;min-height:30px;border-top:1px solid var(--line);font-size:.88rem}.gr>*{min-width:0}.gr code{font-size:.86rem}.gr.cs{grid-template-columns:20px minmax(0,1fr)}.gr.sv{--ac:5.4rem;grid-template-columns:20px minmax(0,15rem) minmax(0,1fr) var(--ac);min-height:34px}.gr .n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis}.nm>*{flex:none}.nm strong{flex:0 1 auto}.ok{color:light-dark(var(--green-9),var(--green-4))}
-.lv{font:700 .72rem var(--font-monospace-code);color:var(--dim)}.lv.rw{color:var(--warn)}.tree{padding-left:1.2em}.tree::before{content:"\\2514 ";margin-left:-1.2em;color:var(--dim)}
-
+.gr{--ac:3.6rem;border-top:1px solid var(--line);font-size:.88rem}.gr.ph{opacity:.6}.sc{--in:1.4rem}.xb{display:none}
+.rw{--nw:12rem;display:grid;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1.8rem 1.8rem 2.6rem minmax(var(--ac),1fr);align-items:center;gap:0 8px;min-height:30px;color:var(--ink);font-weight:400;cursor:default}.rw>*{min-width:0}.rw::after{content:none}.rw>.k{justify-self:end}.rw code{font-size:.86rem}.rw.sv{--nw:14rem;--ac:7.2rem;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1fr var(--ac);min-height:34px}.rw.cs{grid-template-columns:20px minmax(0,1fr)}.n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis}.nm>*{flex:none}.nm strong{flex:0 1 auto}.ok{color:light-dark(var(--green-9),var(--green-4))}
+.lv{font:700 .72rem var(--font-monospace-code);color:var(--dim)}.lv.w{color:var(--warn)}
 .cs div{display:flex;flex-wrap:wrap;gap:3px 6px;padding:2px 0}.cs span.c{display:inline-flex;align-items:center;gap:4px;padding:0 0 0 9px;border:1px solid var(--line);border-radius:var(--radius-round);font:.82rem var(--font-monospace-code);min-height:24px}.cs span.c.held{padding-right:9px}.cs .c .ib{opacity:.6}.cs .c:hover .ib{opacity:1}
-
 .ev>summary{display:grid;grid-template-columns:6.5rem 8rem minmax(0,1fr) 7rem 1rem;gap:0 10px;min-height:28px;color:var(--ink);font-weight:400;font-size:.84rem;border-top:1px solid var(--line)}.ev>summary>*{min-width:0}.ev>summary::after{margin:0}.ev time .dim{opacity:.6}.ev .kv{padding:6px 0 6px 6.5rem}.ev.g>summary{grid-template-columns:4.4rem minmax(0,1fr) 7rem 1rem}.ev.g .kv{padding-left:4.4rem}.more summary{justify-content:flex-start;gap:6px}.more summary::after{content:none}
 .gh{display:flex;gap:10px;align-items:baseline;margin:14px 0 2px;font-size:.92rem}.gh .r{margin-left:auto}
 .seg{display:inline-flex;margin:0 0 8px auto}.seg a{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:.84rem}.seg a:first-child{border-radius:var(--radius-2) 0 0 var(--radius-2)}.seg a:last-child{border-radius:0 var(--radius-2) var(--radius-2) 0;border-left:0}.seg a[aria-current]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .auth-wrap{min-height:100dvh;display:grid;place-items:center;padding:20px}.auth{width:100%;max-width:420px;margin:0}.auth-brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;font-size:1.35rem;font-weight:800;letter-spacing:-.03em}.auth-brand em{font-weight:700}.auth-brand .logo{background:light-dark(var(--indigo-10),var(--indigo-4));color:light-dark(#fff,oklch(16% .04 265))}.auth button{width:100%}.auth h2{align-items:center}
 dialog{max-width:440px;width:calc(100% - 32px);padding:20px;border:1px solid var(--line);border-radius:var(--radius-3);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-4)}dialog::backdrop{background:oklch(12% .02 262 / .58)}dialog h3{margin:0 0 8px}dialog p{margin:0 0 18px;color:var(--dim)}dialog .actions{justify-content:flex-end}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-@media(max-width:640px){.gr,.ev>summary,.ev.g>summary{display:flex;flex-wrap:wrap;gap:0 8px;padding:3px 0}.gr>code,.ev>summary .w{order:5;flex:1 1 100%}.cs div{flex:1}.ev>summary>.clip:not(.w){flex:1 1 4rem}.clip{white-space:normal;overflow-wrap:anywhere}.ev>summary::after{margin-left:auto}.ev .kv{padding-left:0}.pop>div{right:auto;left:0}.top .in{padding:0 8px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}.bar small{margin-left:auto}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:14px 14px 0}.stub{margin:14px -14px 0;padding:14px}.panel.region{padding:12px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--dim);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
+@media(max-width:640px){.rw,.ev>summary{display:flex;gap:8px;min-height:44px;font-size:.94rem}.sc{padding-left:1.4rem}.rw code,.ev code{font-size:inherit}.rw>.mc,.rw>.n,.rw>.acts,.ev>summary>.ag{display:none}.rw>.nm1,.ev>summary>.w{flex:1 1 0}.rw.cs{min-height:0}.cs div{flex:1}.cs span.c{font-size:.9rem}details[open]>.xb{display:grid;gap:8px;padding:2px 0 10px 28px;font-size:.94rem}.xb .bt{display:flex;gap:8px}.xb .bt>*{flex:1}.xb .bt button,.xb .bt .action-btn{width:100%}.ev .kv{padding-left:0}.ah .nt{flex:1 1 100%}.ah .md{flex:1 1 0}.reason{margin:6px 0 8px;padding:6px 10px}.stub button{min-height:44px}.pop>div{right:auto;left:0}.top .in{padding:0 8px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}.bar small{margin-left:auto}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:12px 12px 0}.stub{margin:10px -12px 0;padding:10px 12px 12px}.panel.region{padding:8px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--dim);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 `
-
 export const icons: Record<string, [icon: string, hue: number]> = {
   brand: ['key-round', 268],
   service: ['server', 70],
@@ -106,6 +103,7 @@ export const icons: Record<string, [icon: string, hue: number]> = {
   revoke: ['circle-x', 0],
   extend: ['clock-plus', 0],
   more: ['ellipsis', 0],
+  add: ['plus', 0],
   left: ['hourglass', 0],
   used: ['activity', 0],
 }
@@ -231,7 +229,6 @@ document.addEventListener('htmx:afterSwap', tick)
 document.addEventListener('DOMContentLoaded', () => { tick(); reveal() })
 addEventListener('hashchange', reveal)
 setInterval(tick, 1000)`
-
 const htmxConfig = JSON.stringify({
   includeIndicatorStyles: false,
   allowEval: false,
@@ -243,7 +240,6 @@ const htmxConfig = JSON.stringify({
 })
 const head = (nonce = '') =>
   html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/open-props.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script src="/admin/assets/idiomorph.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
-
 const sections = [
   ['agents', 'Agents', '/admin'],
   ['log', 'Activity', '/admin/log'],
@@ -268,7 +264,6 @@ export const layout = (nonce: string | undefined, section: Section, body: Html |
     ([id, label, href]) =>
       html`<a href="${href}" ${raw(id === section ? 'aria-current="page"' : '')}>${label}${id === 'agents' ? html`<span class="count" id="nav-count" ${raw(pending ? '' : 'hidden')}>${pending}</span>` : ''}</a>`,
   )}</nav><small id="live-status">Live</small><a href="/admin">Refresh</a></div></div></header><main>${section === 'agents' ? html`${filterBar}${filterEmpty}` : ''}${typeof body === 'string' ? raw(body) : body}</main>${confirmDialog}</body></html>`
-
 const authPage = (
   heading: string,
   intro: string,
@@ -301,7 +296,6 @@ export const setPasswordPage = (exposed: boolean, error?: string) =>
     exposed,
     error,
   )
-
 const labels: Record<string, string> = {
   '': 'No: it has its own key',
   permanent: 'Until revoked',
@@ -335,7 +329,6 @@ const tm = (icon: string, label: string, body: Html | string) =>
 const registered = (h: { source: string; registeredAt: number }) =>
   html`from ${h.source} · registered ${local(h.registeredAt)}`
 const empty = (text: string) => html`<p><small>${text}</small></p>`
-
 type Card = View['cards'][number]
 type Grant = View['grants'][number]
 const enforcing = {
@@ -417,7 +410,6 @@ export function agents(
 
   const end = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Number.POSITIVE_INFINITY)
   const sid = (g: Grant) => g.item.replace(/\.(read|full)$/, '')
-  const base = (g: Grant) => (services[sid(g)] ? addr(services[sid(g)].baseUrl) : sid(g))
   const agentBlock = (a: View['agents'][number]) => {
     const mine = grants.filter((g) => g.subject === a.id).sort((x, y) => end(x) - end(y))
     const open = sessions.filter((s) => s.agent === a.id)
@@ -437,66 +429,84 @@ export function agents(
       return text ? html`<mark data-state="${g.enforcement}" title="${title}">${text}</mark>` : ''
     }
     const extendable = (g: Grant) => g.expiresAt !== null && g.grantedMs !== undefined
-    const extend = (g: Grant) =>
+    const span1 = (g: Grant) => span(g.grantedMs ?? 0)
+    const extend = (g: Grant, text = false) =>
       extendable(g)
         ? button(
             '/admin/grants/extend',
             hidden('id', g.id),
-            `Extend ${g.item} by ${span(g.grantedMs ?? 0)}`,
+            text ? `Extend by ${span1(g)}` : `Extend ${g.item} by ${span1(g)}`,
             '',
-            'extend',
+            text ? '' : 'extend',
           )
         : ''
-    const revoke = (g: Grant) =>
+    const revoke = (g: Grant, text = false) =>
       button(
         '/admin/grants/revoke',
         hidden('id', g.id),
-        `Revoke ${g.item}`,
+        text ? 'Revoke' : `Revoke ${g.item}`,
         `Revoke ${g.item} for ${g.label}? Calls using it are blocked immediately.`,
-        'revoke',
+        text ? '' : 'revoke',
       )
     const tag = (g: Grant) => html`id="grant-${g.id}" data-item="${g.item}" data-expires="${g.expiresAt ?? ''}"`
     const bundled = (g: Grant) =>
       g.bundledWith.length ? `comes with ${g.bundledWith.join(', ')} and ends with it` : ''
-    // One grant, one line: kind icon, level, the item, a dim detail, uses, its own expiry, its actions.
-    const line = (g: Grant, main: Html, detail: Html | string) => {
+    // One grant, one line: kind icon, name, detail (an address for a service), level, uses, own expiry, actions. On a
+    // phone only the icon, name, level and expiry stay on the line; tapping it opens the rest.
+    const line = (g: Grant, name: Html | string, main: Html | string, cls = '') => {
       const lv = level(g.item)
-      return html`<div class="gr" ${tag(g)} title="${bundled(g)}">${ico(g.kind)}<span class="lv ${lv === 'RW' ? 'rw' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span>${main}<span class="clip dim">${state(g)}${detail}${g.detail.warning ? html` <mark>${g.detail.warning}</mark>` : ''}</span><span class="n">${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>` : ''}</span><span class="dim">${when(g)}</span><span class="acts">${extend(g)}${revoke(g)}</span></div>`
+      const note = html`${main}${state(g)}${g.detail.warning ? html` <mark>${g.detail.warning}</mark>` : ''}`
+      const n = g.uses
+        ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>`
+        : ''
+      return html`<details class="gr ${cls}" ${tag(g)} title="${bundled(g)}"><summary class="rw">${ico(g.kind)}<span class="clip nm1">${name}</span><span class="clip dim mc">${note}</span><span class="lv ${lv === 'RW' ? 'w' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span><span class="n">${n}</span><span class="dim">${when(g)}</span><span class="acts">${extend(g)}${revoke(g)}</span></summary><div class="xb"><span class="dim">${note}</span>${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}">${plural(g.uses, 'use', 'uses')}</a>` : ''}<div class="bt">${extend(g, true)}${revoke(g, true)}</div></div></details>`
     }
-    // A service whose key another granted service holds sits under that one, showing only the address beyond it.
-    const keyHolder = (g: Grant) => {
-      const auth = services[sid(g)]?.auth
-      return auth && auth.type !== 'none' && auth.secret !== sid(g) ? auth.secret : undefined
-    }
-    const svc = mine
-      .filter((g) => g.kind === 'service')
-      .sort((x, y) => base(x).localeCompare(base(y)) || x.item.localeCompare(y.item))
-    const service = (g: Grant, parent?: Grant) =>
-      line(
+    const addrOf = (id: string) => (services[id] ? addr(services[id].baseUrl) : id)
+    // A service is its name; a scope `parent:name` sits under its parent, which is always shown (dimmed when this
+    // agent holds only scopes), as `:name` with the address beyond the parent's.
+    const service = (g: Grant, parent?: string) => {
+      const id = sid(g)
+      const key = services[id]?.auth
+      const legacy = !parent && key && key.type !== 'none' && key.secret !== id ? key.secret : ''
+      return line(
         g,
-        html`<code class="clip ${parent ? 'tree' : ''}" title="${services[sid(g)]?.baseUrl ?? ''}">${under(base(g), parent && base(parent))}</code>`,
-        sid(g),
+        parent ? html`<span class="dim">:</span>${id.slice(parent.length + 1)}` : id,
+        html`<code title="${services[id]?.baseUrl ?? ''}">${under(addrOf(id), parent && addrOf(parent))}</code>${legacy ? html` <small title="uses the key of ${legacy}">key of ${legacy}</small>` : ''}`,
+        parent ? 'sc' : '',
       )
-    const tree = svc
-      .filter((g) => !svc.some((p) => sid(p) === keyHolder(g)))
-      .flatMap((g, i, top) => [
-        service(g),
-        ...(top.findIndex((p) => sid(p) === sid(g)) === i
-          ? svc.filter((k) => keyHolder(k) === sid(g)).map((k) => service(k, g))
-          : []),
-      ])
+    }
+    const svc = mine.filter((g) => g.kind === 'service')
+    const lead = (g: Grant) => sid(g).split(':')[0]
+    const tree = [...new Set(svc.map(lead))]
+      .sort((x, y) => addrOf(x).localeCompare(addrOf(y)))
+      .flatMap((h) => {
+        const own = svc.filter((g) => sid(g) === h).sort((x, y) => x.item.localeCompare(y.item))
+        return [
+          ...(own.length
+            ? own.map((g) => service(g))
+            : [
+                html`<div class="gr rw ph">${ico('service')}<span class="clip nm1">${h}</span><span class="clip mc"><code>${addrOf(h)}</code></span><span class="lv">–</span></div>`,
+              ]),
+          ...svc
+            .filter((g) => lead(g) === h && sid(g) !== h)
+            .sort((x, y) => x.item.localeCompare(y.item))
+            .map((g) => service(g, h)),
+        ]
+      })
     const others = mine.filter((g) => !['service', 'site', 'ext'].includes(g.kind))
     const chip = (g: Grant) =>
       html`<span class="c" ${tag(g)} title="${[g.item, bundled(g), g.detail.warning].filter(Boolean).join(' · ')}">${g.item.replace(/^\w+:/, '')}${when(g)}${state(g)}${when(g) ? extend(g) : ''}${revoke(g)}</span>`
     const chips = (kind: string, list: Html[]) =>
-      list.length ? html`<div class="gr cs">${ico(kind)}<div>${list}</div></div>` : ''
+      list.length ? html`<div class="gr rw cs">${ico(kind)}<div>${list}</div></div>` : ''
     const ids = (list: Grant[]) => list.map((g) => hidden('id', g.id))
     // Followers end with their parent, so they go first and no id is gone when its turn comes.
     const everything = [...mine].sort((x, y) => y.bundledWith.length - x.bundledWith.length)
     const toExtend = mine.filter((g) => extendable(g) && !g.bundledWith.length)
     const model = a.agent.split(' · ')[0].replace(` on ${a.sandboxHost}`, '')
-    const head = html`<header class="ah"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}<small>${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span(toExtend[0].grantedMs ?? 0)}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>Name it reported: ${a.label}<br>Identity it reported: ${a.agent}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)} from ${a.source}${a.sandboxHost ? ` via sandbox host ${a.sandboxHost}` : ''}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(c.requests, 'request', 'requests')} · ${c.granted} granted · ${c.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
-    return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh'), ...held.map(() => 'ext')])].join(' ')}">${head}${tree}${others.sort((x, y) => x.item.localeCompare(y.item)).map((g) => line(g, html`<code class="clip" title="${g.item}">${g.item.replace(/^\w+:|:rw$/g, '')}</code>`, g.detail.text))}${open.map((x) => html`<div class="gr">${ico('ssh')}<span></span><code class="clip">${x.what}</code><span class="dim">${local(x.started, 'Open since ')}</span><span></span><span></span><span class="acts">${button('/admin/ssh/sessions/end', hidden('id', x.id), `End SSH session ${x.what}`, `End this SSH session now? ${x.what}`, 'revoke')}</span></div>`)}${chips('site', mine.filter((g) => g.kind === 'site').map(chip))}${chips('ext', [...held.map((item) => html`<span class="c held" title="${item}: held for the task by the launch template; not revoked here">${item.replace(/^\w+:/, '')}</span>`), ...mine.filter((g) => g.kind === 'ext').map(chip)])}</article>`
+    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>Name it reported: ${a.label}<br>Identity it reported: ${a.agent}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)} from ${a.source}${a.sandboxHost ? ` via sandbox host ${a.sandboxHost}` : ''}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(c.requests, 'request', 'requests')} · ${c.granted} granted · ${c.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
+    const session = (x: (typeof open)[number]) =>
+      html`<details class="gr"><summary class="rw">${ico('ssh')}<span class="clip nm1">${x.what}</span><span class="clip dim mc">${local(x.started, 'Open since ')}</span><span class="lv"></span><span class="n"></span><span></span><span class="acts">${button('/admin/ssh/sessions/end', hidden('id', x.id), `End SSH session ${x.what}`, `End this SSH session now? ${x.what}`, 'revoke')}</span></summary><div class="xb"><div class="bt">${button('/admin/ssh/sessions/end', hidden('id', x.id), 'End session', `End this SSH session now? ${x.what}`)}</div></div></details>`
+    return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh'), ...held.map(() => 'ext')])].join(' ')}">${head}${tree}${others.sort((x, y) => x.item.localeCompare(y.item)).map((g) => line(g, g.item.replace(/^\w+:|:rw$/g, ''), g.detail.text))}${open.map(session)}${chips('site', mine.filter((g) => g.kind === 'site').map(chip))}${chips('ext', [...held.map((item) => html`<span class="c held" title="${item}: held for the task by the launch template; not revoked here">${item.replace(/^\w+:/, '')}</span>`), ...mine.filter((g) => g.kind === 'ext').map(chip)])}</article>`
   }
   const idle = (a: View['agents'][number]) =>
     !grants.some((g) => g.subject === a.id) &&
@@ -510,7 +520,6 @@ export function agents(
     html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-swap="morph:outerHTML" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
   )
 }
-
 const groupErrors: Record<string, string> = {
   empty: 'Group not saved: list at least one item, one per line.',
   line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
@@ -530,42 +539,55 @@ const preview = (items: string[], mono = false) => {
   return html`${items.slice(0, 2).map(one)}${items.length > 2 ? html`<details><summary>${items.length - 2} more</summary>${items.slice(2).map(one)}</details>` : ''}`
 }
 const consequence = (text: string) => html`<p><small>${text}</small></p>`
-
-export function setup({ services, keyed, owned, groups, ssh, mcp, selected, error }: Setup) {
+export function setup({ services, keyed, owned, groups, ssh, mcp, selected, scope, error }: Setup) {
   const chosen = selected && Object.hasOwn(services, selected) ? services[selected] : undefined
   const authType = chosen?.auth.type ?? 'bearer'
+  // Adding a scope starts the form at `parent:` with the parent's address; a scope uses the parent's key and authentication.
+  const prefix = !chosen && scope && Object.hasOwn(services, scope) ? `${scope}:` : ''
+  const formId = chosen ? (selected ?? '') : prefix
   const hasAdvanced = Boolean(chosen?.readPaths?.length || chosen?.mcp || chosen?.notes)
-  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id', 'text', chosen ? selected : '')}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl)}${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}${select('keyFrom', 'Or use the key of a wider service this one narrows (same site, under its address)', ['', ...Object.keys(services).filter((id) => id !== selected && services[id].auth.type !== 'none' && services[id].auth.secret === id)], chosen && chosen.auth.type !== 'none' && chosen.auth.secret !== selected ? chosen.auth.secret : '')}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'POST paths that only read, one per line (for example a search endpoint)', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
+  const serviceForm = html`<form method="post" action="/admin/services/save">${input('id', 'Service id (parent:scope for a scope)', 'text', formId)}${input('baseUrl', 'Upstream base URL', 'url', chosen?.baseUrl ?? (prefix ? services[scope ?? ''].baseUrl : undefined))}${formId.includes(':') ? hidden('authType', 'bearer') : html`${select('authType', 'Authentication (path = secret is a URL segment, e.g. a webhook id; none = keyless service)', ['bearer', 'header', 'basic', 'path', 'none'], authType)}<div data-auth-header ${raw(authType === 'header' ? '' : 'hidden')}>${input('headerName', 'Credential header', 'text', chosen?.auth.type === 'header' ? chosen.auth.headerName : '')}</div>${input('secret', 'Credential (blank keeps current)', 'password')}`}${select('read', 'Read rule (GET / HEAD / OPTIONS)', ['ask', 'open', 'never'], chosen?.read ?? 'ask')}${select('write', 'Write rule (all other methods)', ['ask', 'never'], chosen?.write ?? 'ask')}<details class="sub-details" ${raw(hasAdvanced ? 'open' : '')}><summary>Advanced options (read paths, MCP, notes)</summary>${area('readPaths', 'POST paths that only read, one per line (for example a search endpoint)', chosen?.readPaths?.join('\n'))}<label><input type="checkbox" name="mcp" ${raw(chosen?.mcp ? 'checked' : '')}> MCP server (streamable HTTP): classify tool calls by their read-only hints</label>${area('notes', 'Notes for agents (markdown, optional)', chosen?.notes, 5)}</details>${consequence('Saving ends any grant that now reaches further or is no longer allowed.')}<button>Save service</button></form>`
   const tools = (id: string) =>
     html`<div class="actions">${error === 'tools' ? html`<p class="warn" role="alert">Could not list tools; check the URL and credential.</p>` : ''}<small>${mcp[id] ? `Tools: ${mcp[id].read} read · ${mcp[id].write} write${mcp[id].unannotated ? ` (${mcp[id].unannotated} without hints, treated as write)` : ''}` : 'Tools not listed yet'}</small>${button('/admin/services/tools', hidden('id', id), 'Refresh tools')}</div>`
-  // A service that takes its key from another existing service is listed under it.
-  const holder = (id: string) => {
-    const auth = services[id].auth
-    return auth.type !== 'none' && auth.secret !== id && Object.hasOwn(services, auth.secret) ? auth.secret : undefined
-  }
+  // A scope `parent:name` is listed under its parent.
+  const parentOf = (id: string) =>
+    id.includes(':') && Object.hasOwn(services, id.split(':')[0]) ? id.split(':')[0] : undefined
   // Only departures from the default rule (ask) show; the default stays as text for assistive technology.
   const rule = (letter: string, label: string, value: string) =>
     value === 'ask'
       ? html`<span class="vh" data-label="${label}">ask</span>`
-      : html`<span class="lv ${value === 'open' ? 'rw' : ''}">${letter} <span data-label="${label}">${value}</span></span>`
+      : html`<span class="lv ${value === 'open' ? 'w' : ''}">${letter} <span data-label="${label}">${value}</span></span>`
   const serviceRow = (id: string, parent?: string) => {
     const s = services[id]
     const q = encodeURIComponent(id)
+    const own = s.auth.type !== 'none' && s.auth.secret === id
     const key =
       s.auth.type !== 'none' && !keyed.has(id)
         ? html`<mark data-label="Credential">no key</mark>`
-        : s.auth.type === 'none' || parent
-          ? ''
-          : html`<span class="vh" data-label="Credential">Set</span>`
-    const kids = Object.keys(services).filter((k) => holder(k) === id)
-    return html`<div class="gr sv">${ico('service')}<span class="nm"><strong title="${id}">${id}</strong>${s.mcp ? html`<span class="badge">MCP</span>` : ''}${rule('R', 'Read policy', s.read)}${rule('W', 'Write policy', s.write)}${key}</span><code class="clip ${parent ? 'tree' : ''}" title="${s.baseUrl}">${under(addr(s.baseUrl), parent && addr(services[parent].baseUrl))}</code><span class="acts"><a class="ib" href="/admin?section=services&amp;service=${q}" aria-label="Edit ${id}" title="Edit ${id}">${glyph('edit')}</a><a class="ib" href="/admin/log?service=${q}" aria-label="Activity of ${id}" title="Activity of ${id}">${glyph('log')}</a>${button('/admin/services/delete', hidden('id', id), `Delete ${id}`, `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.${kids.length ? ` ${kids.join(', ')} take${kids.length === 1 ? 's' : ''} their key from it and will stop working.` : ''}`, 'del')}</span></div>`
+        : own
+          ? html`<span class="vh" data-label="Credential">Set</span>`
+          : s.auth.type !== 'none' && !parent
+            ? html`<small title="uses the key of ${s.auth.secret}">key of ${s.auth.secret}</small>`
+            : ''
+    const kids = Object.keys(services).filter((k) => parentOf(k) === id)
+    const shown = under(addr(s.baseUrl), parent && addr(services[parent].baseUrl))
+    const edit = `/admin?section=services&amp;service=${q}`
+    const del = (text = false) =>
+      button(
+        '/admin/services/delete',
+        hidden('id', id),
+        text ? 'Delete' : `Delete ${id}`,
+        `Delete service ${id}? Its credential is erased and its grants and pending requests are removed.${kids.length ? ` ${kids.join(', ')} use${kids.length === 1 ? 's' : ''} its key and will stop working.` : ''}`,
+        text ? '' : 'del',
+      )
+    return html`<details class="gr ${parent ? 'sc' : ''}"><summary class="rw sv">${ico('service')}<span class="nm nm1"><strong title="${id}">${parent ? html`<span class="dim">:</span>${id.slice(parent.length + 1)}` : id}</strong>${s.mcp ? html`<span class="badge">MCP</span>` : ''}</span><code class="clip mc" title="${s.baseUrl}">${shown}</code><span class="nm">${rule('R', 'Read policy', s.read)}${rule('W', 'Write policy', s.write)}${key}</span><span class="acts">${own && !id.includes(':') ? html`<a class="ib" href="/admin?section=services&amp;scope=${q}" aria-label="Add a scope to ${id}" title="Add a scope to ${id}">${glyph('add')}</a>` : ''}<a class="ib" href="${edit}" aria-label="Edit ${id}" title="Edit ${id}">${glyph('edit')}</a><a class="ib" href="/admin/log?service=${q}" aria-label="Activity of ${id}" title="Activity of ${id}">${glyph('log')}</a>${del()}</span></summary><div class="xb"><code>${shown}</code><div class="bt"><a class="action-btn" href="${edit}">Edit</a><a class="action-btn" href="/admin/log?service=${q}">Activity</a>${del(true)}</div></div></details>`
   }
   const serviceRows = Object.keys(services)
-    .filter((id) => !holder(id))
+    .filter((id) => !parentOf(id))
     .flatMap((id) => [
       serviceRow(id),
       ...Object.keys(services)
-        .filter((k) => holder(k) === id)
+        .filter((k) => parentOf(k) === id)
         .map((k) => serviceRow(k, id)),
     ])
   const secretForm = (name = '', o?: { hosts: string[]; env: string }) =>
@@ -602,9 +624,8 @@ export function setup({ services, keyed, owned, groups, ssh, mcp, selected, erro
     more(4, 'Edit', groupForm(id, group)),
   ])
   const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
 }
-
 const s = (value: unknown) => String(value ?? '')
 const arr = (v: unknown) => (Array.isArray(v) ? v.map(s) : [])
 const itemKind = (item: string) =>
@@ -638,7 +659,7 @@ const what = (e: LogEntry) => {
           e.op,
           e.path,
           e.command ?? (e.event === 'ssh_session' ? 'sftp' : ''),
-          ...items.map((i) => (same ? i.replace(/^\w+:/, '') : i)),
+          ...items.map((i) => (same ? i.replace(/^(site|ext|secret|folder|ssh|mcp):/, '') : i)),
           e.why,
           e.reason,
         ]
@@ -680,7 +701,7 @@ export function log(
   const line = (e: LogEntry, i: number, list: LogEntry[]) => {
     const { kind, text } = what(e)
     const repeat = i > 0 && list[i - 1].time.slice(0, 16) === e.time.slice(0, 16)
-    return html`<details class="ev ${grouped ? 'g' : ''}"><summary>${local(Date.parse(e.time), undefined, grouped ? 'time' : '', repeat)}${grouped ? '' : html`<span class="clip">${s(e.label)}</span>`}<span class="clip w" title="${text}">${kind ? ico(kind) : ''}<code>${text}</code></span><span class="clip">${result(e)}</span></summary><dl class="kv">${Object.entries(e).map(([k, v]) => html`<dt>${k}</dt><dd>${typeof v === 'string' ? v : JSON.stringify(v)}</dd>`)}</dl></details>`
+    return html`<details class="ev ${grouped ? 'g' : ''}"><summary>${local(Date.parse(e.time), undefined, grouped ? 'time' : '', repeat)}${grouped ? '' : html`<span class="clip ag">${s(e.label)}</span>`}<span class="clip w" title="${text}">${kind ? ico(kind) : ''}<code>${text}</code></span><span class="clip">${result(e)}</span></summary><dl class="kv">${Object.entries(e).map(([k, v]) => html`<dt>${k}</dt><dd>${typeof v === 'string' ? v : JSON.stringify(v)}</dd>`)}</dl></details>`
   }
   const byAgent = new Map<string, LogEntry[]>()
   for (const e of entries) byAgent.set(e.agent ?? '', [...(byAgent.get(e.agent ?? '') ?? []), e])
