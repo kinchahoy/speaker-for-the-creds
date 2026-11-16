@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import writeFile from 'write-file-atomic'
+import { z } from 'zod'
 
 const run = promisify(execFile)
 
@@ -29,8 +30,10 @@ export class WrongPassword extends Error {
   }
 }
 
-type Sealed = { iv: string; tag: string; data: string }
-type Wrap = { salt: string; key: Sealed }
+const Sealed = z.object({ iv: z.string(), tag: z.string(), data: z.string() })
+const Wrap = z.object({ salt: z.string(), key: Sealed })
+type Sealed = z.infer<typeof Sealed>
+type Wrap = z.infer<typeof Wrap>
 
 const derive = (password: string, salt: Buffer) =>
   new Promise<Buffer>((done, fail) =>
@@ -95,7 +98,7 @@ export async function createStore(path: string, password: string, vault: Vault):
 
 // Throws WrongPassword unless the password unwraps the data key.
 export async function openStore(path: string, password: string): Promise<Store> {
-  const file = JSON.parse(await readFile(path, 'utf8')) as Wrap & { vault: Sealed }
+  const file = Wrap.extend({ vault: Sealed }).parse(JSON.parse(await readFile(path, 'utf8')))
   let dataKey: Buffer
   try {
     dataKey = open(await derive(password, Buffer.from(file.salt, 'base64')), file.key)

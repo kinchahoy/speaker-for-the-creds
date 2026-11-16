@@ -76,8 +76,10 @@ export const launchRequest = (template: Template, agentId: string, extra: string
 };
 
 export const loadTemplates = (path: string) => {
-  const templates = z.array(Template).parse(JSON.parse(readFileSync(path, "utf8")));
-  if (new Set(templates.map(({ id }) => id)).size !== templates.length) throw new Error("templates repeat an id");
+  const templates = z
+    .array(Template)
+    .refine((list) => new Set(list.map(({ id }) => id)).size === list.length, "templates repeat an id")
+    .parse(JSON.parse(readFileSync(path, "utf8")));
   return new Map(templates.map((template) => [template.id, template]));
 };
 

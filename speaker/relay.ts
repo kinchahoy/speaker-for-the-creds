@@ -4,23 +4,34 @@
 import { spawn } from 'node:child_process'
 import { connect } from 'node:net'
 import { createInterface } from 'node:readline'
-import { type Mount, relaySftp } from './sftp.ts'
+import { z } from 'zod'
+import { relaySftp } from './sftp.ts'
 
-export type ToSpeaker =
-  | { type: 'start'; agent: string; command: string; source: string }
-  | { type: 'mount'; name: string }
-  | { type: 'file'; op: string; path: string }
-  | { type: 'refused'; message: string }
-  | { type: 'exit'; code: number }
-export type FromSpeaker =
-  | { type: 'refused'; message: string }
-  | { type: 'run'; argv: string[] }
-  | { type: 'sftp' }
-  | ({ type: 'mount' } & Mount)
-  | { type: 'end'; why: string }
+export const toSpeaker = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('start'), agent: z.string(), command: z.string(), source: z.string() }),
+  z.object({ type: z.literal('mount'), name: z.string() }),
+  z.object({ type: z.literal('file'), op: z.string(), path: z.string() }),
+  z.object({ type: z.literal('refused'), message: z.string() }),
+  z.object({ type: z.literal('exit'), code: z.number() }),
+])
+export type ToSpeaker = z.infer<typeof toSpeaker>
+export const fromSpeaker = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('refused'), message: z.string() }),
+  z.object({ type: z.literal('run'), argv: z.array(z.string()) }),
+  z.object({ type: z.literal('sftp') }),
+  z.object({
+    type: z.literal('mount'),
+    name: z.string(),
+    readOnly: z.boolean(),
+    absolute: z.boolean(),
+    argv: z.array(z.string()),
+  }),
+  z.object({ type: z.literal('end'), why: z.string() }),
+])
+export type FromSpeaker = z.infer<typeof fromSpeaker>
 
 if (import.meta.main) {
-  const [socketPath, agent] = process.argv.slice(2)
+  const [socketPath, agent] = z.tuple([z.string(), z.string()]).parse(process.argv.slice(2))
   const socket = connect(socketPath)
   let child: { kill(): void } | undefined
   // `running` until the session finishes on its own; speaker closing the socket before that ends it.
@@ -36,7 +47,7 @@ if (import.meta.main) {
   // Speaker answers each call with one line, in order.
   const replies: ((message: FromSpeaker) => void)[] = []
   createInterface({ input: socket }).on('line', (line) => {
-    const message = JSON.parse(line) as FromSpeaker
+    const message = fromSpeaker.parse(JSON.parse(line))
     if (message.type === 'end') stop(`the session ended: ${message.why}`)
     replies.shift()?.(message)
   })
@@ -53,8 +64,11 @@ if (import.meta.main) {
     return started
   }
 
-  const source = (process.env.SSH_CONNECTION ?? '').split(' ')[0]
-  const first = await call({ type: 'start', agent, command: process.env.SSH_ORIGINAL_COMMAND ?? '', source })
+  const env = z
+    .object({ SSH_CONNECTION: z.string().default(''), SSH_ORIGINAL_COMMAND: z.string().default('') })
+    .parse(process.env)
+  const source = env.SSH_CONNECTION.split(' ')[0]
+  const first = await call({ type: 'start', agent, command: env.SSH_ORIGINAL_COMMAND, source })
   if (first.type === 'refused') stop(first.message)
   if (first.type === 'run') run(first.argv, 'inherit').on('close', (code) => finish(code ?? 255))
   if (first.type === 'sftp')

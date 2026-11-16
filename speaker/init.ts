@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { type parseArgs, styleText } from 'node:util'
 import * as p from '@clack/prompts'
+import { z } from 'zod'
 import { createCore, readConfig } from './core.ts'
 
 export const speakerFlags = {
@@ -85,14 +86,13 @@ export async function pickPort(
         defaultValue: String(fallback),
       }),
     )
-    const port = Number(raw)
-    const problem =
-      !Number.isInteger(port) || port < 1 || port > 65535
-        ? 'is not a port number'
-        : taken.includes(port) || !(await isFree(port, host))
-          ? 'is already in use'
-          : undefined
-    if (!problem) return port
+    const port = z.coerce.number().int().min(1).max(65_535).safeParse(raw)
+    const problem = !port.success
+      ? 'is not a port number'
+      : taken.includes(port.data) || !(await isFree(port.data, host))
+        ? 'is already in use'
+        : undefined
+    if (port.success && !problem) return port.data
     if (value !== undefined || yes) fail(`${label} port ${raw} ${problem}`, `choose another with --${flag}`)
     p.log.warn(`Port ${raw} ${problem === 'is already in use' ? 'is in use' : problem}; choose another.`)
   }

@@ -42,7 +42,11 @@ export type RequestBody = { agentId: string; want: string[]; reason: string; dur
 export const readHostToken = (config: Config) => {
   const path = `${config.stateRoot}/speaker.token`;
   if (!existsSync(path)) throw new Error(`${path} is missing; run "bottle register"`);
-  return readFileSync(path, "utf8").trim();
+  return z
+    .string()
+    .trim()
+    .regex(/^[0-9a-f]{64}$/, `${path} is not a host token; run "bottle register"`)
+    .parse(readFileSync(path, "utf8"));
 };
 
 /** Speaker's typed client: a wrong path or body shape fails `tsc`. */
@@ -69,7 +73,7 @@ export const registerHost = async (config: Config, configPath: string, name: str
   if (!response.ok) throw new Error(`speaker POST hosts returned ${response.status}: ${await response.text()}`);
   const { id, proxyPort, sshPort } = Registered.parse(await response.json());
   writeFileSync(`${config.stateRoot}/speaker.token`, token, { mode: 0o600 });
-  const file = JSON.parse(readFileSync(configPath, "utf8"));
+  const file = z.looseObject({}).parse(JSON.parse(readFileSync(configPath, "utf8")));
   file.speaker = { url: config.speaker.url, proxyPort, sshPort };
   writeFileSync(configPath, `${JSON.stringify(file, null, 2)}\n`);
   return id;

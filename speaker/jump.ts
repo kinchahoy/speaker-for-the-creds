@@ -19,7 +19,7 @@ import writeFile from 'write-file-atomic'
 import { z } from 'zod'
 import type { Description } from './engine.ts'
 import { type SessionState, sessionTable, transition } from './lifecycle.ts'
-import type { FromSpeaker, ToSpeaker } from './relay.ts'
+import { type FromSpeaker, toSpeaker, type ToSpeaker } from './relay.ts'
 
 const run = promisify(execFile)
 const relayScript = fileURLToPath(new URL('./relay.ts', import.meta.url))
@@ -598,7 +598,7 @@ export async function createJump(env: Env) {
       else if (message.type === 'refused') env.audit('ssh_refused', { ...fields, why: message.message })
       else session.code = message.code
     }
-    createInterface({ input: socket }).on('line', (line) => onMessage(JSON.parse(line) as ToSpeaker))
+    createInterface({ input: socket }).on('line', (line) => onMessage(toSpeaker.parse(JSON.parse(line))))
     socket.on('error', () => undefined)
     socket.on('close', () => {
       if (!session) return

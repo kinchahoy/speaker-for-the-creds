@@ -52,7 +52,28 @@ const ConfigFile = z
     // A bottle that `run` started stops itself once no agent has been open for this long; `serve` never does.
     idleStopMinutes: z.number().positive().default(10),
   })
-  .strict();
+  .strict()
+  .superRefine((config, ctx) => {
+    const fail = (message: string) => ctx.addIssue({ code: "custom", message });
+    // Loopback, RFC1918, and the Tailscale CGNAT range are the only addresses this service binds.
+    if (!isIPv4(config.bindHost) || !(lan.check(config.bindHost) || tailscale.check(config.bindHost)))
+      fail(`bindHost must be one exact loopback, RFC1918, or Tailscale IPv4 address; config.json has "${config.bindHost}"`);
+    else if (!Object.values(networkInterfaces()).some((entries) => entries?.some((entry) => entry.address === config.bindHost)))
+      fail(`bindHost is not configured on this host: ${config.bindHost}`);
+    if (config.controlPort === config.guestPort) fail("control and guest ports must be distinct");
+    if (new Set(config.hostedProviders.map((provider) => provider.id)).size !== config.hostedProviders.length) fail("hosted provider ids must be unique");
+    for (const provider of config.hostedProviders)
+      if (new Set(provider.models.map((entry) => entry.id)).size !== provider.models.length) fail(`hosted provider ${provider.id} repeats a model id`);
+    const upstream = config.localModel.upstream;
+    const problem = upstream === undefined ? undefined : localModelProblem(upstream);
+    if (problem) fail(`localModel.upstream ${problem}`);
+    if ((upstream === undefined) !== (config.localModel.models.length === 0))
+      fail("localModel needs both an upstream and its models, or neither (hosted models only)");
+    if (!config.localModel.models.length && !config.hostedProviders.length) fail("configure a local model or a hosted provider");
+    if (new Set(config.localModel.models.map((entry) => entry.id)).size !== config.localModel.models.length) fail("localModel repeats a model id");
+    const aliases = [...config.localModel.models, ...config.hostedProviders.flatMap((provider) => provider.models)].flatMap((entry) => entry.alias ?? []);
+    if (new Set(aliases).size !== aliases.length) fail("model aliases must be unique");
+  });
 
 export type Config = z.infer<typeof ConfigFile>;
 
@@ -92,27 +113,6 @@ export const localModelUp = (upstream: string) =>
 
 export const validateConfig = (data: unknown): Config => {
   const config = ConfigFile.parse(data);
-  // Loopback, RFC1918, and the Tailscale CGNAT range are the only addresses this service binds.
-  if (!isIPv4(config.bindHost) || !(lan.check(config.bindHost) || tailscale.check(config.bindHost)))
-    throw new Error(`bindHost must be one exact loopback, RFC1918, or Tailscale IPv4 address; config.json has "${config.bindHost}"`);
-  if (!Object.values(networkInterfaces()).some((entries) => entries?.some((entry) => entry.address === config.bindHost)))
-    throw new Error(`bindHost is not configured on this host: ${config.bindHost}`);
-  if (config.controlPort === config.guestPort) throw new Error("control and guest ports must be distinct");
-  if (new Set(config.hostedProviders.map((provider) => provider.id)).size !== config.hostedProviders.length)
-    throw new Error("hosted provider ids must be unique");
-  for (const provider of config.hostedProviders)
-    if (new Set(provider.models.map((entry) => entry.id)).size !== provider.models.length) throw new Error(`hosted provider ${provider.id} repeats a model id`);
-  const upstream = config.localModel.upstream;
-  if (upstream !== undefined) {
-    const problem = localModelProblem(upstream);
-    if (problem) throw new Error(`localModel.upstream ${problem}`);
-  }
-  if ((upstream === undefined) !== (config.localModel.models.length === 0))
-    throw new Error("localModel needs both an upstream and its models, or neither (hosted models only)");
-  if (!config.localModel.models.length && !config.hostedProviders.length) throw new Error("configure a local model or a hosted provider");
-  if (new Set(config.localModel.models.map((entry) => entry.id)).size !== config.localModel.models.length) throw new Error("localModel repeats a model id");
-  const aliases = [...config.localModel.models, ...config.hostedProviders.flatMap((provider) => provider.models)].flatMap((entry) => entry.alias ?? []);
-  if (new Set(aliases).size !== aliases.length) throw new Error("model aliases must be unique");
   assertDirectory("configRoot", config.configRoot);
   assertDirectory("stateRoot", config.stateRoot);
   assertDirectory("outputRoot", config.outputRoot);

@@ -21,6 +21,12 @@ import {
 import { WrongPassword } from './store.ts'
 import { active, icons, inbox, layout, live, log, setPasswordPage, setup, signInPage, unchanged } from './ui.ts'
 
+const textLines = (text = '') =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
 export function adminApp(core: Core) {
   const admin = new Hono()
   admin.use(
@@ -257,7 +263,7 @@ export function adminApp(core: Core) {
     return c.html(layout(nonce, 'approvals', live('inbox', panels.inbox())))
   })
   admin.get('/panel/:name{inbox|active}', (c) => {
-    const name = c.req.param('name') as keyof typeof panels
+    const name = z.enum(['inbox', 'active']).parse(c.req.param('name'))
     const inner = panels[name]()
     return unchanged(inner, c.req.query('h')) ? c.body(null, 204) : c.html(live(name, inner))
   })
@@ -278,27 +284,26 @@ export function adminApp(core: Core) {
         notes: z.string().optional(),
         read: serviceSchema.shape.read,
         write: serviceSchema.shape.write,
-        readPaths: z.string().optional(),
+        readPaths: z.string().optional().transform(textLines),
         mcp: z.literal('on').optional(),
       })
+      .superRefine(({ secret, authType }, ctx) => {
+        if (secret && /[\r\n]/.test(secret))
+          ctx.addIssue({ code: 'custom', message: 'Credential must be a single line' })
+        if (secret && authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(secret))
+          ctx.addIssue({ code: 'custom', message: 'A path credential must be one URL path segment' })
+      })
       .parse(await fields(c))
-    const readPaths = (input.readPaths ?? '')
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
     const service = serviceSchema.parse({
       baseUrl: input.baseUrl,
       notes: input.notes?.trim() || undefined,
       auth: { type: input.authType, secret: input.id, headerName: input.headerName },
       read: input.read,
       write: input.write,
-      readPaths: readPaths.length ? readPaths : undefined,
+      readPaths: input.readPaths.length ? input.readPaths : undefined,
       mcp: input.mcp ? true : undefined,
     })
     if (input.secret) {
-      if (/[\r\n]/.test(input.secret)) throw new HTTPException(400, { message: 'Credential must be a single line' })
-      if (input.authType === 'path' && !/^[A-Za-z0-9._~-]+$/.test(input.secret))
-        throw new HTTPException(400, { message: 'A path credential must be one URL path segment' })
       core.unlocked().vault.services[input.id] = input.secret
       await core.unlocked().save()
     }
@@ -374,16 +379,12 @@ export function adminApp(core: Core) {
   admin.post('/groups/save', async (c) => {
     const back = (error: string) => c.redirect(`/admin?section=groups&error=${error}`, 303)
     const form = await fields(c)
-    const input = z.object({ id: idSchema, items: z.string() }).safeParse(form)
+    const input = z.object({ id: idSchema, items: z.string().transform(textLines) }).safeParse(form)
     if (!input.success) return back('id')
     const description = groupDescriptionSchema.safeParse(form.description ?? '')
     if (!description.success) return back('description')
-    const lines = input.data.items
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-    if (!lines.length) return back('empty')
-    const parsed = groupItemsSchema.safeParse(lines)
+    if (!input.data.items.length) return back('empty')
+    const parsed = groupItemsSchema.safeParse(input.data.items)
     if (!parsed.success) return back('line')
     core.groups[input.data.id] = { ...(description.data ? { description: description.data } : {}), items: parsed.data }
     await core.saveGroups()

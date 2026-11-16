@@ -101,7 +101,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   // Holds a call for up to `Speaker-Wait` seconds (max 120) until `settled`; without the header it answers at once.
   // Each look waits for a decision in progress, so a grant is seen only once it is in place.
   const hold = async (c: Context<Env>, settled: () => boolean) => {
-    const until = Date.now() + Math.min(Number(c.req.header('speaker-wait')) || 0, 120) * 1000
+    const wait = z.coerce.number().catch(0).parse(c.req.header('speaker-wait'))
+    const until = Date.now() + Math.min(wait, 120) * 1000
     while (!(await core.engine.serial(settled)) && Date.now() < until && !c.req.raw.signal.aborted) await sleep(500)
   }
   const offered = (agent: Agent) =>

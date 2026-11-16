@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { hc as honoClient } from "hono/client";
 import { Command, InvalidArgumentError, Option } from "commander";
+import { z } from "zod";
 import { attach } from "./sandbox.ts";
 import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
@@ -135,7 +136,7 @@ const startBottle = async (control: string) => {
 
 /** Stops the bottle that start.sh recorded; its shutdown archives open agents first. */
 const stopBottle = async () => {
-  const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : undefined;
+  const pid = existsSync(pidFile) ? z.coerce.number().int().positive().safeParse(readFileSync(pidFile, "utf8")).data : undefined;
   const alive = () => {
     try {
       return process.kill(pid!, 0);
@@ -339,9 +340,9 @@ program
   )
   .option("--name <name>", "agent name")
   .option("--hours <n>", "wall-clock deadline in hours from launch", (text) => {
-    const hours = Number(text);
-    if (!Number.isFinite(hours) || hours <= 0) throw new InvalidArgumentError("a positive number of hours");
-    return hours;
+    const hours = z.coerce.number().positive().safeParse(text);
+    if (!hours.success) throw new InvalidArgumentError("a positive number of hours");
+    return hours.data;
   })
   .addOption(new Option("--attended", "Pi may ask questions even when detached").conflicts("unattended"))
   .option("--unattended", "Pi records assumptions instead of asking, even when attached")

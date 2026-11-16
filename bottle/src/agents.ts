@@ -4,6 +4,7 @@ import { statfs } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
 import { localModelUp, type Config } from "./config.ts";
@@ -46,6 +47,7 @@ const agentTable: Table<AgentState, AgentEvent> = {
 const piExited = "Pi exited; attach to restart it on the same session";
 export const closed = (agent: Pick<Agent, "state">) => ["closing", "archived", "failed-archive"].includes(agent.state);
 
+const ArchivedAgent = z.object({ id: z.string(), name: z.string(), state: z.string(), model: z.string(), closedAt: z.string() });
 /** The newest finished agents, read from their archive folders (<time>--<name>--<id>): each one's final agent.json plus its folder. */
 export const finishedAgents = (outputRoot: string, count = 5) =>
   readdirSync(outputRoot)
@@ -54,7 +56,7 @@ export const finishedAgents = (outputRoot: string, count = 5) =>
     .flatMap((folder) => {
       const outputDir = join(outputRoot, folder);
       try {
-        const { id, name, state, model, closedAt } = JSON.parse(readFileSync(join(outputDir, "_control", "agent.json"), "utf8")) as Record<string, string>;
+        const { id, name, state, model, closedAt } = ArchivedAgent.parse(JSON.parse(readFileSync(join(outputDir, "_control", "agent.json"), "utf8")));
         return [{ id, name, state, model, closedAt, outputDir }];
       } catch {
         return []; // a live agent's folder has no agent.json yet
