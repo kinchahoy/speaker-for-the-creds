@@ -65,7 +65,7 @@ export async function start(t: TestContext, { dir, env = {} }: { dir?: string; e
       s.closeAllConnections()
       s.close()
     }
-    if (!restarted) await rm(dataDir, { recursive: true, force: true })
+    if (!restarted) await rm(dataDir, { recursive: true, force: true, maxRetries: 5 })
   })
   const call = (path: string, init: RequestInit = {}) => fetch(url + path, { redirect: 'manual', ...init })
   const json = (body: object, headers: Record<string, string> = {}) => ({

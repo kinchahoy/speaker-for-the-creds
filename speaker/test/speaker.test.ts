@@ -289,10 +289,15 @@ test(
     assert.equal(existsSync(join(world, 'pics', 'hijack.txt')), false)
     await f.revoke('folder:pics')
     assert.deepEqual(
-    (await a.catalog()).ssh.map((e: { item: string }) => e.item),
-    ['folder:docs:rw'],
-  )
-})
+      (await a.catalog()).ssh.map((e: { item: string }) => e.item),
+      ['folder:docs:rw'],
+    )
+  },
+)
+
+test('a card that widens what the agent holds is marked as wider; a first request is not', async (t) => {
+  const f = await start(t)
+  await f.saveService('a', { secret: 'a-key' })
   await f.saveService('a:b', { baseUrl: `${f.upstreamUrl}/base/sub` })
   const a = await f.enrol()
   const first = (await body(await a.as('/a/x'))).request
