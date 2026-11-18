@@ -94,13 +94,6 @@ export const loadCatalog = (config: Config): Catalog => {
 };
 
 const SESSION = "/work/.pi-session/agent.jsonl";
-/** Commands the guest image provides. */
-export const CLI_TOOLS = `
-  rg ctags jq sqlite3 git gh curl wget tree file shellcheck uv gcc make node pnpm cmake pandoc
-  pdftotext qpdf tesseract magick dot ffmpeg hyperfine tmux
-`
-  .trim()
-  .split(/\s+/);
 // The last four are pi-subagents', always on in the image.
 const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability,subagents_enable,subagent,bg_wait,subagent_supervisor";
 
@@ -188,11 +181,7 @@ export const systemNote = (
     "",
     "## Environment",
     "",
-    `- CLI tools: ${CLI_TOOLS.join(", ")}.`,
-    "- Python: always use uv. Run scratch code with `uv run python` and `uv run pytest`, which use the default environment. For a project, use `uv init`, `uv add`, and `uv run`. There is no bare `python` or `pip`.",
-    "- JavaScript work: write TypeScript. Run it with `node file.ts`. Check types with `tsc --noEmit`. Manage packages with pnpm, lint with `oxlint`, and format with `oxfmt`.",
-    "- Browser automation: Playwright with headless Chromium is installed.",
-    "- To get a missing tool or library, install it from a package registry: `uv add` (PyPI) or `pnpm add` (npm). Many CLI tools ship there. Request direct binary downloads (for example GitHub releases) only when no registry package exists.",
+    "- What is installed and how to use it (Python only through uv, TypeScript, the browser for pages and screenshots): read `/opt/locally-available-tools.md` before installing anything. Get a missing tool from a package registry (`uv add`, `pnpm add`); request direct binary downloads only when no registry package exists.",
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`; with `want: []` it lists what you hold and what you can ask for. Call a service you hold with `speaker [METHOD] <service>/<path> [json-body]`; your first message lists what you hold.",
     "- Subagents (`subagent`) run in this VM with your access and spend your model request budget. Limits: at most 2 children per call, children cannot delegate further, and every child uses your model. Delegate only independent work large enough to be worth a fresh context, and write the final answer yourself.",
     "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it.",

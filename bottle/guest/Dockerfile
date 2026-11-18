@@ -3,23 +3,28 @@
 # Pi extensions. guest/build.sh builds it for the host architecture (linux/amd64 and linux/arm64 share this file) and
 # loads it into microsandbox, which runs it as is.
 # microsandbox needs socat (vsock doors), sshfs and fuse3 (folders), dtach (attach), openssh-client, git, curl, ca-certificates.
+# What gets installed comes from one file, locally-available-tools.md, which the agent also reads: each `(<source> <package>)`
+# goes to that source's layer. The lists stage splits it per source; a layer copies only its own list, so editing a
+# description or another source's line leaves the layer cached.
+FROM debian:trixie-slim AS lists
+COPY locally-available-tools.md /tools.md
+RUN mkdir /lists && grep '^- ' /tools.md | sed 's/: .*//' > /lists/prefixes \
+ && for s in apt base browser mise uv; do grep -o "($s [^)]*)" /lists/prefixes | sed "s/^($s //; s/)\$//" > /lists/$s.txt; done \
+ && grep -o '`[^`]*`' /lists/prefixes | tr -d '`' > /lists/commands.txt
+
 FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. System: only what mise does not provide (the git client, C libraries and their tools, kernel-facing tools, compilers).
+# 1. System: the `apt` lines (the git client, C libraries and their tools, kernel-facing tools, compilers).
+COPY --from=lists /lists/apt.txt /tmp/apt.txt
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl wget git openssh-client socat sshfs fuse3 dtach \
-      build-essential cmake ninja-build pkg-config sqlite3 universal-ctags parallel \
-      ffmpeg imagemagick poppler-utils qpdf tesseract-ocr tesseract-ocr-eng graphviz mediainfo libimage-exiftool-perl \
-      fonts-dejavu-core fonts-liberation \
-      strace lsof iproute2 procps zip unzip xz-utils file tree less rsync vim-tiny \
-      fd-find ripgrep tzdata
+      $(cat /tmp/apt.txt)
 
-# 2. Node, via mise (checksum from the release SHASUMS256.txt). Playwright needs it. `mise use -g` writes
+# 2. mise (checksum from the release SHASUMS256.txt) and the `base` lines: Node, which the browser layer needs, and uv. `mise use -g` writes
 # /etc/mise/config.toml; the later layers add their tools as /etc/mise/conf.d/*.toml. Shims are on PATH.
 RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       MISE_BIN="mise-v2026.10.25-linux-arm64"; \
@@ -40,33 +45,41 @@ ENV MISE_DATA_DIR=/opt/mise \
     UV_PYTHON_PREFERENCE=only-managed \
     UV_LINK_MODE=hardlink \
     UV_CACHE_DIR=/opt/uv/cache
+COPY --from=lists /lists/base.txt /tmp/base.txt
 RUN --mount=type=cache,target=/root/.cache/mise \
-    mise use -g node@latest && mise reshim
+    mise use -g $(sed 's/$/@latest/' /tmp/base.txt) && mise reshim
 
-# 3. Browser: Playwright and its Chromium with the system libraries it installs through apt.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+# 3. Browser: the `browser` lines (Playwright, agent-browser), then Playwright's Chromium with the system libraries it
+# installs through apt. agent-browser uses that Chromium (/usr/local/bin/chromium) instead of downloading its own; its
+# settings are in /etc/agent-browser.json (rootfs).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
+    AGENT_BROWSER_CONFIG=/etc/agent-browser.json \
+    AGENT_BROWSER_NO_VERSION_CHECK=1
+COPY --from=lists /lists/browser.txt /tmp/browser.txt
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     --mount=type=cache,target=/root/.cache/mise \
     --mount=type=cache,target=/root/.npm \
-    mise use -g npm:playwright@latest \
+    mise use -g $(sed 's/$/@latest/' /tmp/browser.txt) \
  && mise reshim \
- && playwright install --with-deps chromium
+ && playwright install --with-deps chromium \
+ && chrome=$(ls /opt/pw-browsers/chromium-*/chrome-linux*/chrome | head -n 1) \
+ && test -x "$chrome" && ln -s "$chrome" /usr/local/bin/chromium
 
-# 4. Toolchain: every other mise tool (mise.toml), then uv's managed CPython as the default python and python3 (there is
-# no Debian python3) and the agent's default environment (python/requirements.in, first on PATH). The uv cache stays in the image (/opt/uv/cache, the venv hard-linked to it) so new environments install offline. Add tools here;
-# layers 1-3 stay cached.
-COPY mise.toml /etc/mise/conf.d/tools.toml
-COPY python/requirements.in /tmp/requirements.in
+# 4. Toolchain: the `mise` lines, then uv's managed CPython as the default python and python3 (there is no Debian
+# python3) and the agent's default environment from the `uv` lines (first on PATH). The uv cache stays in the image
+# (/opt/uv/cache, the venv hard-linked to it) so new environments install offline. Add most tools as `mise` or `uv`
+# lines; only this layer rebuilds.
+COPY --from=lists /lists/mise.txt /lists/uv.txt /tmp/
 ENV VIRTUAL_ENV=/opt/uv/venv
 ENV PATH=/opt/uv/venv/bin:$PATH
 RUN --mount=type=cache,target=/root/.cache/mise \
     --mount=type=cache,target=/root/.cache/uv \
-    mise install \
+    mise use -g $(sed 's/$/@latest/' /tmp/mise.txt) \
  && mise reshim \
  && uv python install --default --preview 3.13 \
  && uv venv --python 3.13 /opt/uv/venv \
- && uv pip install --python /opt/uv/venv --only-binary :all: -r /tmp/requirements.in \
+ && uv pip install --python /opt/uv/venv --only-binary :all: -r /tmp/uv.txt \
  && git lfs install --system
 
 # 5. Agent: Pi and its extensions in one pnpm project (pi-package.json; their install scripts stay unrun), so the extensions share a single Pi instead of
@@ -90,3 +103,9 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm \
  && { ls -d /opt/pi-plugins/*; find -L /opt/pi-plugins -maxdepth 2 -name index.ts; } | sort -u > /opt/pi-plugins.manifest
 
 COPY rootfs/ /
+# The agent's list of what is installed (its system note points here), and a check that every command it names exists.
+COPY locally-available-tools.md /opt/locally-available-tools.md
+COPY --from=lists /lists/commands.txt /tmp/commands.txt
+RUN for c in $(cat /tmp/commands.txt); do \
+      command -v "$c" >/dev/null || { echo "locally-available-tools.md names $c, which is not installed" >&2; exit 1; }; \
+    done

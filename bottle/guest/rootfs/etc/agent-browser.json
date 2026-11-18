@@ -1,0 +1,5 @@
+{
+  "executablePath": "/usr/local/bin/chromium",
+  "args": "--no-sandbox",
+  "caCert": "/etc/ssl/certs/ca-certificates.crt"
+}

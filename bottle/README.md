@@ -142,11 +142,11 @@ With `hc` on the host's `PATH`, a detached agent (or one detached with Ctrl-\) o
 
 ### Guest image
 
-`guest/Dockerfile` builds a Debian slim image in five layers: apt packages, Node via mise, Playwright with Chromium, the other mise tools plus uv's CPython and default environment (`guest/mise.toml`, `guest/python/requirements.in`), and Pi with its extensions (one pnpm project, `guest/pi-package.json`; extensions pinned, the rest latest).
+`guest/Dockerfile` builds a Debian slim image in five layers: apt packages, mise with Node and uv, the browser (Playwright's Chromium, also used by agent-browser), the other mise tools plus uv's CPython and default environment, and Pi with its extensions (one pnpm project, `guest/pi-package.json`; extensions pinned, the rest latest). Every tool except Pi's comes from one list, [`guest/locally-available-tools.md`](guest/locally-available-tools.md): each line names a command, its source and package, and what it is for. The build installs each line in its source's layer and fails if a named command is missing, and the same file ships at `/opt/locally-available-tools.md`, where Pi's system note points. To add a tool, add a line there.
 
 `bottle build` uses `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` for both, with emulation), then loads the image into `~/.bottle/microsandbox`. It needs `config.json`, internet and about 10 GiB.
 
-Contents: compilers, ffmpeg, imagemagick, OCR, `socat`, `sshfs`, `dtach`; mise with Node, pnpm, uv, `gh`, ripgrep, pandoc, tmux; Python through uv only (default environment in `/opt/uv/venv`, writable cache in `/opt/uv/cache` so default packages install offline); Playwright with Chromium.
+Python is through uv only (default environment in `/opt/uv/venv`, writable cache in `/opt/uv/cache` so default packages install offline). agent-browser reads `/etc/agent-browser.json`: Playwright's Chromium, `--no-sandbox` (the VM is the sandbox), and the system certificate bundle, which includes speaker's proxy certificate once a secret is granted.
 
 Any OCI image works if it holds Node, Pi, git, curl, `socat`, `sshfs`, `dtach`, `openssh-client` and `ca-certificates`. bottle never pulls; import it under the `guestImage` tag:
 
