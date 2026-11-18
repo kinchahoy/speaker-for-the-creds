@@ -34,8 +34,8 @@ Sync merge. Local `main` was 26 commits behind `origin/main` (`6894162`), while 
 
 **Open**
 - 2026-11-18: Next steps had two tasks that were never committed and already shipped in `1274bd4` (releasable secrets, readable secret form errors); they were removed. The "review the combined diff" and "format" tasks were ticked as done.
-- 2026-11-18: The new work drops the `Speaker-Wait: 60` hint from the Pi system note in favour of the `speaker` command; kept as synced. Say if that hint should come back.
-- 2026-11-18: Cleanup: merged local branch `ws/2026-11-08` deleted. Still there: the remote branch `batch-extensions-attended` (2026-11-11, old; deleting it is a push: `git push origin --delete batch-extensions-attended`), two stashes from 2026-11-15 18:29 (Herdr mod, 9 lines) and 2026-11-16 00:49 (46-file WIP from the old `/admin` and test round), and `.claude/worktrees/` (agent worktrees from 2026-11-16 that belong to the Mac clone; now gitignored).
+- 2026-11-18: Kept: sandboxed Pi is told to file a request and keep working instead of blocking on `Speaker-Wait: 60` (direct agents still use the header). Owner agreed.
+- 2026-11-18: Cleanup done with the owner's go-ahead: branches `ws/2026-11-08` and `batch-extensions-attended` (remote too) deleted, both stashes dropped, `main` pushed. `.claude/worktrees/` (Mac clone's agent worktrees, gitignored) left in place.
 - 2026-11-18: Whether the deployed speaker and bottle still run `06525ba` is unknown.
 
 ## 2026-11-16 12:46 · paused
