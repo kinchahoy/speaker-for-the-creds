@@ -3,7 +3,7 @@ project: speaker-for-the-creds
 topic: Agents & security
 state: paused
 priority: P1
-updated: 2026-11-16T12:46
+updated: 2026-11-18T14:55
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -18,14 +18,25 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Next steps
 
-- [ ] Releasable secrets: let the owner mark a secret as releasable, so that once a grant is approved the agent gets the real value instead of a placeholder. This is for values a program needs verbatim with no HTTPS host to inject into, such as a Wi-Fi password for `nmcli` (the owner's case: `WIFI_OTNOW`, fine to share on the LAN and Tailscale). It loosens the secret-handling boundary, so propose the design first: approval wording, an audit-log entry when the value is released, no host list for releasable secrets, and how it shows in /admin and Herdr. Wait until the `ui.ts` refactor branch has merged `size:M` `needs:agent`
-- [ ] Secret form errors: name the problem in plain words instead of the raw "request body is invalid … hosts … too small" (say that names use letters, numbers and `_`, and that at least one host is required unless the secret is releasable) `size:S` `needs:agent`
-- [ ] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
-- [ ] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
+- [x] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
+- [x] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
 - [x] Give the go-ahead to commit and deploy the working tree (deployed speaker and bottle run `06525ba`) `size:S` `needs:me`
 - [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle `size:M` `needs:me`
 - [ ] Decide the wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command` `size:M` `needs:me`
 - [ ] Decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button) `size:M` `needs:me`
+
+## 2026-11-18 14:55 · paused
+
+Sync merge. Local `main` was 26 commits behind `origin/main` (`6894162`), while Syncthing had brought in a working tree that was `origin/main` plus newer uncommitted work: the guest `speaker` command, `/_speaker/enroll.sh`, clearer unknown-service and upstream-error answers for agents, a shorter SKILL.md, and config.json hot reload. That tree was committed as a snapshot (`cbd928b`), merged with `origin/main` keeping the synced tree (`de19ea8`), then the config watcher was fixed to ignore a missing config.json (tests failed on it) and four files were formatted. `mise run check` passes; speaker tests 17/17, bottle tests 7/7. Not checked: a real bottle run of the guest `speaker` command, and the deployed install. Restore tag `pre-sync-merge-2026-11-18` (`git reset --hard` to it returns to the snapshot); final commit is the one that adds this entry.
+
+**Next**
+- See Next steps above.
+
+**Open**
+- 2026-11-18: Next steps had two tasks that were never committed and already shipped in `1274bd4` (releasable secrets, readable secret form errors); they were removed. The "review the combined diff" and "format" tasks were ticked as done.
+- 2026-11-18: The new work drops the `Speaker-Wait: 60` hint from the Pi system note in favour of the `speaker` command; kept as synced. Say if that hint should come back.
+- 2026-11-18: Left untouched: two stashes on old commits (`3912ee6`, `9eebf73`), the unmerged `origin/batch-extensions-attended` (2026-11-11, extension bundle leases; may be superseded by later extension work), the merged local branch `ws/2026-11-08`, and the stale copy in `.claude/worktrees/`.
+- 2026-11-18: Whether the deployed speaker and bottle still run `06525ba` is unknown.
 
 ## 2026-11-16 12:46 · paused
 
