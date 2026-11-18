@@ -12,3 +12,7 @@ bottle/config.json
 herdr/mods/speaker/config.json
 herdr/mods/*/*.d.ts
 herdr/mods/*/jsconfig.json
+
+# Editor and agent-tool local state (agent worktrees synced from other machines land here too).
+.claude/
+.vscode/
