@@ -13,7 +13,16 @@ export type SubjectType = 'agent' | 'host'
 // owner's rule), unavailable (denied and logged: it cannot be delivered).
 export type Admission = { to: 'ask' } | { to: 'open' } | { to: 'never' } | { to: 'unavailable'; why: string }
 // `reach` is kept with the grant: a grant ends when its reach widens.
-export type Description = { text: string; reach: string[]; warning?: string; risk?: 'read/write' | 'secret' | 'SSH' }
+export type Description = {
+  text: string
+  reach: string[]
+  warning?: string
+  // The warning's longer explanation, shown as its tooltip.
+  hint?: string
+  // Not pre-ticked on the card.
+  wider?: boolean
+  risk?: 'read/write' | 'secret' | 'SSH'
+}
 export type Refusal = { message: string; next: string }
 
 export type Kind = {
@@ -34,8 +43,7 @@ export type SubjectRules = {
   wait: number
   field: 'agent' | 'host'
   exists(id: string): boolean
-  who(id: string): { label: string; says?: string; via?: string; source: string; key?: string; at?: number }
-  count(id: string, field: 'requests' | 'granted' | 'denied', n: number): void
+  who(id: string): { label: string; agent?: string; via?: string; source: string; key?: string; at?: number }
 }
 
 export type Approval = {
@@ -252,10 +260,6 @@ export function createEngine(env: {
     }
     requests.set(request.id, request)
     const rules = env.subjects[type]
-    const { granted, denied, pending } = outcomeOf(request)
-    if (pending.length) rules.count(subject, 'requests', 1)
-    rules.count(subject, 'granted', granted.length)
-    rules.count(subject, 'denied', denied.length)
     env.audit('request_created', {
       request: request.id,
       [rules.field]: subject,
@@ -301,8 +305,6 @@ export function createEngine(env: {
       }
       // The subject is told "granted" only once each grant is in place (the jump server listening, for SSH).
       await Promise.all(yes.map((a) => kindOf(a).granted(a)))
-      rules.count(request.subject, 'granted', yes.length)
-      rules.count(request.subject, 'denied', no.length)
       settle(request)
       env.changed()
     })

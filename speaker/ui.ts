@@ -1,11 +1,10 @@
 // The owner's pages: Hono's html templates styled by Open Props and a small stylesheet, with htmx for the live Agents panel,
 // confirmations and form posts. The panel polls every 5 seconds and is morphed (idiomorph), so open disclosures and focus stay.
 import { html, raw } from 'hono/html'
-import type { Group, LogEntry, Service, View } from './core.ts'
+import { type Group, identityFields, type LogEntry, type Service, type View } from './core.ts'
 import type { SshSetup } from './jump.ts'
-import type { OwnerSecret } from './store.ts'
 type Html = ReturnType<typeof html>
-type Owned = Record<string, Pick<OwnerSecret, 'hosts' | 'env'>>
+type Owned = Record<string, { hosts?: string[]; env?: string; release?: true }>
 export type McpSummary = Record<string, { read: number; write: number; unannotated: number }>
 export type Setup = {
   services: Record<string, Service>
@@ -32,7 +31,7 @@ body{margin:0;min-width:320px;background:var(--bg);color:var(--ink)}
 ::selection{background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--ink)}
 .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .top{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--line)}.top .in{max-width:1120px;margin:auto;padding:0 20px}
-.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green-9)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
+form[data-busy]{opacity:.55}.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green-9)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
 .logo{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--radius-3);background:var(--accent);color:var(--on-accent);flex:none}
 h1{font-size:1.05rem;line-height:1.2;font-weight:800;letter-spacing:-.02em;margin:0;white-space:nowrap}h1 em{font-weight:700}
 nav.tabs{display:flex;gap:2px;margin-left:12px}nav.tabs a{display:flex;align-items:center;gap:6px;min-height:52px;padding:0 14px;border-bottom:3px solid transparent;color:var(--dim);text-decoration:none;font-weight:650;white-space:nowrap}
@@ -68,7 +67,7 @@ button.deny{background:transparent;color:var(--bad);border-color:var(--bad-line)
 .jump-links{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.jump-links a{display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);text-decoration:none;font-size:.88rem;font-weight:600}.jump-links a:hover{background:var(--surface-2)}
 details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;color:var(--accent);font-weight:650}summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .16s ease-out}details[open]>summary::after{transform:rotate(225deg)}
 .panel>details{border-top:1px solid var(--line);margin-top:10px}.sub-details{border-top:1px solid var(--line);margin:8px 0 14px;padding-top:4px}
-.log-filter{display:flex;flex-wrap:wrap;gap:0 8px;align-items:end;margin-bottom:8px}.log-filter>label{flex:1 1 220px}.log-filter button{margin-bottom:14px}.log-filter>details{flex-basis:100%}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
+.log-filter{display:flex;flex-wrap:wrap;gap:0 8px;align-items:end;margin-bottom:8px}.log-filter>label{flex:1 1 220px}.log-filter button{margin-bottom:14px}.log-filter .seg{margin-bottom:14px}.log-filter .seg a{min-height:44px;font-size:.94rem}.log-filter>details{flex-basis:100%}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
 .on{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}.on a:not(.action-btn){display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-round);color:var(--ink);text-decoration:none;font-size:.88rem}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:0 0 8px;font-size:.88rem}.kv dt{color:var(--dim)}.kv dd{margin:0;font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
 table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data-table th{text-align:left;color:var(--dim);font-size:.82rem;white-space:nowrap}table.data-table th,table.data-table td{padding:4px 12px 4px 0;border-top:1px solid var(--line);vertical-align:top}table.data-table td{overflow-wrap:anywhere}table.data-table td>details{margin:0}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more,table.data-table tr.more td{border-top:0;padding-top:0}
@@ -123,6 +122,7 @@ const mark = (kind: string) =>
 // status, deep links that open the disclosure holding their target, and accessible <dialog> confirmations.
 const pageScript = `const units = [['d', 86400], ['h', 3600], ['m', 60]]
 Idiomorph.defaults.callbacks.beforeAttributeUpdated = (name) => name !== 'open'
+Idiomorph.defaults.callbacks.beforeNodeMorphed = (node) => !node.getAttribute?.('id')?.startsWith('request-')
 const syncHeaderField = () => {
   const sel = document.querySelector('select[name=authType]')
   const box = document.querySelector('[data-auth-header]')
@@ -177,7 +177,7 @@ const tick = () => {
     if ('rep' in t.dataset) t.innerHTML = '<span class="dim">' + text.slice(0, -2) + '</span>' + text.slice(-2)
     if ('rel' in t.dataset || 'short' in t.dataset) t.title = (t.dataset.rel ?? '') + full
   })
-  document.querySelectorAll('button[data-sync]').forEach((b) => {
+  document.querySelectorAll('button[data-sync]:not([data-was])').forEach((b) => {
     const d = b.form.elements.duration.value
     b.textContent = 'Approve' + (b.form.querySelector('[name=items]:not(:checked)') ? ' selected' : '') + (d === 'permanent' ? ' until revoked' : ' for ' + d)
   })
@@ -223,18 +223,32 @@ document.addEventListener('htmx:confirm', (e) => {
   pendingConfirm = e.detail.issueRequest
   dlg.showModal()
 })
-document.addEventListener('htmx:beforeRequest', (e) => {
-  const elt = e.detail.elt
-  if (elt?.tagName === 'FORM') elt.querySelectorAll('button').forEach((b) => { b.disabled = true })
-})
-document.addEventListener('htmx:afterRequest', (e) => {
-  const elt = e.detail.elt
-  if (elt?.tagName === 'FORM') elt.querySelectorAll('button').forEach((b) => { b.disabled = false })
+const busy = (elt, on) => {
+  if (elt?.tagName !== 'FORM') return
+  elt.toggleAttribute('data-busy', on)
+  elt.querySelectorAll('button').forEach((b) => {
+    b.disabled = on
+    if (on && b.matches('.approve, .deny') && !b.dataset.was) { b.dataset.was = b.textContent; b.textContent = b.matches('.deny') ? 'Denying…' : 'Approving…' }
+    if (!on && b.dataset.was) { b.textContent = b.dataset.was; delete b.dataset.was }
+  })
+}
+const say = (text, bad) => {
   const live = document.getElementById('live-status')
-  if (!live || elt?.id !== 'agents') return
-  const ok = e.detail.successful
-  live.textContent = ok ? 'Live' : 'Offline'
-  live.classList.toggle('offline', !ok)
+  if (!live) return
+  live.textContent = text
+  live.classList.toggle('offline', bad)
+}
+document.addEventListener('htmx:confirm', (e) => { if (!e.detail.question) busy(e.detail.elt, true) })
+document.addEventListener('htmx:beforeRequest', (e) => busy(e.detail.elt, true))
+document.addEventListener('htmx:afterRequest', (e) => {
+  busy(e.detail.elt, false)
+  if (e.detail.elt?.id === 'agents' || !e.detail.xhr.status) say(e.detail.successful ? 'Live' : 'Offline', !e.detail.successful)
+})
+document.addEventListener('htmx:beforeSwap', (e) => {
+  const { xhr, target } = e.detail
+  if (xhr.status < 400 || target?.id !== 'agents') return
+  e.detail.shouldSwap = false
+  say(xhr.responseText.trim().slice(0, 100) || 'Request failed', true)
 })
 document.addEventListener('input', tick)
 document.addEventListener('htmx:afterSwap', tick)
@@ -330,6 +344,12 @@ const area = (name: string, label: string, value = '', rows = 2) =>
 // A form with one button: text, or an icon (a name in `icons`, or compact text such as +30d) named by its label.
 const button = (action: string, fields: Html | Html[] | string, label: string, confirm = '', icon = '') =>
   html`<form method="post" action="${action}" ${raw(confirm ? `hx-confirm="${String(html`${confirm}`)}"` : '')}>${fields}${icon ? html`<button class="ib ${icons[icon] ? icon : ''}" aria-label="${label}" title="${label}">${icons[icon] ? glyph(icon) : icon}</button>` : html`<button class="secondary">${label}</button>`}</form>`
+// One line of an agent's identity: the self-reported or the speaker-known fields it has, as `say value` joined by dots.
+const idLine = (from: 'self' | 'known', values: Partial<Record<keyof typeof identityFields, string>>) =>
+  `${from === 'self' ? 'Self-reported' : 'Speaker-known'}: ${Object.entries(identityFields)
+    .filter(([field, spec]) => spec.from === from && values[field as keyof typeof identityFields])
+    .map(([field, spec]) => `${spec.say} ${values[field as keyof typeof identityFields]}`)
+    .join(' · ')}`
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 const time = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(0, 16)
 // A local-time stamp the page script rewrites: a bare duration with `rel` (the hover title's prefix), else a 24-hour
@@ -372,7 +392,7 @@ const post = (action: string, fields: Html, icon: string, label: string, text: s
   button(action, fields, text, confirm),
 ]
 // The Agents panel: what needs a decision, then each agent with its access beneath it, then the quiet rest. The one
-// view gives every count; the panel is morphed every 5 seconds. Request cards are hx-preserve, so unticked items, a
+// view gives every count; the panel is morphed every 5 seconds. The morph skips request cards, so unticked items, a
 // chosen duration and an open Review stay.
 export function agents(
   { hosts, agents: all, cards, grants, sessions }: View,
@@ -399,12 +419,12 @@ export function agents(
       : ''
   }
   const pick = (i: Card['items'][number]) =>
-    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" checked>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark>${i.warning}</mark>` : ''}</span></label>`
+    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
   // Self-reported identity and what speaker itself knows stay on separate, labelled lines.
   const meta = ({ who, type, subject }: Card) =>
     type === 'host'
       ? html`<small class="card-meta" id="host-${subject}">${registered({ source: who.source, registeredAt: who.at as number })}</small>`
-      : html`${who.says !== undefined ? html`<small class="card-meta">Self-reported: says it is ${who.says}${who.via ? ` · via ${who.via}` : ''}</small>` : ''}<small class="card-meta">Speaker-known: from ${who.source}${who.key ? html` · key <code>${who.key}</code>` : ''}${twin(byId.get(subject))}</small>`
+      : html`${who.agent !== undefined ? html`<small class="card-meta">${idLine('self', { agent: who.agent })}</small>` : ''}<small class="card-meta">${idLine('known', who)}${twin(byId.get(subject))}</small>`
   const cardHtml = (r: Card) => {
     const host = r.type === 'host'
     const a = byId.get(r.subject)
@@ -428,7 +448,7 @@ export function agents(
     const bundle = asked.length
       ? html`<p class="scope"><strong>${asked.map((g) => g.name).join(', ')}</strong> · ${plural(r.items.length, 'capability', 'capabilities')} · <small>${some.join(', ')}${r.items.length > 3 ? ` and ${r.items.length - 3} more` : ''}</small></p>${r.items.filter((i) => i.risk || i.warning).map((i) => html`<p class="alert"><code>${i.item}</code> ${i.risk ? html`<span class="badge badge-warn">${i.risk}</span>` : ''} ${i.warning ? html`<mark>${i.warning}</mark>` : ''}</p>`)}`
       : ''
-    return html`<article id="request-${r.id}" hx-preserve data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
+    return html`<article id="request-${r.id}" data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
   }
 
   const end = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Number.POSITIVE_INFINITY)
@@ -470,7 +490,7 @@ export function agents(
     // phone only the icon, name, level and expiry stay on the line; tapping it opens the rest.
     const line = (g: Grant, name: Html | string, main: Html | string, cls = '') => {
       const lv = level(g.item)
-      const note = html`${main}${state(g)}${g.detail.warning ? html` <mark>${g.detail.warning}</mark>` : ''}`
+      const note = html`${main}${state(g)}${g.detail.warning ? html` <mark title="${g.detail.hint ?? ''}">${g.detail.warning}</mark>` : ''}`
       const n = g.uses
         ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>`
         : ''
@@ -481,12 +501,10 @@ export function agents(
     // agent holds only scopes), as `:name` with the address beyond the parent's.
     const service = (g: Grant, parent?: string) => {
       const id = sid(g)
-      const key = services[id]?.auth
-      const legacy = !parent && key && key.type !== 'none' && key.secret !== id ? key.secret : ''
       return line(
         g,
         parent ? html`<span class="dim">:</span>${id.slice(parent.length + 1)}` : id,
-        html`<code title="${services[id]?.baseUrl ?? ''}">${under(addrOf(id), parent && addrOf(parent))}</code>${legacy ? html` <small title="uses the key of ${legacy}">key of ${legacy}</small>` : ''}`,
+        html`<code title="${services[id]?.baseUrl ?? ''}">${under(addrOf(id), parent && addrOf(parent))}</code>`,
         parent ? 'sc' : '',
       )
     }
@@ -522,7 +540,7 @@ export function agents(
     const everything = [...mine].sort((x, y) => y.bundledWith.length - x.bundledWith.length)
     const toExtend = mine.filter((g) => extendable(g) && !g.bundledWith.length)
     const model = a.agent.split(' · ')[0].replace(` on ${a.sandboxHost}`, '')
-    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>Name it reported: ${a.label}<br>Identity it reported: ${a.agent}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)} from ${a.source}${a.sandboxHost ? ` via sandbox host ${a.sandboxHost}` : ''}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(c.requests, 'request', 'requests')} · ${c.granted} granted · ${c.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
+    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" hx-boost="false" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>${idLine('self', a)}<br>${idLine('known', { ...a, via: a.sandboxHost, key: a.tokenHash.slice(0, 8) })}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(a.requests, 'request', 'requests')} · ${a.granted} granted · ${a.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
     const session = (x: (typeof open)[number]) =>
       html`<details class="gr"><summary class="rw">${ico('ssh')}<span class="clip nm1">${x.what}</span><span class="clip dim mc">${local(x.started, 'Open since ')}</span><span class="lv"></span><span class="n"></span><span></span><span class="acts">${button('/admin/ssh/sessions/end', hidden('id', x.id), `End SSH session ${x.what}`, `End this SSH session now? ${x.what}`, 'revoke')}</span></summary><div class="xb"><div class="bt">${button('/admin/ssh/sessions/end', hidden('id', x.id), 'End session', `End this SSH session now? ${x.what}`)}</div></div></details>`
     return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh'), ...held.map(() => 'ext')])].join(' ')}">${head}${tree}${others.sort((x, y) => x.item.localeCompare(y.item)).map((g) => line(g, g.item.replace(/^\w+:|:rw$/g, ''), g.detail.text))}${open.map(session)}${chips('site', mine.filter((g) => g.kind === 'site').map(chip))}${chips('ext', [...held.map((item) => html`<span class="c held" title="${item}: held for the task by the launch template; not revoked here">${item.replace(/^\w+:/, '')}</span>`), ...mine.filter((g) => g.kind === 'ext').map(chip)])}</article>`
@@ -536,7 +554,7 @@ export function agents(
   const rest = all.filter(idle)
   const approved = hosts.filter((h) => h.grant)
   return String(
-    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-swap="morph:outerHTML" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
+    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-target="#agents" hx-swap="morph:outerHTML" hx-sync="body:queue all" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
   )
 }
 const groupErrors: Record<string, string> = {
@@ -544,6 +562,12 @@ const groupErrors: Record<string, string> = {
   line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
   id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
   description: 'Group not saved: keep the description to one line of at most 200 characters.',
+}
+const secretErrors: Record<string, string> = {
+  secretName: 'Secret not saved: the name may use letters, digits, _ and -.',
+  secretHosts: 'Secret not saved: give at least one host and a variable name, or choose Released.',
+  secretValue: 'Secret not saved: the value must be one line.',
+  secretFlip: 'Secret not saved: type the value again to release a secret that is inserted today.',
 }
 const td = (label: string, body: Html | string) => html`<td data-label="${label}">${body}</td>`
 const act = (...buttons: (Html | string)[]) => html`<td class="act"><div class="actions">${buttons}</div></td>`
@@ -611,9 +635,7 @@ export function setup({
         ? html`<mark data-label="Credential">no key</mark>`
         : own
           ? html`<span class="vh" data-label="Credential">Set</span>`
-          : s.auth.type !== 'none' && !parent
-            ? html`<small title="uses the key of ${s.auth.secret}">key of ${s.auth.secret}</small>`
-            : ''
+          : ''
     const kids = Object.keys(services).filter((k) => parentOf(k) === id)
     return entry(
       'service',
@@ -647,10 +669,10 @@ export function setup({
         .filter((k) => parentOf(k) === id)
         .map((k) => serviceRow(k, id)),
     ])
-  const secretForm = (name = '', o?: { hosts: string[]; env: string }) =>
-    html`<form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)', 'text', name)}${input('env', 'Environment variable the agent sees', 'text', o?.env)}${area('hosts', 'Allowed hosts, one per line', o?.hosts.join('\n'))}${consequence('Adding a host ends the grants already given for this secret.')}${input('value', o ? 'Replace value; blank keeps current' : 'Value (never shown again)', 'password')}<button>Save secret</button></form>`
+  const secretForm = (name = '', o?: Owned[string]) =>
+    html`<form method="post" action="/admin/secrets/save">${input('name', 'Name (agents ask for secret:NAME)', 'text', name)}${input('env', 'Environment variable the agent sees', 'text', o?.env)}${area('hosts', 'Allowed hosts, one per line', o?.hosts?.join('\n'))}${consequence('Adding a host ends the grants already given for this secret.')}<label><input type="checkbox" name="release" ${raw(o?.release ? 'checked' : '')}> Released: the agent receives the value, no hosts</label>${input('value', o ? 'Replace value; blank keeps current' : 'Value (never shown again)', 'password')}<button>Save secret</button></form>`
   const secretRows = Object.entries(owned).flatMap(([name, o]) => [
-    html`<tr>${td('Name', html`${ico('secret')}<strong>${name}</strong>`)}${td('Allowed destinations', preview(o.hosts))}${td('Agent variable', html`<code>${o.env}</code>`)}${act(button('/admin/secrets/delete', hidden('name', name), `Delete ${name}`, `Delete secret ${name}? Its value is erased.`, 'del'))}</tr>`,
+    html`<tr>${td('Name', html`${ico('secret')}<strong>${name}</strong>`)}${td('Allowed destinations', o.release ? html`<mark title="Approving lets the agent read the value itself">released</mark>` : preview(o.hosts ?? []))}${td('Agent variable', o.release ? '' : html`<code>${o.env}</code>`)}${act(button('/admin/secrets/delete', hidden('name', name), `Delete ${name}`, `Delete secret ${name}? Its value is erased.`, 'del'))}</tr>`,
     more(4, 'Edit', secretForm(name, o)),
   ])
   const targets = Object.entries(ssh.targets)
@@ -737,7 +759,7 @@ export function setup({
     more(4, 'Edit', groupForm(id, group)),
   ])
   const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
 }
 const s = (value: unknown) => String(value ?? '')
 const arr = (v: unknown) => (Array.isArray(v) ? v.map(s) : [])

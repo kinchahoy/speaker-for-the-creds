@@ -2,7 +2,8 @@
 project: speaker-for-the-creds
 topic: Agents & security
 state: paused
-updated: 2026-11-16T01:00
+priority: P1
+updated: 2026-11-16T12:46
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -10,6 +11,50 @@ tags: [workshop, status]
 # speaker-for-the-creds status
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
+
+## Ideas
+
+- Secret-URL credentials in the encrypted store: some upstreams use the URL itself as the credential (ha-mcp's in-process server at `.../api/webhook/<id>` or `:9584/private_<random>`), so today that secret sits in plain service config as `baseUrl`; let a service's `baseUrl` (or a path segment) come from an encrypted secret instead: serves the star because the Home Assistant path the to-do agent depends on would keep its credential under the same unlock-and-log rules as every other key · cost S · 2026-11-18
+
+## Next steps
+
+- [ ] Releasable secrets: let the owner mark a secret as releasable, so that once a grant is approved the agent gets the real value instead of a placeholder. This is for values a program needs verbatim with no HTTPS host to inject into, such as a Wi-Fi password for `nmcli` (the owner's case: `WIFI_OTNOW`, fine to share on the LAN and Tailscale). It loosens the secret-handling boundary, so propose the design first: approval wording, an audit-log entry when the value is released, no host list for releasable secrets, and how it shows in /admin and Herdr. Wait until the `ui.ts` refactor branch has merged `size:M` `needs:agent`
+- [ ] Secret form errors: name the problem in plain words instead of the raw "request body is invalid … hosts … too small" (say that names use letters, numbers and `_`, and that at least one host is required unless the secret is releasable) `size:S` `needs:agent`
+- [ ] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
+- [ ] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
+- [x] Give the go-ahead to commit and deploy the working tree (deployed speaker and bottle run `06525ba`) `size:S` `needs:me`
+- [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle `size:M` `needs:me`
+- [ ] Decide the wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command` `size:M` `needs:me`
+- [ ] Decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button) `size:M` `needs:me`
+
+## 2026-11-16 12:46 · paused
+
+**State**
+Docs revamped so they read user-first: the top-level README is now the product doc (what it is, what works today, how it works, getting started, side tracks); component READMEs are reference; `speaker/DESIGN.md` is the one design doc and now carries the use cases and the end-to-end check plan. `speaker/USECASES.md` and `E2E.md` were removed after folding their content in (git keeps them). Docs only: no code, config or tests changed, and the pending code round is still uncommitted. Restore tag `pre-docs-revamp-2026-11-16` (`git reset --hard` to it undoes the revamp).
+
+**Next**
+- See Next steps above.
+
+**Open**
+- Goal check: proposed North star, for the owner to rewrite. "A to-do list kept by an agent that wakes about every 3 hours, with back-and-forth from the owner's phone, that updates the owner's iOS Reminders through Home Assistant. Everything else is a step toward that." Win: that agent runs for a week and the owner trusts its Reminders without checking the approvals each time. Miss: a polished approval desk with nothing driving it, or a native phone app built first. Interim phone path (the owner: "we're using herdr + the webpage for now on the phone. Not perfect, but its something! We'll get to an app but its not super urgent right now.") counts as progress. Not now: a native app or push, money budgets, more UI polish.
+- Conflict, unresolved: the 01:46 entry and Next steps say the round is uncommitted and deployed is `06525ba`, but HEAD was `9776986` ("Improved speaker and bottle for deployment") and the handoff says the new code is pushed and live (it names `6a5db02`, which is not in this repo). Which is true?
+- Is this yours? `AGENTS.md` (project rules) carries an AI marker but reads like the owner's rules; left verbatim. Every other tracked doc was marked AI, so no owner text was edited.
+- `speaker/skill/SKILL.md` is served to agents at runtime and says the owner "approves each use from a phone"; left alone as it is product text. Suggested replacement: "approves each use in the admin page or Herdr".
+- `ui-improvements-ideas.md` (tracked): recommend delete once the pending `/admin` rework is reviewed, since it is the proposal that round implements; move at most three lines into Next steps. `ui-density-ideas.md` (untracked): recommend keep until that review, then fold its few actionable points or delete. Neither was touched.
+- `.claude/worktrees/` stale copies and the branches `ws/2026-11-08` and `origin/batch-extensions-attended` are undocumented; not touched.
+
+## 2026-11-16 01:46 · paused
+
+**State**
+Speaker and bottle work, but a large round is still uncommitted: the `/admin` rework, the Herdr mod rework, agent titles, pi-subagents, the cron template, per-model OpenRouter routing and `localModel.wake`. Tests pass (82 speaker; 55 bottle, 6 skipped), yet the combined diff has never been reviewed. Work is paused until the owner gives the go-ahead to commit and deploy.
+
+**Next**
+- See Next steps above.
+
+**Open**
+- Should the working tree be committed and deployed as one round, after the review?
+- Wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command`?
+- Build the Atuin threads push, or leave it parked?
 
 ## 2026-11-16 01:00 · paused
 
@@ -46,7 +91,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - Qwen consulting DeepSeek via the subagent extension: not started; the model door serves one model per VM today.
 - Herdr's built-in agents sidebar needs OSC 7501 status from `bottle attach`; the payload format is undocumented, parked.
 
-**Settled**
+- Settled, for reference:
 - Pi liveness: Pi runs as `node-MainThread` until loaded, so `ps -C pi` failed every cold launch ("Pi exited right after launch", also the 18:08 run). Now matched by comm or args. Verified live: sealed on local Qwen starts, `/space/agent-space` writes reach the host.
 - Launch folders (option 1): `bottle run -f <path>[:rw]` and template `folders` bind host folders into the VM without speaker (the launch is the approval; recorded in policy-events.jsonl). All three templates mount `~/agent-space:rw` at `/space/agent-space`; the `bottle-agent-space` speaker share is dropped. Speaker-approved local folders mid-run (option 2) not built.
 - Local model: llama.cpp router at 192.168.0.83:8080, preset `qwen27b` (Qwen 3.8 27B Q8_0), alias `qwen`. The router loads models on demand, so a cold first call is slow.
@@ -67,7 +112,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - `speaker/ui.ts` host card casts `who.at as number` (a host card always has a host).
 - Validating "no skill for Pi in bottle" would need an A/B eval (see chat 2026-11-15); not started.
 
-**Settled**
+- Settled, for reference:
 - "Agent" everywhere (code, API `/api/agents`, `maxAgents`, `_control/agent.json`); no compat code kept anywhere.
 - `bottle run` starts bottle on demand; it stops 10 min after its last agent (`idleStopMinutes`), verified live. `bottle down` is the kill switch; `bottle:up`/`bottle:down` are gone. `bottle` is linked into `~/.local/bin`.
 - run attaches by default; `-d` detaches; attended follows attach. The CLI opens Herdr tabs (detached runs only).
@@ -83,7 +128,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 **Open**
 - Speaker is 4,984 non-test lines (main before the engine: 4,748); the rest of the extra is the engine itself.
 
-**Settled**
+- Settled, for reference:
 - Speaker is one approval engine (`speaker/engine.ts`): every kind is a uniform adapter, sandbox hosts included; one lifecycle table; `reconcile()` after Setup changes; one card shape for the web inbox, `/admin/api` and Herdr. Merged from the worktree branch, which is removed.
 - Host approvals are not kept across a speaker restart: known hosts come back pending. bottle treats a pending host as an outage and gives up after its limit (5 minutes, or 30 s at its own startup), naming the approval.
 
@@ -97,7 +142,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - Herdr mod: the bar and the inbox dialog are meant to share one sign-in (a module-level token); unverified in a live Herdr window (E2E check K).
 - Herdr names the bottle space after its first terminal's folder; rename it to "bottle" once.
 
-**Settled**
+- Settled, for reference:
 - Plan steps 0 to 5 are built, with step 5 as read-only-plus-decide: owner API at `/admin/api` (bearer only, never the cookie) and the Herdr inbox (approve as asked, deny, revoke). The web `/admin` stays on its forms; both call the same core functions.
 - ntfy is removed. Folders are SSH-only (the share delivery setting is gone); a local folder is a share on a target for this machine.
 - Hosted models are speaker services (OpenRouter is a starter service): one key, entered in speaker; bottle's model door forwards as the task's agent; the speaker door refuses those services, so every model call is capped and recorded in `model-calls.jsonl`.

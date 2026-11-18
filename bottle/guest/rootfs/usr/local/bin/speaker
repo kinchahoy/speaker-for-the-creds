@@ -1,0 +1,32 @@
+#!/bin/sh
+# speaker [--all] [METHOD] <service>/<path> [json-body]: calls a speaker service. The door adds the credential.
+# Output is cut at $SPEAKER_MAX bytes (default 6000; 0 or --all: no cut). An error is one line.
+max=${SPEAKER_MAX:-6000}
+[ "${1-}" = --all ] && { max=0; shift; }
+case ${1-} in GET | POST | PUT | PATCH | DELETE) method=$1; shift ;; *) method=GET ;; esac
+[ $# -ge 1 ] || { echo "usage: speaker [--all] [METHOD] <service>/<path> [json-body]" >&2; exit 2; }
+path=${1#/}; shift
+set -- -X "$method" "$@"
+[ $# -le 2 ] || set -- -X "$method" -H 'content-type: application/json' --data-binary "$3"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+code=$(curl -sS -m 120 -D "$tmp/h" -o "$tmp/b" -w '%{http_code}' "$@" "$SPEAKER_URL/$path") || exit 1
+header() { sed -n "s/^$1: *//Ip" "$tmp/h" | tr -d '\r' | tail -n 1; }
+note=$(header speaker-note); size=$(($(wc -c <"$tmp/b")))
+case $code in
+  2*) if [ "$max" -gt 0 ] && [ "$size" -gt "$max" ]; then
+        head -c "$max" "$tmp/b"; echo
+        echo "[cut: $((size - max)) of $size bytes not shown. Narrow the call (a filter, a single item), or SPEAKER_MAX=0 speaker ... / speaker --all ... for all of it]"
+        [ -z "$note" ] || echo "Note: $note"
+      else cat "$tmp/b"; fi
+    exit 0 ;;
+esac
+upstream=$(header speaker-upstream-path)
+if [ -n "$upstream" ]; then echo "upstream answered $code for $upstream: $(head -c 300 "$tmp/b" | tr '\n' ' ')"
+else
+  line=$(jq -r '"\(.message // "")\(if .next then " " + .next else "" end)\(if .item then "|" + .item else "" end)"' "$tmp/b" 2>/dev/null) || line=$(head -c 300 "$tmp/b")
+  if [ "$(jq -r .error "$tmp/b" 2>/dev/null)" = approval_required ]; then
+    echo "not granted: ask with request_capability for ${line##*|}, keep working, do not retry until the [speaker] message arrives"
+  else echo "$code ${line%|*}"; fi
+fi
+[ -z "$note" ] || echo "Note: $note"
+exit 1

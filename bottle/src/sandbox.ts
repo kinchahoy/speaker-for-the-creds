@@ -316,7 +316,12 @@ export const speakerDoor =
   async (req, res) => {
     const target = new URL(req.url ?? "/", speaker.url);
     if (!speakerRequestAllowed(new URL(speaker.url), target, req.method ?? "GET", modelServices))
-      return void reply(res, 403, "this speaker path is not available to a sandboxed task");
+      return void reply(
+        res,
+        403,
+        "this speaker path is not available to a sandboxed task",
+        "Available: <service>/<path>, /_speaker/catalog, /_speaker/help/<service>, /_speaker/secrets/<name>, /_speaker/requests",
+      );
     const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
     await forward(req, res, target, {
       headers: { authorization: `Bearer ${speaker.agentToken}` },

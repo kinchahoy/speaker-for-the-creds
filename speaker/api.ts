@@ -18,7 +18,7 @@ import {
   hash,
   hostSchema,
   hostAgentSchema,
-  identitySchema,
+  titleSchema,
   idSchema,
   invalid,
   noCounts,
@@ -26,17 +26,9 @@ import {
   same,
   union,
 } from './core.ts'
-import { catalogView } from './catalog.ts'
+import { catalogView, visibleServices } from './catalog.ts'
 import type { Approval, Request } from './engine.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
-
-// Untrusted display text from a sandbox host: 1 to 60 characters, no control characters.
-const titleSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(60)
-  .refine((title) => !/\p{Cc}/u.test(title), 'Control characters are not allowed')
 
 export type SpeakerApi = ReturnType<typeof agentApi>
 
@@ -297,6 +289,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       )
       .use('/_speaker/help', etag())
       .get('/_speaker/help', (c) => c.text(withAddress(c, core.skill), 200, markdown))
+      .get('/_speaker/enroll.sh', (c) => c.text(withAddress(c, core.enroll), 200, { 'content-type': 'text/plain' }))
       .get('/', (c) =>
         c.req.header('accept')?.includes('text/html')
           ? c.html(
@@ -529,14 +522,40 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         const text = `${lines.join('\n')}\n`
         return c.text(agent.host ? text : withAddress(c, text), 200, { 'content-type': 'text/markdown; charset=utf-8' })
       })
+      // A released secret: the owner approved `secret:NAME`, so the agent reads the value itself. Any other name is the same
+      // 404 as an unknown route, so an agent learns nothing beyond the catalog.
+      .get('/_speaker/secrets/:name', (c) => {
+        const agent = agentCaller(c),
+          name = c.req.param('name'),
+          owned = Object.hasOwn(core.ownerSecrets(), name) ? core.ownerSecrets()[name] : undefined
+        if (!owned?.release)
+          return agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Secrets" in GET /_speaker/help' })
+        const grant = core.engine.held(agent.id, [`secret:${name}`])
+        if (!grant)
+          return agentError(c, 403, 'denied', `Not granted: ask for secret:${name} first`, { next: catalogHint })
+        core.useOf(grant)
+        core.useOf(agent)
+        core.audit('secret_released', { agent: agent.id, secret: name })
+        return c.text(owned.value, 200, { 'cache-control': 'no-store' })
+      })
       .all('/_speaker/*', (c) =>
         agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),
       )
       .all('*', async (c) => {
         const incoming = new URL(c.req.url),
           [serviceId, ...parts] = incoming.pathname.slice(1).split('/')
-        if (!Object.hasOwn(core.services, serviceId))
-          return agentError(c, 404, 'not_found', 'Unknown service', { next: 'GET /_speaker/catalog' })
+        if (!Object.hasOwn(core.services, serviceId)) {
+          // Only names this agent's own catalog shows.
+          const caller = agentCaller(c),
+            seen = visibleServices(core, caller).map(([id]) => id),
+            held = seen.filter((id) => core.coverFor(caller.id, id, false)),
+            typed = serviceId.toLowerCase(),
+            near =
+              typed && seen.find((id) => [id, id.split(':')[0]].some((n) => n.includes(typed) || typed.includes(n)))
+          return agentError(c, 404, 'not_found', `Unknown service "${serviceId}"`, {
+            next: `${held.length ? `You hold: ${held.join(', ')}. ` : ''}${near ? `Did you mean "${near}"? ` : ''}GET /_speaker/catalog`,
+          })
+        }
         const service = core.services[serviceId],
           agent = agentCaller(c),
           method = c.req.method,
@@ -635,6 +654,22 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         // it held with Speaker-Wait was granted.
         upstream.headers.set('speaker-upstream', serviceId)
         if (asked && grant) upstream.headers.set('speaker-granted', grant.item)
+        // Where the call really went, and the owner's notes for the service, only when the agent is in trouble: an error, or
+        // an answer too long for the sandbox's `speaker` command to show (an unknown length counts as long).
+        if (upstream.status >= 400)
+          upstream.headers.set(
+            'speaker-upstream-path',
+            target.pathname.replaceAll(encodeURIComponent(secret), '<secret>'),
+          )
+        if (service.notes && (upstream.status >= 400 || !(Number(upstream.headers.get('content-length')) <= 6000)))
+          upstream.headers.set(
+            'speaker-note',
+            service.notes
+              .replace(/\s+/g, ' ')
+              .replace(/[^\x20-\x7e]/g, '?')
+              .trim()
+              .slice(0, 500),
+          )
         return upstream
       })
   )

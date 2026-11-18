@@ -1,14 +1,15 @@
 // Pure text for request_capability: its description and the reply after the owner decides. No Pi imports, so host tests load it.
 
-/** The part of GET /_speaker/catalog the reply reads. */
+/** The part of GET /_speaker/catalog the texts read. */
+type State = { state: string; until?: string | null };
 export type CatalogView = {
-  text?: string;
-  secrets?: Record<string, { hosts: string[]; environment?: Record<string, string>; git?: string }>;
-  services?: Record<string, { mcp?: boolean }>;
+  secrets?: Record<string, { state?: string; hosts: string[]; environment?: Record<string, string>; git?: string; release?: unknown }>;
+  services?: Record<string, { mcp?: boolean; read?: State; full?: State }>;
+  groups?: Record<string, { items: string[] }>;
   ssh?: { item: string; commands: string[] }[];
   grants?: { item: string; applying?: boolean }[];
-  extensions?: Record<string, { tools: string[] }>;
-  mcp?: Record<string, { tools: string[] }>;
+  extensions?: Record<string, { tools: string[]; state?: string }>;
+  mcp?: Record<string, { tools: string[]; state?: string }>;
 };
 /** The part of POST /_speaker/requests the reply reads. */
 export type Decision = { status: string; granted?: string[]; applying?: string[]; denied?: string[]; expiresAt?: string };
@@ -22,7 +23,73 @@ export const FIXED_GUIDANCE = [
   "When the owner decides, you get a message starting `[speaker]` with one line per item saying what to do next. Do what the line says. A request can stay open for hours.",
 ].join("\n");
 
-export const toolDescription = (catalogText: string) => `${FIXED_GUIDANCE}\n\nWhat you can ask for right now:\n${catalogText}`;
+/** Fixed text, so the model's prompt cache survives grant changes. The lists below come back when `want` is empty. */
+export const toolDescription = `${FIXED_GUIDANCE}\n\nCall with an empty \`want\` list to see what you hold and what you can ask for (a site is asked for as site:<hostname>).`;
+
+/** One line per thing the agent holds, each with the exact way to use it. */
+export const accessBlock = (catalog: CatalogView) => {
+  const rows: string[][] = [
+    ...Object.entries(catalog.services ?? {}).flatMap(([name, { mcp, read, full }]) => {
+      const rw = full?.state === "granted";
+      if (!rw && read?.state !== "granted") return [];
+      return [
+        [
+          name,
+          rw ? "rw" : "r",
+          mcp ? `MCP: POST $SPEAKER_URL/${name} (JSON-RPC)` : `speaker ${rw ? "<METHOD> " : ""}${name}/<path>${rw ? " [json-body]" : ""}`,
+        ],
+      ];
+    }),
+    ...(catalog.grants ?? []).flatMap(({ item }) => {
+      const [kind, ref, mode] = item.split(":");
+      if (kind === "site") return [[ref!, "site", "use it directly"]];
+      if (kind === "folder") return [[`/${mode === "rw" ? "space" : "input"}/${ref}`, mode === "rw" ? "rw" : "r", "folder"]];
+      if (kind === "ext" || kind === "mcp") return [[item, "tools", (kind === "ext" ? catalog.extensions : catalog.mcp)?.[ref!]?.tools.join(", ") ?? ""]];
+      return [];
+    }),
+    ...(catalog.ssh ?? []).map(({ item, commands }) => [item, "ssh", commands[0] ?? ""]),
+    ...Object.entries(catalog.secrets ?? {}).flatMap(([name, secret]) => {
+      if (secret.state !== "granted") return [];
+      const [variable, value] = Object.entries(secret.environment ?? {})[0] ?? [];
+      return [
+        [
+          `secret:${name}`,
+          "secret",
+          secret.release ? `curl -s $SPEAKER_URL/_speaker/secrets/${name}` : `${variable}=${value} <command> (only for ${secret.hosts.join(", ")})`,
+        ],
+      ];
+    }),
+  ];
+  const width = Math.max(0, ...rows.map(([name]) => name!.length));
+  return [
+    "What you hold (call exactly as shown):",
+    ...(rows.length ? rows.map(([name, mode, how]) => `${name!.padEnd(width)}  ${mode!.padEnd(6)}  ${how}`) : ["nothing yet"]),
+    "Anything else: ask with request_capability, never by calling a service not listed here.",
+  ].join("\n");
+};
+
+/** What can still be asked for, one line each with its state. */
+export const askList = (catalog: CatalogView) =>
+  [
+    ...Object.entries(catalog.services ?? {}).flatMap(([name, { read, full }]) =>
+      (
+        [
+          [`${name}.read`, read],
+          [`${name}.full`, full],
+        ] as const
+      ).flatMap(([item, state]) => (state && state.state !== "granted" ? [`${item} ${state.state}`] : [])),
+    ),
+    ...Object.entries(catalog.secrets ?? {})
+      .filter(([, secret]) => secret.state !== "granted")
+      .map(([name]) => `secret:${name} ask`),
+    ...Object.entries(catalog.groups ?? {}).map(([name, group]) => `group:${name} ask: ${group.items.join(", ")}`),
+    ...Object.entries(catalog.extensions ?? {})
+      .filter(([, entry]) => entry.state !== "granted")
+      .map(([name]) => `ext:${name} ask`),
+    ...Object.entries(catalog.mcp ?? {})
+      .filter(([, entry]) => entry.state !== "granted")
+      .map(([name]) => `mcp:${name} ask`),
+  ].join("\n") || "nothing more to ask for";
 
 const until = (iso: string | undefined, now = Date.now()) => {
   if (!iso) return "";
@@ -98,7 +165,7 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
     const service = item.replace(/\.(read|full)$/, "");
     const how = catalog.services?.[service]?.mcp
       ? `It is an MCP server. Send JSON-RPC with POST to $SPEAKER_URL/${service}: first initialize, then tools/list, then tools/call.`
-      : `Call it like this: curl -H "Authorization: Bearer $SPEAKER_TOKEN" $SPEAKER_URL/${service}/<path>`;
+      : `Call it like this: speaker <METHOD> ${service}/<path> [json-body]`;
     return `${head}. ${how}${help ? ` Notes from the service: ${help}` : ""}`;
   }
   return `${head}.`;
@@ -128,4 +195,4 @@ export const reply = (decision: Decision, catalog: CatalogView, help: Record<str
 export const decisionMessage = (decision: Decision, want: string[], catalog: CatalogView, help: Record<string, string> = {}) =>
   decision.status === "expired"
     ? `[speaker] The owner did not decide on ${want.join(", ")}. Ask again only if you still need it.`
-    : `[speaker] ${reply(decision, catalog, help)}`;
+    : `[speaker] ${reply(decision, catalog, help)}\n\n${accessBlock(catalog)}`;

@@ -201,19 +201,10 @@ export class Agents {
     this.catalog = catalog;
     this.#boot = vm;
     this.speaker = speakerClient(config, hostToken);
-    this.#report = watchGrants(
-      config,
-      hostToken,
-      (snapshot) => this.#onSnapshot(snapshot),
-      // Without speaker no grant can apply: stop through the normal shutdown (archives agents) and exit nonzero.
-      (message) => {
-        console.error(`stopping bottle: ${message}`);
-        process.exitCode = 1;
-        process.kill(process.pid, "SIGTERM");
-      },
-      undefined,
-      catalog,
-    );
+    this.#report = watchGrants(config, hostToken, (snapshot) => this.#onSnapshot(snapshot), catalog, {
+      // Through the normal shutdown, which archives the agents.
+      onGone: (why) => (console.error(`stopping bottle: ${why}`), (process.exitCode = 1), process.kill(process.pid, "SIGTERM")),
+    });
   }
 
   list = () => [...this.byId.values()];
@@ -224,6 +215,8 @@ export class Agents {
   };
   /** Closes the connection to speaker (the agents stay as they are). */
   stop = () => this.#report.stop();
+  /** One line on the link to speaker. */
+  speakerStatus = () => this.#report.status();
   get = (id: string) => {
     const agent = this.byId.get(id);
     if (!agent) throw new StatusError(404, `no active agent ${id}`);
@@ -433,7 +426,8 @@ export class Agents {
       case "folder":
         return true;
       case "secret":
-        return secretHosts.safeParse(grant.hosts).success;
+        // A released secret (no hosts) needs nothing from bottle: the agent reads it from speaker.
+        return grant.hosts?.length === 0 || secretHosts.safeParse(grant.hosts).success;
       case "site":
         return siteRef.safeParse(ref).success;
       case "mcp":
@@ -488,11 +482,13 @@ export class Agents {
 
   /** Moves the live agent view to its grants. Hosts and shares are replaced as a whole, so no grant outlives its snapshot. */
   #apply(agent: Agent) {
-    agent.live.secretHosts = this.#granted(agent, "secret").map(({ item, hosts, expiresAt }) => ({
-      name: refOf(item),
-      hosts: secretHosts.parse(hosts),
-      expiresAt,
-    }));
+    agent.live.secretHosts = this.#granted(agent, "secret")
+      .filter(({ hosts }) => hosts?.length)
+      .map(({ item, hosts, expiresAt }) => ({
+        name: refOf(item),
+        hosts: secretHosts.parse(hosts),
+        expiresAt,
+      }));
     // A secret grant also opens egress to the hosts it names.
     agent.live.hosts = [
       ...this.#granted(agent, "site").map(({ item, expiresAt }) => ({ host: refOf(item), expiresAt })),

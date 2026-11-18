@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, watchFile } from 'node:fs'
 import { lookup } from 'node:dns/promises'
-import { copyFile, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
@@ -133,10 +133,26 @@ export const hostSchema = z.object({
   registeredAt: z.number(),
 })
 const reasonSchema = z.string().trim().min(1).max(500)
-export const identitySchema = z.object({
-  label: z.string().trim().min(1).max(200),
-  agent: z.string().trim().min(1).max(120).default('unknown'),
-})
+// The identity fields of an agent, in display order. Self-reported ones are display text from the agent or its sandbox
+// host (untrusted, never a key; `max` caps the length); speaker-known ones speaker sets itself. `say` is how a card
+// words the field.
+export const identityFields = {
+  label: { from: 'self', max: 200, say: 'name' },
+  agent: { from: 'self', max: 120, say: 'says it is' },
+  title: { from: 'self', max: 60, say: 'task' },
+  source: { from: 'known', say: 'from' },
+  via: { from: 'known', say: 'via' },
+  key: { from: 'known', say: 'key' },
+} as const
+const selfReported = (field: 'label' | 'agent' | 'title') =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(identityFields[field].max)
+    .refine((text) => !/\p{Cc}/u.test(text), 'Control characters are not allowed')
+export const titleSchema = selfReported('title')
+export const identitySchema = z.object({ label: selfReported('label'), agent: selfReported('agent').default('unknown') })
 // A sandbox host's agent also names the extensions its template gave at launch. The host enforces them without speaker
 // (the owner started the template), so speaker only records and shows them; they are not grants and cannot be revoked here.
 export const hostAgentSchema = identitySchema.extend({
@@ -176,25 +192,25 @@ const envNameSchema = z
   .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'An environment variable name uses letters, numbers and _')
 export const ownerSecretSchema = z.object({
   // `secret:<NAME>` is how agents ask for it.
-  name: z.string().regex(/^[A-Za-z0-9_]+$/, 'A secret name uses letters, numbers and _'),
+  name: z.string().regex(/^[A-Za-z0-9_-]+$/, 'A secret name uses letters, numbers, _ and -'),
   value: z.string().refine((value) => !/[\r\n]/.test(value), 'A secret value must be a single line'),
-  hosts: z
-    .string()
-    .transform((value) => value.split(/[\s,]+/).filter(Boolean))
-    .pipe(secretHostsSchema),
+  // Released: the agent reads the value itself (no hosts, no variable). Otherwise speaker inserts it for the hosts.
+  release: z.literal('on').optional(),
+  hosts: z.string().default('').transform((value) => value.split(/[\s,]+/).filter(Boolean)),
   // The environment variable the agent sees (holding a placeholder, never the value).
-  env: envNameSchema,
+  env: z.string().default(''),
 })
+// What config.json keeps of a secret: what it may reach (inserted) or `release: true` (the agent reads it).
+export const secretSetupSchema = z.union([
+  z.object({ release: z.literal(true) }),
+  z.object({ hosts: secretHostsSchema, env: envNameSchema }),
+])
 // config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
 export const configSchema = z.object({
   services: z.record(serviceIdSchema, serviceSchema),
   groups: groupsSchema.default({}),
-  secrets: z
-    .record(ownerSecretSchema.shape.name, z.object({ hosts: secretHostsSchema, env: envNameSchema }))
-    .default({}),
+  secrets: z.record(ownerSecretSchema.shape.name, secretSetupSchema).default({}),
 })
-// A secret as stores before config.json held it.
-const legacySecretSchema = z.object({ value: z.string(), hosts: z.array(z.string()), env: z.string() })
 // What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 export const decisionSchema = z.object({
   duration: adminDurationSchema,
@@ -206,15 +222,13 @@ export type Service = z.infer<typeof serviceSchema>
 export type Group = z.infer<typeof groupsSchema>[string]
 export type Host = z.infer<typeof hostSchema>
 type Usage = { uses: number; lastUsedAt: number | null }
+// Refusals leave no approval behind, so they are counted; requests, granted and denied are read off the approvals.
 type Counts = {
-  requests: number
-  granted: number
-  denied: number
   refused: number
   blocked: number
   lastRefusal?: string
 }
-export const noCounts = (): Counts => ({ requests: 0, granted: 0, denied: 0, refused: 0, blocked: 0 })
+export const noCounts = (): Counts => ({ refused: 0, blocked: 0 })
 export type Agent = Usage & {
   counts: Counts
   id: string
@@ -224,7 +238,7 @@ export type Agent = Usage & {
   revokedAt?: number
   tokenHash: string
   label: string
-  // A short task title its sandbox host reported (untrusted display text, never a key); kept in memory only.
+  // The task title its sandbox host reported (see identityFields); kept in memory only.
   title?: string
   agent: string
   // Address the agent enrolled from (a sandboxed agent: its sandbox host's); its token is refused elsewhere.
@@ -257,7 +271,7 @@ export type Connection = {
 }
 // Where the encrypted store stands: no owner password yet, set but not unlocked since the last start, or open.
 type VaultState = { state: 'unset' } | { state: 'locked' } | { state: 'unlocked'; store: Store }
-type AgentView = Agent & { sandboxHost?: string; grants: number }
+type AgentView = Agent & { sandboxHost?: string; grants: number; requests: number; granted: number; denied: number }
 export type View = {
   hosts: (Host & { grant?: string })[]
   agents: AgentView[]
@@ -330,11 +344,11 @@ export const invalid = (message: string, accepted?: string[], status: 400 | 404 
 export async function createCore(config: ReturnType<typeof readConfig>) {
   const dataDir = resolve(config.DATA_DIR)
   const skill = await readFile(new URL('./skill/SKILL.md', import.meta.url), 'utf8')
+  const enroll = await readFile(new URL('./skill/enroll.sh', import.meta.url), 'utf8')
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   // config.json: everything the owner set up except the values (services, groups, what each secret may reach), so it
-  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services. One made
-  // before config.json (services.json and groups.json) is moved into it once.
+  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services.
   const configFile = file('config.json')
   const json = async (path: string | URL) => {
     const text = await optionalFile(path)
@@ -346,17 +360,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     return services
   }
   const stored = await json(configFile)
-  const ownerConfig = configSchema.parse(
-    stored ?? {
-      services: (await json(file('services.json'))) ?? (await starter()),
-      groups: await json(file('groups.json')),
-    },
-  )
+  const ownerConfig = configSchema.parse(stored ?? { services: await starter() })
   const saveConfig = () => save(configFile, ownerConfig)
-  if (!stored) {
-    await saveConfig()
-    await Promise.all(['services.json', 'groups.json'].map((name) => rm(file(name), { force: true })))
-  }
+  if (!stored) await saveConfig()
   const { services, groups } = ownerConfig
   const hostsFile = file('hosts.json')
   const storedHosts = z.array(hostSchema).parse(JSON.parse((await optionalFile(hostsFile)) ?? '[]'))
@@ -378,27 +384,13 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     const values = vault.store.vault.secrets
     return Object.fromEntries(
       Object.entries(ownerConfig.secrets).flatMap(([name, setup]) =>
-        Object.hasOwn(values, name) ? [[name, { ...setup, value: values[name] }]] : [],
+        Object.hasOwn(values, name)
+          ? [[name, { hosts: [], env: '', release: false, ...setup, value: values[name] }]]
+          : [],
       ),
     )
   }
   const unlock = async (opened: Store) => {
-    // A store from before config.json kept each secret's hosts and variable with its value: move them out, once,
-    // keeping the old store beside it as store.json.bak.
-    const moved = Object.entries(opened.vault.secrets as Record<string, unknown>).flatMap(([name, entry]) => {
-      const old = legacySecretSchema.safeParse(entry)
-      return old.success ? [{ name, ...old.data }] : []
-    })
-    if (moved.length) {
-      await copyFile(storeFile, `${storeFile}.bak`)
-      for (const { name, value, hosts, env } of moved) {
-        ownerConfig.secrets[name] ??= { hosts, env }
-        opened.vault.secrets[name] = value
-      }
-      await saveConfig()
-      await opened.save()
-      audit('secrets_moved_to_config', { secrets: moved.map(({ name }) => name) })
-    }
     vault = { state: 'unlocked', store: opened }
     // Speaker's SSH key goes into a stock ssh-agent; nothing else holds it in clear.
     await jump.start(opened.vault.ssh)
@@ -685,11 +677,16 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         if (credentialOf(id) === undefined) return unavailable(`${id} has no key`)
         return { to: write ? services[id].write : services[id].read }
       },
-      describe(item) {
+      describe(item, agentId) {
         const { id, write } = serviceItem(item) as { id: string; write: boolean }
         const service = Object.hasOwn(services, id) ? services[id] : undefined
         if (!service) return { text: 'no longer set up', reach: [] }
+        // Asking for the service while holding one of its scopes (or .full while holding .read) widens what the agent has.
+        const narrower = engine
+          .grants(agentId)
+          .find((g) => g.item.startsWith(`${id}:`) || (write && g.item === `${id}.read`))?.item
         return {
+          ...(narrower ? { warning: `wider than held: ${narrower}`, wider: true } : {}),
           text: `${write ? 'read and change' : 'read'} ${service.baseUrl}${service.mcp ? ' · MCP server' : ''}`,
           // What `.read` lets through grows with the read paths and the MCP read-only tools.
           reach: [
@@ -714,7 +711,16 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           : unavailable(`there is no secret ${item.slice('secret:'.length)}`),
       // Granting a secret opens the hosts its value goes to.
       describe(item) {
-        const hosts = secretHosts(item.slice('secret:'.length))
+        const name = item.slice('secret:'.length)
+        const hosts = secretHosts(name)
+        if (ownerSecrets()[name]?.release)
+          return {
+            text: 'the agent reads the value with GET /_speaker/secrets',
+            reach: ['released'],
+            warning: 'agent receives the value',
+            hint: 'Revoking stops further reads but cannot take back a value already read.',
+            risk: 'secret',
+          }
         return hosts.length
           ? { text: `sent to ${hosts.join(', ')}`, reach: hosts, warning: broad(hosts), risk: 'secret' }
           : { text: 'not set up: it will do nothing', reach: [], risk: 'secret' }
@@ -815,17 +821,13 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           return agent
             ? {
                 label: agent.label,
-                says: agent.agent,
+                agent: agent.agent,
                 via: hostOf(agent)?.name,
                 source: agent.source,
                 key: agent.tokenHash.slice(0, 8),
                 at: agent.createdAt,
               }
             : { label: 'Unknown agent', source: '' }
-        },
-        count(id, field, n) {
-          const agent = agentById(id)
-          if (agent) agent.counts[field] += n
         },
       },
       host: {
@@ -837,7 +839,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           const host = hosts.get(id)
           return { label: `Sandbox host ${host?.name ?? id}`, source: host?.source ?? '', at: host?.registeredAt }
         },
-        count: () => undefined,
       },
     },
   })
@@ -891,7 +892,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
     return placeholders.get(key) as string
   }
-  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; until: string | null })[] =>
+  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; release: boolean; until: string | null })[] =>
     engine
       .grants(agentId)
       .filter((grant) => grant.kind === 'secret')
@@ -971,11 +972,18 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   }
   const view = (): View => ({
     hosts: [...hosts.values()].map((host) => ({ ...host, grant: hostGrant(host.id)?.id })),
-    agents: enrolled().map((agent) => ({
-      ...agent,
-      sandboxHost: hostOf(agent)?.name,
-      grants: engine.grants(agent.id).length,
-    })),
+    agents: enrolled().map((agent) => {
+      const outcomes = [...engine.requests.values()].filter((r) => r.subject === agent.id).map(engine.outcomeOf)
+      const items = (field: 'granted' | 'denied') => outcomes.flatMap((o) => o[field]).length
+      return {
+        ...agent,
+        sandboxHost: hostOf(agent)?.name,
+        grants: engine.grants(agent.id).length,
+        requests: outcomes.length,
+        granted: items('granted'),
+        denied: items('denied'),
+      }
+    }),
     cards: engine.cards(),
     grants: engine
       .grants()
@@ -1031,9 +1039,27 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (vault.state === 'locked') await unlock(opened)
   }
   const checkPassword = (password: string) => openStore(storeFile, password)
+  // config.json may be edited by hand (the data folder can be a plain folder): it is read again when it changes. A
+  // file that does not parse is refused and logged, and the running setup stays.
+  watchFile(configFile, { interval: 2_000 }, async () => {
+    try {
+      const next = configSchema.parse(await json(configFile))
+      if (JSON.stringify(next) === JSON.stringify(ownerConfig)) return // speaker's own save
+      for (const key of ['services', 'groups', 'secrets'] as const) {
+        for (const name of Object.keys(ownerConfig[key])) delete ownerConfig[key][name]
+        Object.assign(ownerConfig[key], next[key])
+      }
+      mcpTools.clear()
+      engine.reconcile()
+      audit('config_reloaded')
+    } catch (error) {
+      audit('config_reload_failed', { why: String(error) })
+    }
+  }).unref()
   return {
     config,
     skill,
+    enroll,
     services,
     groups,
     hosts,

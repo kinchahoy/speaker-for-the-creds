@@ -8,7 +8,7 @@ export const kindPrefixes = ['site', 'secret', 'ssh', 'folder', 'mcp', 'ext', 'g
 export const itemPatterns = {
   service: new RegExp(`^(?!(?:${kindPrefixes.join('|')}):)[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+)?\\.(read|full)$`),
   site: /^site:(\*\.)?[a-zA-Z0-9.-]+$/,
-  secret: /^secret:[A-Za-z0-9_]+$/,
+  secret: /^secret:[A-Za-z0-9_-]+$/,
   ssh: /^ssh:[a-zA-Z0-9_-]+$/,
   folder: /^folder:[a-zA-Z0-9_-]+(:rw)?$/,
   mcp: /^mcp:[a-zA-Z0-9_-]+$/,

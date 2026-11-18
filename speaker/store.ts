@@ -12,7 +12,8 @@ import { z } from 'zod'
 
 const run = promisify(execFile)
 
-export type OwnerSecret = { value: string; hosts: string[]; env: string }
+// A released secret has no hosts and no variable: the agent reads the value itself.
+export type OwnerSecret = { value: string; hosts: string[]; env: string; release: boolean }
 export type Vault = {
   // Upstream key of each service, by service id.
   services: Record<string, string>

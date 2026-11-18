@@ -16,6 +16,7 @@ import {
   serviceIdSchema,
   newPasswordSchema,
   ownerSecretSchema,
+  secretSetupSchema,
   serviceSchema,
   within,
   urlSchema,
@@ -275,7 +276,8 @@ export function adminApp(core: Core) {
   // The older inbox and active panels poll the same one.
   admin.get('/panel/:name{inbox|active|agents}', (c) => c.html(panel(core.view())))
   const fields = async (c: Context) => await c.req.parseBody({ all: true })
-  const redirect = (c: Context) => c.redirect('/admin', 303)
+  // An htmx request (the Agents tab's forms) gets the refreshed panel at once; a plain form post gets the redirect.
+  const redirect = (c: Context) => (c.req.header('hx-request') ? c.html(panel(core.view())) : c.redirect('/admin', 303))
   admin.post('/services/save', async (c) => {
     const input = z
       .object({
@@ -365,12 +367,20 @@ export function adminApp(core: Core) {
     return c.redirect('/admin?section=services', 303)
   })
   admin.post('/secrets/save', async (c) => {
-    const input = ownerSecretSchema.parse(await fields(c))
+    const back = (error: string) => c.redirect(`/admin?section=services&error=${error}`, 303)
+    const form = ownerSecretSchema.safeParse(await fields(c))
+    if (!form.success) return back(form.error.issues[0].path[0] === 'name' ? 'secretName' : 'secretValue')
+    const input = form.data
     const { vault } = core.unlocked()
     const value = input.value || vault.secrets[input.name]
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
+    const setup = secretSetupSchema.safeParse(input.release ? { release: true } : { hosts: input.hosts, env: input.env })
+    if (!setup.success) return back('secretHosts')
+    // Inserted to released needs the value typed again, so one click never hands over a token speaker only inserts.
+    const before = core.ownerConfig.secrets[input.name]
+    if ('release' in setup.data && !input.value && before && !('release' in before)) return back('secretFlip')
     vault.secrets[input.name] = value
-    core.ownerConfig.secrets[input.name] = { hosts: input.hosts, env: input.env }
+    core.ownerConfig.secrets[input.name] = setup.data
     await core.unlocked().save()
     await core.saveConfig()
     core.audit('secret_saved', { secret: input.name })

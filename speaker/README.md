@@ -4,10 +4,7 @@
 
 <sub>AI-written</sub>
 
-Speaker holds your keys. Agents enroll and ask for items, and you approve each request from a phone page. Sandbox hosts such as bottle apply the sandbox grants.
-{.ai}
-
-[DESIGN.md](DESIGN.md) has the details; [USECASES.md](USECASES.md) walks through the flows.
+Reference for running and configuring speaker. For what speaker is for and how it fits with bottle, see the [top-level README](../README.md). For the design and its rationale, see [DESIGN.md](DESIGN.md).
 {.ai}
 
 <!-- author: ai -->
@@ -88,7 +85,7 @@ Speaker keeps two files in `DATA_DIR`. `config.json` holds everything you set up
 - `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
 - In scripts, form posts to `/admin` (sign-in, approvals) need an `Origin` header matching the URL, such as `Origin: http://192.168.1.10:3000`. A successful sign-in answers `303` with the session cookie to send on later posts. Do not retry a failed sign-in blindly: after 5 failures speaker refuses for 15 minutes.
 - One lock rule: speaker serves agents, sandbox hosts, the secrets proxy and the proxy certificate only after you have set the owner password and signed in. Until then (first run, or after every restart) agent and sandbox-host calls answer `503` `locked` with a `next` and a `tell_user` line, and the proxy refuses. `/admin` shows only sign-in or the first-run password page. Signing in (the form or the owner API) unlocks.
-- Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy).
+- Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy). A name may use letters, digits, `_` and `-`. Tick Released instead to hand the agent the value itself (no hosts): that cannot be taken back once read. Turning an inserted secret into a released one needs the value typed again.
 - Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.
 
 <!-- author: ai -->
@@ -114,6 +111,7 @@ Every other host gets `403` and a one-line message. This is not a general proxy.
 - Set those variables on the one command that needs them, not on the whole shell. The proxy refuses every other host.
 - The log records agent, host, method, path (no query), and status. It never records the token or bodies.
 - `site:` items stay sandbox-only. Direct agents can use `secret:` items.
+- A released secret skips the proxy: after approval the agent reads the value with `GET /_speaker/secrets/<NAME>` and a live grant (`403` otherwise). Each read is the audit event `secret_released` (agent and name, never the value) and counts as a use of the grant. The card marks it "agent receives the value". Revoking or expiry stops further reads; it cannot take back a value already read, and the value will be in the agent's context (its transcripts, the model provider's logs, anything it writes).
 
 <!-- author: ai -->
 

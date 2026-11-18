@@ -4,7 +4,7 @@
 
 <sub>AI-written</sub>
 
-bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs (see The VM). Speaker approves capabilities. bottle applies their grants.
+bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/superradcompany/microsandbox) micro-VMs. Speaker approves capabilities; bottle applies their grants inside the VM. This is the reference for setting up and running it. For what the project is for, see the [top-level README](../README.md); for the grant model, [speaker's design](../speaker/DESIGN.md).
 {.ai}
 
 <!-- author: ai -->
@@ -13,52 +13,55 @@ bottle runs the Pi coding agent in disposable [microsandbox](https://github.com/
 
 <sub>AI-written</sub>
 
-The host needs hardware virtualization, Docker for image builds, and `setsid`. On Linux, add the service account to the `kvm` group, then start a new login session. bottle also runs on macOS (Hypervisor.framework) once `setsid` is installed with `brew install util-linux`; `start.sh` finds Homebrew's keg-only copy. Run the service as the owner account that holds its configuration and archives.
-{.ai}
-
-From the repository root, run `mise trust && mise install` once, then:
+Needs hardware virtualization, Docker (image builds), `setsid` and 20 GiB free. Linux: add the service account to the `kvm` group and start a new login session. macOS works once `brew install util-linux` provides `setsid`. Run it as the account that holds its config and archives.
 {.ai}
 
 ```sh
+mise trust && mise install   # once, from the repository root
 mise run init bottle
 ```
 
-The setup checks the host, asks its questions, writes `~/.bottle/config.json`, builds the guest image, registers this host with speaker, and offers to start bottle and run a smoke-test agent. It asks, in order: the control port, the guest port, speaker's URL, the model server (`host:port`), the model (a filterable list when the server has several), the guest image tag (default `bottle-guest`), whether to link `bottle` into `~/.local/bin`, whether to build the image, and whether to run the smoke test. It needs 20 GiB free for the guest image and VMs. Running it again on a set-up machine asks whether to update the install, with your current answers as the defaults; under `--yes` that needs `--force`. If speaker is locked when it registers, it asks for the owner password to unlock it. With the password (typed, piped in, or passed on from `init speaker`), `init` also approves this sandbox host itself. If you press Enter instead, it prints the `/admin` link; approve the host there, then press Enter to check again (or choose Quit). Under `--yes` it polls instead. The model server question has no default the first time: give the host:port of your OpenAI-compatible server. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init bottle -- --help` lists them.
-
-Everything bottle keeps lives in one private folder (mode 700), `~/.bottle`, or `$BOTTLE_HOME` if set (at most 60 characters, because microsandbox keeps unix sockets under it):
-
-| Path | Holds |
-|---|---|
-| `config.json` | the settings `init` writes |
-| `config/` | `templates.json` and `catalog.json` |
-| `state/` | `speaker.token` (this host's login to speaker) and each running agent's work folder |
-| `output/` | one archive folder per finished agent |
-| `microsandbox/` | the guest image, VM disks, and microsandbox's database (`MSB_HOME` overrides it) |
-| `bottle.log` | output of a bottle that `init` started |
-
-The repository holds only code. Each running VM also gets a few short-lived sockets in a private folder under `$XDG_RUNTIME_DIR`, removed when it stops.
-{.ai}
+`init` checks the host, asks its questions, writes `~/.bottle/config.json`, builds the image, registers the host with speaker, and offers to start bottle and run a smoke-test agent. It asks for ports, speaker's URL, the model server (`host:port`) and model, the image tag and whether to link, build and smoke-test. Re-running updates with current answers as defaults (`--force` under `--yes`). If speaker is locked it asks for the owner password, and with it `init` approves this host itself; otherwise it prints the `/admin` link and waits (polls under `--yes`). It needs a real terminal; scripts use flags:
 
 ```sh
 mise run init bottle --yes --speaker-url http://192.168.1.10:3000 --model-endpoint 192.168.1.20:8080 --model my-model
 ```
 
-The other flags are `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-link`, `--skip-build`, `--skip-register`, and `--skip-smoke`. `--skip-link` leaves `~/.local/bin` alone. `--skip-build` leaves the image to build later, `--skip-register` skips registering with speaker (and so the smoke test), and `--skip-smoke` skips only the smoke-test agent. With `--password-stdin`, `init bottle` reads the owner password from standard input to unlock speaker, as `init speaker` does. If speaker runs on another machine, run `mise run init speaker` there first (see [speaker](../speaker/README.md)).
+Other flags: `--control-port`, `--guest-port`, `--image`, `--force`, `--skip-link`, `--skip-build`, `--skip-register` (also skips the smoke test), `--skip-smoke`, `--password-stdin`. `mise run init bottle -- --help` lists them. If speaker is on another machine, run `mise run init speaker` there first.
+
+Everything bottle keeps is in `~/.bottle` (mode 700), or `$BOTTLE_HOME` (at most 60 characters, because microsandbox keeps unix sockets under it). The repository holds only code.
+
+| Path | Holds |
+| --- | --- |
+| `config.json` | settings `init` writes |
+| `config/` | `templates.json`, `catalog.json` |
+| `state/` | `speaker.token` (this host's login) and running agents' work folders |
+| `output/` | one archive folder per finished agent |
+| `microsandbox/` | guest image, VM disks, microsandbox's database (`MSB_HOME` overrides) |
+| `bottle.log` | output of a bottle that `init` started |
+
+Each VM's short-lived sockets live in a private folder under `$XDG_RUNTIME_DIR`, removed at stop.
 {.ai}
 
-To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set `configRoot`, `stateRoot`, and `outputRoot` to existing absolute directories that the service account can write. Copy `bottle/templates.json` and `bottle/catalog.json` into `configRoot`.
-{.ai}
+### config.json
 
-- `bindHost`: an assigned loopback, RFC1918, or Tailscale IPv4 address. The control API trusts any peer that can reach it, so keep this listener private.
-- `speaker.url`: the approval service. Speaker and approved guest destinations need IPv4 reachability. The VM reaches speaker at this address, so on one machine use the machine's LAN address, not `127.0.0.1` (a VM's loopback is itself).
-- `speaker.proxyPort` and `speaker.sshPort`: speaker's `PROXY_PORT` and `SSH_PORT`, on the same host as `speaker.url`. `mise run bottle register` learns them from speaker's reply and writes them here. Both are required: until you register, `init bottle` writes placeholders from `config.example.json`, so set them by hand if you skip registering.
-- `localModel.upstream`: optional; leave it and `localModel.models` out (init: answer `none`) to use hosted models only. One loopback, RFC1918, or Tailscale IPv4 `host:port`, such as the inference server's LAN or `100.x` Tailscale address. The validator requires a literal IPv4 address (or `localhost`) and rejects MagicDNS names.
-- `localModel.wake`: optional, for a model server that sleeps when idle: `{ "command": "<shell command>", "waitSeconds": 180 }`. When a local model call or a launch finds the server not answering, bottle runs the command once and waits up to `waitSeconds` for the server to answer, so the agent only sees a slow call. The command is the owner's own, run on the bottle host: for example `curl -fsS -X POST http://homeassistant.local:8123/api/webhook/<id>`, where a Home Assistant automation on that webhook wakes the server (through UpSnap or its own wake-on-LAN). Home Assistant keeps the wake login; bottle holds only the webhook address. An agent that calls the model often keeps the server awake.
-- `localModel.models`: the served model IDs. Name one with `--model local/<id>`, or give it an `alias`. Local inference is baseline access, independent of speaker grants.
-- Any model entry may carry an `alias` (lowercase letters, digits, dashes; unique across all models). `-m` and a template's `model` accept the full id or the alias. `bottle templates` lists both. A local model is checked at launch: if the local server does not answer `/v1/models` within 2 seconds the launch fails and names the server.
-- A model entry may also carry `contextWindow` (tokens). Pi assumes 128k for a model it does not know, and bottle's entries replace Pi's catalog data for hosted models too, so set it wherever the real window differs (a llama.cpp preset started with `--ctx-size 32768`, a 1M-token hosted model). Pi's `enabledModels` setting is the configured list, so Pi's startup choice and Ctrl+P cycle only through these models; `/model` still lists every model Pi knows for a configured provider.
-- `hostedProviders`: each `{ "id", "service", "models", "api" }` names the speaker service that holds a hosted provider's key (see Hosted model providers). `api` is `openai-completions` (the default) or `anthropic-messages`. Name a model with `--model <id>/<model>`. A model under OpenRouter may carry `openRouterRouting`, OpenRouter's provider preferences sent with every call: `{ "only": ["deepinfra/fp8"], "allow_fallbacks": false }` pins it to that one endpoint. Pi sends it from inside the VM, so it is a preference, not something the model door enforces. Init writes the starters: `openrouter`, `anthropic` (Claude) and `openai`.
-- `BOTTLE_CONFIG` selects the configuration file for the service, the CLI, and `build`. It defaults to `~/.bottle/config.json`.
+By hand: copy `config.example.json`, set `configRoot`, `stateRoot` and `outputRoot` to existing writable absolute directories, and copy `bottle/templates.json` and `bottle/catalog.json` into `configRoot`. `BOTTLE_CONFIG` selects another file for the service, CLI and `build`.
+
+| Key | Meaning |
+| --- | --- |
+| `bindHost` | Loopback, RFC1918 or Tailscale IPv4 for the control API. It trusts any peer that reaches it: keep it private. |
+| `speaker.url` | Speaker's address. The VM reaches it here, so on one machine use the LAN address, not `127.0.0.1`. |
+| `speaker.proxyPort`, `speaker.sshPort` | Speaker's `PROXY_PORT` and `SSH_PORT`, same host. `bottle register` learns and writes them; if registering is skipped, set them by hand (init writes placeholders). |
+| `localModel.upstream` | Optional (answer `none` for hosted only). One loopback, RFC1918 or Tailscale literal IPv4 `host:port` (or `localhost`); MagicDNS names are rejected. |
+| `localModel.models` | Served model ids; use `--model local/<id>` or an `alias`. Local inference is baseline access, independent of grants. |
+| `localModel.wake` | Optional `{ "command": "<shell>", "waitSeconds": 180 }` for a server that sleeps. When a local call or launch finds it down, bottle runs the command once (for example a Home Assistant webhook) and waits. |
+| model `alias` | Lowercase letters, digits, dashes; unique across models. `-m` and a template's `model` take id or alias. |
+| model `contextWindow` | Tokens. Pi assumes 128k for unknown models and bottle's entries override its data, so set it when the real window differs. |
+| `hostedProviders` | `[{ id, service, models, api }]`; `api` is `openai-completions` (default) or `anthropic-messages`. See Hosted model providers. Init writes `openrouter`, `anthropic`, `openai`. An OpenRouter model may carry `openRouterRouting` (provider preferences such as `{ "only": ["deepinfra/fp8"] }`); Pi sends it from the VM, so it is a preference, not enforced. |
+| `herdr` | `false` disables Herdr tabs; `true` makes a missing `hc` an error. |
+
+A local model is checked at launch: if `/v1/models` does not answer in 2 seconds the launch fails naming the server.
+{.ai}
 
 <!-- author: ai -->
 
@@ -66,36 +69,32 @@ To configure by hand, copy `config.example.json` to `~/.bottle/config.json`. Set
 
 <sub>AI-written</sub>
 
-`mise run init bottle` builds the guest image, registers the host, and can start the service. To do these steps by hand:
+`init` does these for you. By hand:
 
 ```sh
 mise run bottle build bottle-guest
-mise run bottle register   # prints the approve link; approve the sandbox host in speaker /admin
-mise run bottle serve       # foreground, never stops on its own; `bottle run` instead starts it detached on demand,
-                            # and that one stops 10 minutes after its last agent (`bottle down` stops either now)
+mise run bottle register   # prints the approve link; approve the host in speaker /admin
+mise run bottle serve      # foreground, never stops itself; `bottle run` starts it detached on demand,
+                           # and that one stops 10 minutes after its last agent (`bottle down` stops either now)
 ```
 
-bottle asks speaker `GET /_speaker/hosts/self` with the host token to learn whether the host is approved: 200 means approved, 401 means pending or unknown. `init` waits on it, and a lost connection to speaker uses it to tell a rejected token (fatal) from an outage (retried).
+`register` names the host after the machine (`--name` overrides); registering again from the same machine and name leaves the old entry until the new one is approved. Approval is learned from `GET /_speaker/hosts/self` with the host token: 200 approved, 401 pending or unknown (a rejected token is fatal, an outage is retried).
 
-`bottle register` names the host after the machine (`--name` overrides). Registering again from the same machine and name leaves the old entry until you approve the new one, which then replaces it.
-
-To type `bottle` instead of `mise run bottle`, the CLI needs to be on your `PATH`. `mise run init bottle` offers to link it (`~/.local/bin/bottle`) and warns when a global Node or `~/.local/bin` on `PATH` is missing. By hand, from the repository root: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle`. Outside this repository the link runs with mise's global `node`, so set one once with `mise use -g node@latest`. mise and uv have no command that puts a local Node script on `PATH` (mise's `[env] _.path` applies only inside the repository, and `uv tool install` is for Python), and pnpm's global link needs pnpm itself installed globally. On macOS, `~/.local/bin` is not on `PATH` by default; add it, or link into another folder that is. The Herdr mod and the Herdr + menu program below need `bottle` on `PATH`.
-
-Launch and inspect an agent:
-{.ai}
+**`bottle` on PATH.** `init` offers to link `~/.local/bin/bottle`; by hand: `ln -s "$PWD/bottle/src/cli.ts" ~/.local/bin/bottle` from the repository root. Outside the repo it uses mise's global Node (`mise use -g node@latest`). On macOS add `~/.local/bin` to `PATH`. The Herdr mod and + menu need it.
 
 ```sh
-bottle run "Write a greeting to /output/greeting.txt"   # attaches to Pi's terminal; template defaults to builder
-bottle run -d "Write a greeting to /output/greeting.txt"  # detached: prints the attach command and returns
-bottle run -t sealed -m deepseek                               # no prompt: Pi opens and waits for you to type
-bottle ls               # live agents, then the last few finished ones with their archive folders
-bottle attach [<id>]    # id, unique id prefix, or name; no id attaches the only open agent; restarts Pi if it was quit
+bottle run "Write a greeting to /output/greeting.txt"   # attaches to Pi; template defaults to builder
+bottle run -d "…"                 # detached: prints the attach command, returns
+bottle run -t sealed -m deepseek  # no prompt: Pi opens and waits
+bottle ls                         # live agents, then recent finished ones with archive folders
+bottle attach [<id>]              # id, prefix or name; restarts Pi if it was quit
 bottle stop [<id>]
-bottle help run         # per-command usage
+bottle help run                   # per-command usage
 ```
 
+Errors exit 1 (runtime) or 2 (usage). Ctrl-\ detaches and leaves Pi running; Ctrl-] leaves the VM terminal. `/quit` ends only Pi: VM, files and grants stay, `attach` restarts it on the same session, `stop` archives. A one-shot agent writes `/output/DONE` when complete.
 
-To keep the service running across logouts and reboots, run it as a systemd user service. Replace `<repo>` with this checkout's path, and `/usr/bin/mise` with what `command -v mise` prints:
+**Service across reboots** (systemd user unit; set `<repo>` and the `mise` path):
 
 ```ini
 # ~/.config/systemd/user/bottle.service
@@ -111,82 +110,49 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-Then run `systemctl --user enable --now bottle` and `loginctl enable-linger $USER`. Read its output with `journalctl --user -u bottle -f`. A stop sends TERM, which `serve` passes on so the service shuts down cleanly.
+Then `systemctl --user enable --now bottle` and `loginctl enable-linger $USER`; logs via `journalctl --user -u bottle -f`.
 
-`ls` shows each agent's state, mode (attended or unattended), pending speaker approvals (with the request ID), age, model, name, and Pi's latest message. An agent's state is one of:
+**Agent states** (`ls` also shows mode, pending approvals with request id, age, model, name, Pi's latest message):
 
 | State | Meaning |
 | --- | --- |
-| `starting` | The VM is up and Pi is starting |
-| `awaiting-grant` | An agent with a prompt on a hosted model: Pi has not started and waits for you to approve the model's speaker service |
-| `idle`, `busy` | Pi is waiting or working, as the guest reports |
-| `reconfiguring` | Pi is restarting with new MCP servers or extensions |
-| `pi-down` | A restart failed, or Pi exited right after one; the agent keeps its transcript and `stop` still exports it |
+| `starting` | VM up, Pi starting |
+| `awaiting-grant` | Prompted agent on a hosted model: Pi waits for the owner to approve the model's service |
+| `idle`, `busy` | As the guest reports |
+| `reconfiguring` | Pi restarting with new MCP servers or extensions |
+| `pi-down` | A restart failed or Pi exited right after; transcript kept, `stop` still exports |
 | `start-failed` | Pi never started; `stop` archives without a transcript |
-| `closing` | The agent is being archived |
-| `done` (shown for any live agent) | Pi wrote `/output/DONE` |
+| `closing` | Being archived |
+| `done` | Pi wrote `/output/DONE` |
 
-Finished agents are listed below with `archived` or `failed-archive` (the work folder is kept). `run` prints a copy-and-paste `attach` line. Errors print one line and exit with 1 (runtime) or 2 (usage).
+Finished agents show `archived` or `failed-archive` (work folder kept).
 
-The control API (`/api/state`, `/api/agents`, `/api/agents/<id>/close`) and the VM's doors answer every error in speaker's shape, `{"error": "<code>", "message": "...", "next": "..."}`, with the same codes: 400 `invalid` for bad input or malformed JSON, 401 or 403 `denied` (a wrong guest token, a request not from the CLI), 404 `not_found` for an unknown agent, 409 `conflict` when the agent's state forbids it (stopping an agent already closing, or launching past `maxAgents`), 429 `rate_limited`, 502 `upstream_unavailable` when speaker or an upstream fails, 500 `internal_error`. The one exception is the model door: it answers `{"error": {"message": "..."}}`, the OpenAI shape Pi's model client reads. Both packages build the shape with `errorBody` in `speaker/items.ts`. There is no status page: `bottle ls` (or `GET /api/state`) shows the agents.
-{.ai}
+**Attended or unattended.** Attached `run` is attended; `run -d` or no terminal is unattended (`--attended` / `--unattended` override). An attended agent loads `ask_user_question` whatever its template says; an unattended one is told nobody is watching, records assumptions in `/output/NOTES.md`, keeps going and still asks for access via `request_capability`. Mode does not change archival.
 
-Ctrl-\ detaches and leaves Pi running; `run` then prints the attach command and opens a Herdr tab (see In the Herdr app). Ctrl-] leaves the VM terminal. Quitting Pi (`/quit`) ends only Pi: the agent's VM, files and grants are kept, `attach` restarts Pi on the same session, and `stop` archives the agent. A one-shot agent writes `/output/DONE` only when it is complete; an attached `run` ends when the agent archives and prints where.
-{.ai}
-
-An agent is attended (you are at its terminal) or unattended (nobody is). It follows how you launched it: `run` attached is attended, `run -d` (or a run without a terminal) is unattended. `--attended` or `--unattended` overrides that. If you detach from an attended agent and Pi then asks a question, it waits for you; `bottle ls` shows it idle.
-{.ai}
-
-An attended agent loads the ask-user-question extension (the `ask_user_question` tool) whatever its template says, because the extension adds presence, not access. An unattended agent does not load it, and its system prompt says nobody is watching. The agent records its assumptions in `/output/NOTES.md`, keeps working, and still asks for access through `request_capability`, which you answer in speaker. Mode does not change archival: an agent with a prompt archives when Pi writes `/output/DONE`, and every agent archives at its deadline.
-{.ai}
+**API errors.** The control API (`/api/state`, `/api/agents`, `/api/agents/<id>/close`) and the VM doors answer in speaker's error shape and codes (409 `conflict` when state forbids it or past `maxAgents`). The model door answers the OpenAI shape Pi reads. There is no status page: use `bottle ls` or `GET /api/state`.
 
 ### In the Herdr app
 
-When `hc` (herdr-core) is on the bottle host's `PATH`, a detached agent opens as a tab in a **bottle** space in the Herdr app on that machine: at launch with `run -d`, or when you press Ctrl-\ during an attached `run`. An attached run opens no tab, so Pi does not show twice. The CLI runs `hc run --bg --no-parent --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`. The tab closes when the agent ends. The speaker Herdr mod lists open agents too; clicking one focuses its tab, or opens one. When bottle runs on another machine than the Herdr app (WSL, seen from Windows), name that Herdr machine (from `hc machine ls`) in the mod's Settings: the mod's `bottle` commands and agent terminals then run there. `"herdr": false` in `config.json` turns this off; `"herdr": true` makes a missing `hc` an error message instead of silence. Herdr names an unnamed space after its first terminal's folder (`outputRoot`), so rename the space to "bottle" once. For another machine, add it from the Mac with `hc machine add <ssh target>`.
-
-To start a sandboxed Pi from Herdr's + menu, add a program to `~/.config/herdr-app/programs.json` (it needs `bottle` on `PATH`, see Build and run):
+With `hc` on the host's `PATH`, a detached agent (or one detached with Ctrl-\) opens as a tab in a **bottle** space, running `hc run --bg --no-parent --name pi-<id> --label herdr.space=bottle --label herdr.tab=<id> -- bottle attach <id>`; the tab closes with the agent. The speaker mod lists open agents too ([install](../speaker/README.md#owner-api-and-the-herdr-mod)). If Herdr runs on another machine (WSL seen from Windows), name it (`hc machine ls`) in the mod's Settings. Herdr names a new space after its first terminal's folder, so rename it "bottle" once. For the + menu, add to `~/.config/herdr-app/programs.json`:
 
 ```json
 { "programs": { "bottle": { "name": "Pi (sandbox)", "run": ["bottle", "run"] } } }
 ```
-
-`herdr/mods/speaker` in this repository is a Herdr mod for speaker's approvals: a bar with the number of waiting requests, a toast per new one, and an inbox to approve as asked, deny, or revoke. It uses speaker's owner API; installing and signing in are in speaker's README (Owner API and the Herdr mod).
 {.ai}
 
 ### Guest image
 
-`guest/Dockerfile` builds a Debian slim image in five layers:
-{.ai}
+`guest/Dockerfile` builds a Debian slim image in five layers: apt packages, Node via mise, Playwright with Chromium, the other mise tools plus uv's CPython and default environment (`guest/mise.toml`, `guest/python/requirements.in`), and Pi with its extensions (one pnpm project, `guest/pi-package.json`; extensions pinned, the rest latest).
 
-1. apt system packages
-2. Node, through mise
-3. Playwright with Chromium
-4. the other mise tools in `guest/mise.toml`, plus uv's CPython and the default environment in `guest/python/requirements.in`
-5. Pi and its extensions
+`bottle build` uses `docker buildx` for the host architecture (`PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` for both, with emulation), then loads the image into `~/.bottle/microsandbox`. It needs `config.json`, internet and about 10 GiB.
 
-Pi and the extensions are one pnpm project (`guest/pi-package.json`), so they share a single Pi. The extensions stay pinned, and everything else takes the latest release.
-{.ai}
+Contents: compilers, ffmpeg, imagemagick, OCR, `socat`, `sshfs`, `dtach`; mise with Node, pnpm, uv, `gh`, ripgrep, pandoc, tmux; Python through uv only (default environment in `/opt/uv/venv`, writable cache in `/opt/uv/cache` so default packages install offline); Playwright with Chromium.
 
-`bottle build` builds the image with `docker buildx` for the host architecture. Set `PI_GUEST_PLATFORMS=linux/amd64,linux/arm64` to build both where Docker has emulation. It then loads the image into `~/.bottle/microsandbox` (or `MSB_HOME`). It needs `config.json`, so run `mise run init bottle` first. Builds need internet access and about 10 GiB of disk space.
-{.ai}
-
-The image holds:
-{.ai}
-
-- apt packages: compilers, ffmpeg, imagemagick, OCR, `socat`, `sshfs`, `dtach`, and the usual command-line tools
-- mise, with Node, pnpm, uv, `gh`, ripgrep, pandoc, and tmux. mise stays in the image so agents can install Go or Rust on demand.
-- Pi and its extensions
-- Python through uv only. Its managed CPython is `python` and `python3`, and the default environment is in `/opt/uv/venv`. A ready uv cache in `/opt/uv/cache` is writable per VM, so `uv venv`, `uv pip install`, and `uv run --with` work offline and instantly for the default packages.
-- Playwright with Chromium
-
-You can use any OCI image instead, however you build it. It must hold Node, Pi, git, curl, `socat`, `sshfs`, `dtach`, `openssh-client`, and `ca-certificates`. Import it into microsandbox's cache under the `guestImage` name, because bottle never pulls. Loading takes one command, so another builder can replace the Dockerfile without touching bottle:
-{.ai}
+Any OCI image works if it holds Node, Pi, git, curl, `socat`, `sshfs`, `dtach`, `openssh-client` and `ca-certificates`. bottle never pulls; import it under the `guestImage` tag:
 
 ```sh
-docker save <image> | msb load --tag <guestImage>   # into ~/.bottle/microsandbox, or MSB_HOME
+docker save <image> | msb load --tag <guestImage>   # or: msb load -i <archive.tar> (docker-save or OCI layout)
 ```
-
-`msb load -i <archive.tar>` takes a docker-save or OCI-layout archive from any builder. Set `"guestImage"` to the tag.
 {.ai}
 
 <!-- author: ai -->
@@ -195,33 +161,18 @@ docker save <image> | msb load --tag <guestImage>   # into ~/.bottle/microsandbo
 
 <sub>AI-written</sub>
 
-Each agent runs in a microsandbox VM (libkrun, from the `microsandbox` npm package). On Linux it needs `/dev/kvm` access and nothing else, because the package carries its own runtime. It was chosen (2026-11-11, over Gondolin, Firecracker, smolvm and other sandboxes) as the only one that offers, from one Node library on Linux and macOS, a guest with no network device, vsock routes to host unix sockets, exec with terminal attach, and resource limits; the comparison is in git history (`bottle/SANDBOX-OPTIONS.md`).
+Each agent runs in a microsandbox VM (libkrun, from the `microsandbox` npm package; Linux needs only `/dev/kvm`). Chosen over Gondolin, Firecracker and smolvm as the only one offering, from one Node library on Linux and macOS, a no-network guest, vsock-to-unix-socket routes, terminal exec and resource limits.
+
+The guest has no network device. Its only doors are host unix sockets on vsock ports, which `socat` exposes as localhost ports: an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`), the model endpoint (`http://model.internal`), speaker (`SPEAKER_URL`), and the control channel for Pi's status reports. A fifth, raw to speaker's SSH jump server, is reached by `ssh` through `ProxyCommand socat - VSOCK-CONNECT:2:<port>`. `TZ` follows the host.
+
+Code: `src/sandbox.ts` (VM and doors), `src/agents.ts` (lifecycle table, archive writer), `src/speaker.ts` (speaker connection; silent 30 seconds means stale).
+
+- **Egress:** one `proxy-chain` server per agent decides each request from the live grant view. A host on the allow list goes direct (public IPv4 only; IPv6 is rejected). A host bound to a granted `secret:` goes through speaker's proxy as the agent. Anything else is 403. bottle does not terminate TLS; a secret host's TLS ends at speaker's proxy, so at launch bottle fetches `/_speaker/proxy/ca.pem` (a locked speaker fails the launch), installs it in the guest trust store and sets `NODE_EXTRA_CA_CERTS`.
+- **Model door:** a forwarder to `localModel.upstream`. It counts each request against `maxModelRequests` (over the cap: 429), streams the reply and appends a line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` points at `http://model.internal/hosted/<id>`, which the forwarder maps to `<speaker.url>/<service>/<path>` with the agent's token, nowhere else.
+- **Speaker door:** allows only speaker's agent-facing routes and adds the agent's token itself. It refuses the services behind `hostedProviders`, so every model call is counted and captured.
+- **Folders:** a `folder:` grant is mounted by bottle (not Pi) over `sshfs` through speaker's jump server at `/input/<share>` (`:rw` at `/space/<share>`), with `-o ro` as a second guard for read-only, remounted when mode changes and unmounted when the grant ends. Each agent gets a throwaway ed25519 key (public half sent as `sshKey`; private half root-only at `/run/speaker/ssh_key`). A grant exposes the whole share, and `/space` shares outlive the agent. `sshfs` is slow for `grep -r`, `find` and `git status`. Launch folders (below) are bound directly instead.
+- **Storage:** images, disks and sockets in `~/.bottle/microsandbox`; `MSB_HOME` moves the roughly 20 GiB elsewhere. microsandbox refuses a folder with a group- or world-writable ancestor (sticky ones such as `/tmp` are fine); `start.sh` names the directory to `chmod`.
 {.ai}
-
-The guest has no network device. Its only doors are host unix sockets on guest vsock ports. In the guest, `socat` exposes four of them as localhost ports:
-{.ai}
-
-- an HTTP proxy (`HTTP_PROXY`, `HTTPS_PROXY`, `NODE_USE_ENV_PROXY=1`)
-- the model endpoint (`http://model.internal`)
-- speaker (`SPEAKER_URL`)
-- the control channel that Pi's status reports use
-
-A fifth door gives a raw connection to speaker's SSH jump server. The guest's `ssh` reaches it through `ProxyCommand socat - VSOCK-CONNECT:2:<port>` (see the Folders bullet below). The guest runs in the bottle machine's time zone: `TZ` is set from the host, and the image carries `tzdata`.
-{.ai}
-
-Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle as a transition table, see `ls` states above; also the archive writer), `src/speaker.ts` (the speaker connection: connecting, open, down, stopped; a link silent for 30 seconds is stale and its grants are dropped).
-{.ai}
-
-- Egress: one `proxy-chain` server per agent decides every request from the live grant view. A host on the agent's allow list goes direct (to public IPv4 addresses only). A host bound to a granted `secret:` goes through speaker's proxy with the agent's credentials. Anything else gets 403. bottle does not terminate TLS. A secret host's TLS ends at speaker's proxy, so the guest trusts speaker's proxy certificate: bottle fetches the certificate from `/_speaker/proxy/ca.pem` once when the agent launches (a locked speaker fails the launch), installs it in the guest's trust store, and sets `NODE_EXTRA_CA_CERTS`.
-- Model endpoint: a small forwarder to `localModel.upstream`. It counts each request against the agent's `maxModelRequests` (a request over the cap gets a 429 that says so), streams the reply, and appends one line per call to `model-calls.jsonl`. A hosted provider's `baseUrl` in the guest's `models.json` points at `http://model.internal/hosted/<id>`. The forwarder sends `/hosted/<id>/<path>` to `<speaker.url>/<service>/<path>` with the agent's token, and nowhere else.
-- Speaker: the speaker door allows only speaker's agent-facing routes and adds the agent's token itself, so the guest never holds it. `SPEAKER_TOKEN` is only a placeholder. It refuses the services behind `hostedProviders`: those are reached only through the model endpoint, so every model call counts against `maxModelRequests` and lands in `model-calls.jsonl`.
-- Terminal: `bottle attach` runs `msb exec -t <vm> -- dtach -a /run/pi.dtach` with the service's microsandbox home.
-- Folders: a `folder:` grant from speaker goes over `sshfs` through speaker's jump server. Speaker enforces the share, read-only grants, and revocation, and logs every file operation. Launch folders (see Templates, catalogs, and grants) are bound into the VM directly instead.
-  - Each agent gets a throwaway ed25519 key. The public half goes to speaker as the agent's `sshKey`: bottle adds it to the agent's launch request and to every request the guest sends through the speaker door. The private half is a root-only file in the guest (`/run/speaker/ssh_key`).
-  - While a folder grant is active, bottle (not Pi) mounts `/input/<share>` (read-write grants: `/space/<share>`) in the guest with the `sshfs` command from `GET /_speaker/catalog`. For a read-only grant it adds `-o ro` as a second guard. It remounts when the mode changes. When the grant ends or is revoked, speaker ends the relay session and bottle unmounts the share.
-  - A folder grant exposes the whole configured share: read-only at `/input/<share>`, or at `/space/<share>` when the item ends in `:rw`. `/space` shares outlive the agent, so later agents may read them.
-  - `sshfs` is much slower than a VM mount for `grep -r`, `find`, and `git status` over many files.
-- Storage: microsandbox keeps images, VM disks, and its sockets in `~/.bottle/microsandbox`. Set `MSB_HOME` to put the guest image and VM disks (about 20 GiB) on another filesystem. It refuses a storage folder with a group- or world-writable ancestor (other than a sticky directory such as `/tmp`); `start.sh` checks this and stops with the directory to `chmod`. bottle's own door sockets go in a private folder under `$XDG_RUNTIME_DIR` (else the system temp folder).
 
 <!-- author: ai -->
 
@@ -229,56 +180,47 @@ Code: `src/sandbox.ts` (the VM and its doors), `src/agents.ts` (agent lifecycle 
 
 <sub>AI-written</sub>
 
-`templates.json` holds an array of named templates. Each has `id`, `label`, `limits`, `want`, and `duration`, and optionally `model`, the template's default model (an id or alias), and `folders`, host folders bottle mounts into every agent from it (see Launch folders). `want` lists items (`site:pypi.org`, `ext:subagent`, `notes.read`) and may list `group:` items when speaker defines groups (in its `config.json`). `label` and `duration` are the agent's label and how long it asks for (`30m`, `1h`, `2h`, `1d`, or `30d`; default `2h`). Together they become the agent's first request to speaker: one card, labeled with the template's `label` (or the `--name` given at launch), with the reason `launch template <id>: <label>`. An empty or missing `want` asks for nothing. Extensions in `want` whose catalog entry has no `sites` (such as `subagent`, `pi-cc-monitor` and `pi-cc-loop`) are given at launch without a card: the owner wrote the template and started it, so that is the decision. They last the whole task and are not speaker grants, so there is no card and speaker cannot revoke them (revoking the agent ends it). Bottle tells speaker which ones it gave when it creates the agent: speaker records them in its log (`agent_created`) and lists them on the agent in `/admin`'s Active panel, marked as given at launch. Bottle also shows them in the agent's policy events (`given at launch by template …`), under the agent in `bottle ls` and the Herdr inbox, and in Pi's own grants list. Every other item, including extensions that bring sites and a hosted model's service, still goes to speaker. Duplicate IDs fail validation.
+`templates.json` is an array of templates: `id`, `label`, `limits`, `want`, `duration`, and optionally `model` (id or alias) and `folders`. `want` lists items (`site:pypi.org`, `ext:subagent`, `notes.read`, `group:<name>` from speaker's `config.json`). `label` and `duration` (`30m`, `1h`, `2h` default, `1d`, `30d`) with `want` become the agent's first request: one card, reason `launch template <id>: <label>` (label is `--name` if given). Empty `want` asks nothing. Duplicate ids fail validation.
 
-_AI-drafted_ The file ships three risk tiers, each a superset of the one before, and `cron` for recurring work. Writes (GitHub write, `ssh:`, `.full` services) are in no template; the agent asks mid-run.
+Extensions in `want` whose catalog entry has no `sites` (`subagent`, `pi-cc-monitor`, `pi-cc-loop`) load at launch without a card, because the owner wrote the template and started it. They last the whole task and are not speaker grants (revoking the agent ends them); speaker logs and displays them, bottle shows them in policy events and `bottle ls`. Everything else, including sites-bearing extensions and a hosted model's service, goes to speaker.
 
 | Template | Default model | Adds |
 | --- | --- | --- |
-| `sealed` | `qwen` | The agent space `~/agent-space` (a launch folder, at `/space/agent-space`) and the `pi-cc-monitor`, `pi-cc-loop` extensions. No network. |
-| `builder` | `deepseek` | Package registries, public GitHub, `context7.read`, web search, Wikipedia and arXiv. Up to 72 hours and 1500 model requests. |
-| `trusted` | `deepseek` | `secret:GITHUB_READ` for private GitHub, plus `obsidian.read` and `karakeep.read`. |
-| `cron` | `deepseek` | Not a tier: the agent space, `pi-cc-loop`, `pi-cc-monitor`, web search, Wikipedia and arXiv, asked for 30 days. Up to 168 hours and 3000 model requests. |
+| `sealed` | `qwen` | Agent space (`~/agent-space`, at `/space/agent-space`), `pi-cc-monitor`, `pi-cc-loop`. No network. |
+| `builder` | `deepseek` | Package registries, public GitHub, `context7.read`, web search, Wikipedia, arXiv. Up to 72 hours, 1500 model requests. |
+| `trusted` | `deepseek` | `secret:GITHUB_READ`, `obsidian.read`, `karakeep.read`. |
+| `cron` | `deepseek` | Agent space, `pi-cc-loop`, `pi-cc-monitor`, web search, Wikipedia, arXiv, asked for 30 days. Up to 168 hours, 3000 model requests. |
 
-`bottle run` defaults to `builder`. Model resolution is `-m`, then the template's `model`, then the first configured model. `bottle templates [--json]` prints the templates and the models with their aliases, and shows whether the local model server answers; it reads the files directly and does not need bottle running.
-{.ai}
+The first three are tiers, each a superset of the one before; writes (GitHub write, `ssh:`, `.full`) are in no template, the agent asks mid-run. `bottle run` defaults to `builder`. Model: `-m`, then the template's `model`, then the first configured. `bottle templates [--json]` lists templates and models with aliases and whether the local server answers; it reads files directly, no running bottle needed.
 
-_AI-drafted_ **Launch folders.** `bottle run -f <path>[:rw]` (repeatable) and a template's `folders` mount folders of the bottle host straight into the VM, with no speaker grant or SSH: naming them at launch is the owner's approval, and the archive's `policy-events.jsonl` records each one. Read-only folders appear at `/input/<folder name>`, `:rw` ones at `/space/<folder name>`. Paths are absolute or start with `~/`; the CLI resolves relative ones against the current directory. A missing folder, or two folders with the same name, fails the launch. Folders on other machines, or ones an agent asks for mid-run, stay speaker shares (`folder:<share>`). The shipped templates mount `~/agent-space` read-write, a scratch space every agent on this host shares; create it once with `mkdir -p ~/agent-space`.
-{.ai}
+A template's `limits` set VM size, deadline and request cap; its `want` (or the speaker group) sets starting access.
 
-A template is the runtime profile bottle owns (VM size, deadline, model-request cap) plus what the agent starts with. A group is defined in speaker and names items you approve together. To change what agents start with, edit a template's `want` or the group in speaker. To change how big or how long an agent is, edit the template's limits.
-{.ai}
+**Launch folders.** `bottle run -f <path>[:rw]` (repeatable) and a template's `folders` mount host folders straight into the VM with no grant or SSH: naming them is the owner's approval, recorded in `policy-events.jsonl`. Read-only at `/input/<name>`, `:rw` at `/space/<name>`. Paths are absolute or `~/`; the CLI resolves relative ones. A missing folder or duplicate name fails the launch. Other machines' folders, or ones asked for mid-run, stay speaker shares. The templates mount `~/agent-space` read-write, shared by every agent on the host: `mkdir -p ~/agent-space` once.
 
-An agent with a local model starts Pi at once and does not wait for its first request. An agent launched with a prompt that uses a hosted model starts Pi only after you approve the card with the model's service, because otherwise its first turn would fail. When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point, resumes the same session, and gains the new tools. It does not replay the launch prompt. A one-shot unattended agent may therefore run its first turn without the extensions. If it settles before approval, it waits idle until you attach or the deadline passes. Approve the launch request promptly for unattended launches.
-{.ai}
+**Start order.** A local-model agent starts Pi at once; a prompted agent on a hosted model waits for its service card (else turn one fails). When an `mcp:` or `ext:` grant arrives, Pi restarts at its next idle point on the same session (the launch prompt is not replayed), so a one-shot unattended agent may run its first turn without the tools. Approve unattended launches promptly.
 
-- Grant changes reach the agent in one message. Whenever bottle restarts Pi because the `mcp:` or `ext:` grants changed (a new grant, a revoke, or an expiry), it writes `change.json` next to the other guest config: `{ id, added, removed, tools: { added, removed } }`, with items and the tool names Pi registers. After the restart, the guest extension sends the agent one message built from it: the new tools that are in Pi's active tool list, the expected tools that did not load, and the removed items and tools, then "Continue the agent." The guest records the last reported `id` in `/work/.speaker/last-change-id`, so a later restart with no loadout change (a hosted model's grant arriving) says nothing. Removals reach the agent this way too, since nothing else tells it.
-- Pi-alive check: after every Pi start or restart, bottle waits for Pi to finish loading (up to 60 seconds, since a cold guest disk is slow), then checks for 1 more second that it is still running. If it exited (a bad extension path or a crashing extension), the agent goes to `pi-down` with the tail of Pi's stderr (`/run/pi.err` in the guest) in its events, and the `mcp:` and `ext:` grants are not reported to speaker as in force. A failed first start is `start-failed`. This needs the guest image rebuilt for the stderr capture; without it the note says no stderr was captured.
-- VM limits cover CPU, memory, and the disposable root disk. `maxRuntimeHours` ends an agent at its deadline. The optional `maxModelRequests` caps the model request count.
-- `workGiB` is a launch-time free-space check. Enforce work and output quotas through the host filesystem before unattended agents share a disk with other services.
-- `catalog.json` holds `mcps` and `extensions`. On every connection bottle sends speaker this catalog (ids, labels, tools, sites) in a `catalog` message; speaker lists it to agents in `GET /_speaker/catalog`, and the `request_capability` tool shows that list in its description.
-  - An `mcp:<id>` entry is an MCP server that runs inside the VM from an image-local command: `transport: "stdio"`, an absolute `command`, `args`, the advertised `tools`, and whether it can write.
-    ```json
-    {
-      "mcps": {
-        "files": { "label": "Project files", "transport": "stdio", "command": "/opt/mcp/files", "args": ["--root", "/work"], "tools": ["read-file", "list-dir"], "write": false }
-      },
-      "extensions": {}
-    }
-    ```
+- **Grant changes reach the agent in one message.** On a restart caused by changed `mcp:`/`ext:` grants, bottle writes `change.json`; the guest extension then sends one message naming new tools, expected tools that did not load, and removals (which reach the agent only this way). `/work/.speaker/last-change-id` stops repeats.
+- **Pi-alive check:** after each start bottle waits up to 60 seconds for Pi to load (cold disk), then 1 more to confirm it runs. If not, the agent goes to `pi-down` with the tail of `/run/pi.err` in its events and its `mcp:`/`ext:` grants are not reported in force; a failed first start is `start-failed`.
+- **Limits:** VM limits cover CPU, memory and the disposable root disk; `maxRuntimeHours` ends the agent at its deadline; optional `maxModelRequests` caps request count. `workGiB` is only a launch-time free-space check; enforce quotas on the host filesystem.
+- **Snapshots from speaker** replace the live grants. Sites, secrets and folders apply once installed; an MCP server or extension applies after Pi restarts at idle. Unsupported items are skipped. After 30 seconds without word from speaker, bottle drops all its agents' grants until reconnected, so grants end within 30 seconds of losing speaker.
+- **Always-on extensions** (`/opt/pi-extensions`): pi-loop-police, pi-token-speed, proper-base, pi-subagents (same VM and policy, 2 children, no nesting, the agent's model). Every other package loads only through a grant, or attended mode for ask-user-question.
 
-    Each tool name is lowercase letters, digits, `_` or `-`, and the list must be non-empty with no repeats. Pi registers them as `mcp__files__read_file` and so on. Granting `mcp:files` writes the server into Pi's `mcp.json` at the next restart, and a revoke or expiry removes it the same way.
-  - Remote and hosted MCP servers are not catalog entries; they are speaker services. Add one in speaker's Setup (tick "MCP server"; `speaker/services.example.json` has Context7 and Parallel Search). An agent asks for `<service>.read` (or `.full`) and calls `$SPEAKER_URL/<service>` with its speaker token. So the shipped catalog has no `mcps` entries, and a remote entry fails validation with that explanation.
-  - An extension entry names a reviewed image-local path (`/opt/pi-plugins/<name>` for the pinned npm packages), the tools to declare to the model (Pi's `--tools` is an allowlist), the `sites` it contacts (speaker adds them to a request for it), an optional system-prompt note, and optional `files` (config file name under `~/.pi/agent` to JSON or string content; see Add an extension). An `ext:<id>` grant loads the extension. Like other unsupported grants, unknown IDs are skipped. The shipped entries are pi-web-access, pi-cc-loop, pi-cc-monitor, and Pi's subagent example (formerly the `subagent@1` plugin).
-- bottle reads `catalog.json` at startup and checks that every extension's `guestPath` is in the guest image. `bottle build` copies the image's `/opt/pi-plugins.manifest` to `<stateRoot>/guest-plugins.txt`, so the check needs no VM. A wrong path stops startup naming the entry. A missing manifest means the image was not built with this bottle: run `bottle build`.
-- Every agent loads only the always-on extensions pi-loop-police, pi-token-speed, proper-base (session titles; its proactive delegation is turned off) and pi-subagents from `/opt/pi-extensions`. Subagents run inside the same VM under the same policy, limited to 2 children per delegation, no nesting, and the agent's own model. Every other Pi package is pinned in `guest/pi-package.json` and loads only through a grant or, for ask-user-question, attended mode.
-- Pi's instructions name the catalog's `mcp:` and `ext:` entries, the secrets you set up in speaker (names, hosts, and the variable each uses; speaker sends this list with its grant snapshots), the `<service>.read` and `.full` forms for homelab APIs and remote MCP servers, and how to use a secret.
-- Each snapshot from speaker replaces the live grants. A grant takes effect once bottle reports it applied. Sites, secrets, and folders apply the moment they are installed. An MCP server or extension applies only after Pi restarts with it, at an idle point. bottle skips unsupported items. If it hears nothing from speaker for 30 seconds (the connection is lost, or snapshots stopped), it drops all its agents' grants until the connection returns. An agent's grants therefore end within 30 seconds of losing speaker, and a brief blip changes nothing.
-- Folders come over SSH: speaker sends the over-SSH folder grants to the host, which mounts them with `sshfs`.
+### catalog.json
+
+`mcps` and `extensions`. bottle sends it to speaker on every connection; speaker lists it in `GET /_speaker/catalog` and `request_capability` shows it in its description.
+
+- **`mcp:<id>`:** an in-VM server from an image-local command: `transport: "stdio"`, absolute `command`, `args`, `tools` (non-empty, no repeats, lowercase letters, digits, `_`, `-`) and `write`. Granting writes the server to Pi's `mcp.json` at the next restart; a revoke removes it. The shipped catalog has none.
+  ```json
+  { "mcps": { "files": { "label": "Project files", "transport": "stdio", "command": "/opt/mcp/files", "args": ["--root", "/work"], "tools": ["read-file", "list-dir"], "write": false } }, "extensions": {} }
+  ```
+- **Remote and hosted MCP servers** are speaker services, not catalog entries (a remote entry fails validation). Add one in speaker's Setup (`speaker/services.example.json` has Context7 and Parallel Search); the agent asks for `<service>.read` or `.full`.
+- **`ext:<id>`:** an image-local `guestPath` (`/opt/pi-plugins/<name>`), the `tools` to declare (Pi's `--tools` is an allowlist), `sites` it contacts (added to the request), optional `note` and `files`. Shipped: pi-web-access, pi-cc-loop, pi-cc-monitor, Pi's subagent example. Unknown ids are skipped.
+- At startup bottle checks every `guestPath` against the image manifest (`bottle build` copies `/opt/pi-plugins.manifest` to `<stateRoot>/guest-plugins.txt`); a wrong path stops startup naming the entry, a missing manifest means run `bottle build`.
 
 ### Asking for access without waiting
 
-`request_capability` never holds the agent. It files the request with speaker and answers at once: with the decision if there already is one (auto-denied, invalid, or granted and in force), otherwise "Filed as request <id>. Not decided yet." and the agent keeps working. A background loop in the guest extension watches each pending request by id (`GET /_speaker/requests/<id>` with `Speaker-Wait`), one long-poll at a time, so it never files a request twice; when the owner decides, it waits for items that apply at once to be in force and sends the agent one message starting `[speaker]` (steered into the current run, or a new turn if Pi is idle). Repeat calls for the same items answer "already pending". Pending requests live in `/work/.speaker/pending.json`, so a Pi restart re-arms them and a decision that landed meanwhile is delivered on start. `ext:` and `mcp:` grants no longer ask the agent to stop: bottle restarts Pi at its next idle, and the existing "now available / did not load / removed" message follows.
+`request_capability` never holds the agent: it files the request and answers at once (the decision if there is one, else "Filed as request <id>. Not decided yet."). A guest loop long-polls each pending request by id (never filing twice) and, on a decision, sends one `[speaker]` message once apply-at-once items are in force. Repeat calls answer "already pending". Pending ids live in `/work/.speaker/pending.json`, so a Pi restart re-arms them.
+{.ai}
 
 <!-- author: ai -->
 
@@ -286,15 +228,13 @@ An agent with a local model starts Pi at once and does not wait for its first re
 
 <sub>AI-written</sub>
 
-bottle never holds a secret. You add each secret once in speaker's Setup, with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`). An agent asks for `secret:<NAME>`, and the card shows the hosts.
-{.ai}
+bottle never holds a secret. Add it once in speaker's Setup with its allowed hosts and the variable the agent sees (for example `GH_TOKEN`); the agent asks for `secret:<NAME>`. The grant snapshot carries the hosts, not the value. bottle's egress proxy sends every request to those hosts through speaker's HTTPS proxy (`PROXY_PORT`) as a CONNECT tunnel authenticated as the agent; bottle holds that token, the guest has only a placeholder, and the guest trusts speaker's proxy certificate. Pi gets the placeholder from `GET /_speaker/catalog`. bottle drops the route when the grant goes, and if speaker's proxy is unreachable it refuses rather than sending directly. What speaker does next: [DESIGN](../speaker/DESIGN.md#secrets-speaker-inserts-them).
 
-The grant snapshot for a secret carries the secret's hosts, not its value. bottle's egress proxy sends every request the VM makes to those hosts through speaker's HTTPS proxy (`PROXY_PORT`; see speaker's README) as a CONNECT tunnel authenticated as the agent. bottle holds that token; the guest has only a placeholder. The guest's TLS for those hosts ends at speaker's proxy, whose certificate the guest trusts (see the Egress bullet under The VM). [speaker's DESIGN.md](../speaker/DESIGN.md#secrets-speaker-inserts-them) covers what speaker does next. bottle drops the route when its grant goes. Pi gets the placeholder from `GET /_speaker/catalog` and sets the variable on the command that needs it. If speaker's proxy is unreachable, bottle refuses the request and never sends it directly.
-{.ai}
+Other paths: remote MCP servers and hosted providers are speaker services; the local model takes the literal key `local`; stdio MCPs and plugins run in the VM with access to guest data, so never put raw secrets in their command, args or config. Tokens: `hostToken` (host login, `state/speaker.token`), `agentToken` (guest sees only placeholder `SPEAKER_TOKEN`), `guestToken` (`BOTTLE_TOKEN`, status reports). VMs are named `bottle-<id>`; startup removes crash leftovers.
 
 ### Hosted model providers
 
-A hosted provider is a speaker service, such as the starter `openrouter`, `anthropic` and `openai` services; you enter its key once, in speaker's Setup. In `config.json`, set `hostedProviders[].service` to the service's id. Launch with `-m <id>/<model>`. The agent adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model endpoint replaces it with the agent's token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key, forwards, and audits. Neither bottle nor the VM ever has the key. Until you grant the service, speaker refuses the calls. That is why an agent with a prompt on a hosted model waits for this card before Pi starts (see Templates, catalogs, and grants).
+A hosted provider is a speaker service (starters `openrouter`, `anthropic`, `openai`); the key is entered once in Setup, and set `hostedProviders[].service` to its id. Launch with `-m <id>/<model>`. The agent adds `<service>.full` to its first request (a chat completion is a POST). Pi's key in `models.json` is a dummy: the model door swaps in the agent's token and sends the call to `$SPEAKER_URL/<service>/...`, where speaker checks the grant, adds the real key and audits. Until the owner grants the service, speaker refuses, which is why a prompted agent waits for this card before Pi starts. Approving a provider approves every model and operator behind that host.
 {.ai}
 
 <!-- author: ai -->
@@ -303,11 +243,11 @@ A hosted provider is a speaker service, such as the starter `openrouter`, `anthr
 
 <sub>AI-written</sub>
 
-1. Pin the npm package in `guest/pi-package.json`. Any dependency that declares a `pi` extension is linked automatically into `/opt/pi-plugins/<name>` (the part after the scope), except the always-on ones (`ALWAYS_ON` in the Dockerfile), which go to `/opt/pi-extensions`. There is no link list to edit.
-2. Run `bottle build`. The image is rebuilt and the plugin manifest is copied to `<stateRoot>/guest-plugins.txt`.
-3. Add an entry to the live `<configRoot>/catalog.json` (`~/.bottle/config/catalog.json`; `bottle/catalog.json` has the shipped ones): `label`, `guestPath` (`/opt/pi-plugins/<name>`), `description`, `tools`, `sites`, and optionally `note` and `files`. `tools` must be the names the package registers, because Pi's `--tools` is an allowlist and an unlisted tool stays hidden. The `sites` are hosts the extension itself contacts; when the extension is requested they are added as separate `site:` grants and end with the extension's grant.
-4. Optional `files`: `{ "<name>.json": { ... } }` writes `~/.pi/agent/<name>.json` in the guest, only for agents that load the extension (a string value is written as is, anything else as JSON). A name has no directory part and cannot replace bottle's own `models.json`, `settings.json`, `mcp.json`, or `APPEND_SYSTEM.md`. The shipped `pi-web-access` entry is the example, with browser cookies and hosted extraction off.
-5. Reload without restarting: `pkill -HUP -f "bottle/src/server.ts"`. The catalog is re-validated against the image, swapped in, and re-sent to speaker. A bad catalog is refused (the SIGHUP logs it) and the old one stays. Running agents are not restarted for a new or changed entry. A grant for an entry you removed is skipped with an agent note, and that agent's Pi restarts at its next idle point without it.
+1. Pin the npm package in `guest/pi-package.json`. Any dependency declaring a `pi` extension is linked automatically into `/opt/pi-plugins/<name>` (the part after the scope), except the always-on ones (`ALWAYS_ON` in the Dockerfile), which go to `/opt/pi-extensions`.
+2. `bottle build` rebuilds the image and copies the manifest to `<stateRoot>/guest-plugins.txt`.
+3. Add an entry to the live `<configRoot>/catalog.json` (`bottle/catalog.json` has the shipped ones): `label`, `guestPath`, `description`, `tools` (exactly the names the package registers; unlisted tools stay hidden), `sites` (hosts it contacts; added as `site:` grants that end with the extension's), optional `note` and `files`.
+4. `files`: `{ "<name>.json": {…} }` writes `~/.pi/agent/<name>.json` in the guest for agents that load it. No directory part; cannot replace `models.json`, `settings.json`, `mcp.json` or `APPEND_SYSTEM.md`. `pi-web-access` is the example.
+5. Reload: `pkill -HUP -f "bottle/src/server.ts"`. The catalog is re-validated, swapped in and re-sent to speaker; a bad one is refused and the old stays. Running agents are not restarted for new entries; a grant for a removed one is skipped and that Pi restarts at idle without it.
 {.ai}
 
 <!-- author: ai -->
@@ -316,53 +256,9 @@ A hosted provider is a speaker service, such as the starter `openrouter`, `anthr
 
 <sub>AI-written</sub>
 
-The `research` group (in speaker's `groups.example.json`; an agent or a template's `want` asks for `group:research`) grants the `pi-web-access` extension, the site `mcp.exa.ai`, and the Wikipedia and arXiv sites. The extension's `~/.pi/agent/web-search.json` is the `files` entry of `pi-web-access` in `catalog.json`, written only into agents that load it. Search uses only keyless Exa through its hosted MCP endpoint, and pages are fetched directly over HTTP. Hosted extraction services, browser cookies, the curator browser UI, and the video and YouTube paths are off. A page fetch still needs a `site:` grant for its host, so the agent requests hosts beyond Wikipedia and arXiv.
-{.ai}
-
-The group leaves out Parallel Search. It duplicated search for a small local model, and its hosted `web_fetch` would read any page without a site grant. Parallel Search is a speaker service (`parallel-search.read`) that the agent can request explicitly.
-{.ai}
-
-No search API keys are configured. To add a keyed provider, add its key as a speaker secret with the provider's host, set the provider's key field (for example `exaApiKey`) to the agent's placeholder for that secret (see `GET /_speaker/catalog`). The catalog's `files` are static, so this needs a small change in `writeGuestConfig`. Then approve `secret:<NAME>`.
-{.ai}
-
-The `loop` group holds pi-cc-loop and pi-cc-monitor; the `sealed` template asks for both extensions for one day. Pi then wakes itself with `/loop`, cron jobs, `schedule_wakeup`, or `Monitor`. bottle never archives an agent for being idle, so a self-waking Pi keeps running between wakes. `/output/DONE` or the deadline still ends it. Durable jobs live in `/work/.pi/scheduled_agents.json`. They survive Pi restarts within the agent and disappear with the work directory at archival. Persisting jobs across agents through a folder grant is future work.
-{.ai}
-
-The `cron` template is for recurring work through the day or week: one detached agent that schedules its own wakes, such as `bottle run -d -t cron "Every weekday at 9:00, summarize new arXiv papers on X into /space/agent-space/digest.md"`. One approval of its launch card covers the whole run, because the template asks for 30 days and the agent ends at 168 hours, `/output/DONE`, or its 3000 model requests. Anything a later wake or a later agent needs belongs in the agent space; the work directory and its scheduled jobs go at archival.
-{.ai}
-
-<!-- author: ai -->
-
-<!-- author: ai -->
-
-## Names and tokens
-
-bottle uses speaker's words: a **grant** is an approved item for an **agent** (`agentId`), and extensions are `ext:<id>` items. Each agent has three tokens, named the same in the code:
-
-| Name in code | Guest sees | What it is |
-| --- | --- | --- |
-| `hostToken` | nothing | This sandbox host's login to speaker (`state/speaker.token`) |
-| `agentToken` | `SPEAKER_TOKEN`, a placeholder | The agent's token at speaker; the speaker door adds it to the guest's requests |
-| `guestToken` | `BOTTLE_TOKEN` | bottle's per-agent token for the guest's status reports to the control channel |
-
-VMs are named `bottle-<id>`; at startup the service removes any left behind by a crash.
-
-## Who receives credentials
-
-<sub>AI-written</sub>
-
-| Credential path | What the guest sees | Who holds the real value |
-| --- | --- | --- |
-| A speaker secret (`secret:<NAME>`) | A per-agent placeholder from speaker's `/me` | Speaker only. Its proxy inserts it for the secret's hosts; bottle never has it |
-| Remote MCP server or hosted model provider | Nothing: it is a speaker service (`$SPEAKER_URL/<service>`) | Speaker, which adds any upstream key |
-| Agent token | A per-agent placeholder (`SPEAKER_TOKEN`) | bottle, which created the agent; the speaker door adds it only to requests to speaker. It is bound to this host's address |
-| Local model endpoint | The literal API key `local` (not a secret) | The configured local inference server receives prompts; no real API key is substituted |
-| stdio MCP | Its configured command and arguments inside the guest | No host secret is automatically injected into stdio MCPs |
-
-The destination of a secret's requests receives the real credential and the request content. Speaker's proxy logs agent, host, method, path, and status, never the value or bodies. Stdio MCPs and guest plugins run inside the VM with access to guest data, so do not put raw secrets in their command, arguments, or configuration.
-{.ai}
-
-Placeholder substitution keeps the real value off the guest and off bottle. It does not stop an approved destination from using the granted access. If someone took over bottle, they could make requests through speaker only while the grant is active, only to the secret's hosts, and every request is logged. They could not copy the secret.
+- **`research` group** (speaker's `groups.example.json`): `pi-web-access`, site `mcp.exa.ai`, Wikipedia, arXiv. Search is keyless Exa; pages are fetched over HTTP, each host needing a `site:` grant; hosted extraction, browser cookies and video paths are off. Parallel Search is left out (it duplicated search, and its hosted `web_fetch` reads any page without a site grant); ask for `parallel-search.read` explicitly. A keyed provider needs a speaker secret plus a small change in `writeGuestConfig`, since catalog `files` are static.
+- **`loop` group** (pi-cc-loop, pi-cc-monitor): Pi wakes itself with `/loop`, cron jobs, `schedule_wakeup` or `Monitor`. bottle never archives for idleness; `/output/DONE` or the deadline ends it. Jobs in `/work/.pi/scheduled_agents.json` survive Pi restarts, not archival.
+- **`cron` template:** `bottle run -d -t cron "Every weekday at 9:00, summarize new arXiv papers on X into /space/agent-space/digest.md"`. One approval covers the run; anything later wakes or agents need belongs in the agent space.
 {.ai}
 
 <!-- author: ai -->
@@ -371,16 +267,13 @@ Placeholder substitution keeps the real value off the guest and off bottle. It d
 
 <sub>AI-written</sub>
 
-bottle mounts `/input` for read-only shares, `/space` for read-write shares, `/work` for disposable scratch and the Pi session, `/output` for retained artifacts, and `/etc/bottle` for trusted read-only configuration. Pi runs as guest root.
-{.ai}
+Mounts: `/input` read-only shares, `/space` read-write shares, `/work` scratch and the Pi session, `/output` retained artifacts, `/etc/bottle` trusted config. Pi runs as guest root.
 
-At close, bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent, and removes the disposable work tree. Each archive holds `artifacts/` and `_control/`. The control directory holds agent metadata, grant and policy events, a hashed artifact manifest, the Pi session and transcript, and `model-calls.jsonl`.
-{.ai}
+At close bottle stops Pi, exports the session and transcript, writes the trusted records, closes the VM, deletes its speaker agent and removes the work tree. An archive holds `artifacts/` and `_control/` (agent metadata, grant and policy events, hashed artifact manifest, Pi session and transcript, `model-calls.jsonl`).
 
-`model-calls.jsonl` has one JSON line per model call: `at`, `status`, `durationMs`, the `request` body and the raw `reply` body (a streamed reply stays as its event stream), and `truncated`. Bodies are cut at 8 MiB for a request and 32 MiB for a reply. Tool calls are in Pi's session file.
-{.ai}
+`model-calls.jsonl`: one line per model call (`at`, `status`, `durationMs`, `request`, raw `reply`, `truncated`; bodies cut at 8 MiB and 32 MiB). Tool calls are in Pi's session file.
 
-You delete archives manually. If archiving fails, bottle keeps the work tree for recovery and reports the failure. You cannot retroactively revoke a completed write or a note the agent already read. Treat captured prompts, replies, and artifacts as private data.
+You delete archives manually. If archiving fails, bottle keeps the work tree and reports it. A completed write or a read note cannot be revoked after the fact. Treat prompts, replies and artifacts as private data.
 {.ai}
 
 <!-- author: ai -->
@@ -389,25 +282,20 @@ You delete archives manually. If archiving fails, bottle keeps the work tree for
 
 <sub>AI-written</sub>
 
-Run `mise run check` and `mise run test` from the repository root. The tests cover configuration, network and ref policy, templates and their first request, the speaker channel (grants, applied reports, the 30-second drop), and the secret route against a real speaker proxy. They do not boot a guest.
+`mise run check` and `mise run test` cover configuration, network policy, templates, the speaker channel and the secret route against a real speaker proxy; they do not boot a guest. The real-VM pass is in [speaker's DESIGN](../speaker/DESIGN.md#verifying-end-to-end); also worth checking there: certificate inheritance through dtach and terminal behavior.
+
+bottle runs on macOS (confirmed 2026-11-15). Not verified: folder mounts (FUSE in the guest) on macOS, many concurrent VMs, terminal resize.
+
+| Symptom | Cause |
+| --- | --- |
+| Startup stops on `setsid` | Not installed |
+| Startup stops on microsandbox storage | The folder or a parent is group- or world-writable; `chmod` the named directory |
+| `speaker.token is missing` | Register the host first |
+| Guest request returns 403 | Not granted, expired or revoked; the agent requests the capability |
+| Launch fails: "speaker's proxy certificate is unavailable" | Speaker is locked |
+
+SIGINT or SIGTERM archives open agents; check the archive outcome before discarding recovery files.
 {.ai}
-
-Before deployment, verify register, launch, request, approval, expiry, revocation, attach, and archive in a real VM. Also check (registration records speaker's `PROXY_PORT` as `speaker.proxyPort` here):
-{.ai}
-
-- `gh` and `git` with a granted secret through the egress proxy: the placeholder goes in, the real value appears only at the real host, and a `git clone` works through speaker
-- a revoke ends that access
-- the model-request capture for routed requests
-- certificate inheritance through dtach
-- terminal behavior
-
-bottle runs on macOS (confirmed 2026-11-15). Not yet verified: folder mounts (FUSE in the guest) on macOS, many concurrent VMs, and terminal resize.
-{.ai}
-
-- A missing `setsid` stops startup with a clear error. So does a microsandbox storage folder or parent that is group- or world-writable.
-- `speaker.token is missing` means you must register the sandbox host first.
-- A blocked guest request returns 403. The agent requests the required capability. An expired or revoked grant also blocks later use. If an agent's launch fails with "speaker's proxy certificate is unavailable", speaker is locked.
-- The service archives open agents on SIGINT or SIGTERM. Inspect the archive outcome before you discard recovery files.
 
 <!-- author: ai -->
 
@@ -415,12 +303,11 @@ bottle runs on macOS (confirmed 2026-11-15). Not yet verified: folder mounts (FU
 
 <sub>AI-written</sub>
 
-You trust the host, bottle, the sandbox runtime, the pinned image, and every peer that can reach the private control listener. You do not trust the guest, model decisions, downloaded code, files, or remote tool output. The control API has no application login, so restrict access to the control listener through host networking.
-{.ai}
+Trusted: the host, bottle, the sandbox runtime, the pinned image, and every peer that can reach the control listener (it has no application login, so restrict it by host networking). Not trusted: the guest, model decisions, downloaded code, files, remote tool output.
 
-- The host enforces grant expiry, revocation, network access, and shared-folder permissions independently of Pi. Validate those boundaries in a real guest before deployment.
-- Every approved destination can receive anything the guest can read. Placeholder substitution in speaker's proxy protects secret values. It does not prevent misuse of granted authority.
-- bottle's egress proxy is a high-value host process and needs the same care as speaker's proxy. Every client in the guest must honour the proxy settings and trust speaker's proxy certificate; one that ignores them simply gets no network.
-- The speaker exception permits the configured origin and agent-facing routes. Guest HTTP egress rejects IPv6 until its complete address policy is implemented and tested.
-- Provide host storage quotas. Request counts do not bound GPU concurrency, token consumption, or the duration of a single generation.
-- Review artifacts before you run them or promote them onto the host. Archives may contain private agent content.
+- The host enforces grant expiry, revocation, network access and shared-folder permissions independently of Pi. Validate them in a real guest before deployment.
+- Every approved destination can receive anything the guest can read. Placeholder substitution protects secret values, not misuse of granted authority. If someone took over bottle, they could make requests through speaker only while a grant is active, only to the secret's hosts, all logged; they could not copy the secret.
+- bottle's egress proxy is a high-value host process. Every guest client must honour the proxy settings and trust speaker's certificate; one that ignores them gets no network.
+- Provide host storage quotas: request counts do not bound GPU concurrency, token use or a single generation's length.
+- Review artifacts before running them; archives may hold private content.
+{.ai}

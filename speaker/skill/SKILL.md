@@ -1,105 +1,52 @@
 ---
 name: access-and-creds
-version: 8
+version: 9
 description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH hosts, folders, and secrets such as GitHub tokens. Use when a task needs access, a credential, API key, token, SSH or `gh` you lack, or a call returns 401 or 403."
 ---
 
 # Speaker
 
-Speaker holds the owner's keys and makes calls for you. The owner approves each use from a phone, so you never need an upstream key. Never ask for one, and never print your speaker token.
+Speaker holds the owner's keys and makes calls for you. The owner approves each use. Never ask for an upstream key, and never print your token. (In a bottle sandbox use the `speaker` command and `request_capability`, not this page.)
 
-In a bottle sandbox, use the `request_capability` tool instead of this page.
+Enrol once per machine (label: the task in at most 8 words; agent: `<model> · <app> on <machine>`):
+`curl -s $SPEAKER_URL/_speaker/enroll.sh | sh -s -- "<label>" "<model · app on machine>"`
 
-- Call a service: `curl -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" "$SPEAKER_URL/<service>/<path>"` (quote URLs: `?` breaks unquoted in zsh)
-- No header file, or error `enroll`: read "Set up" below. It takes four commands, once.
-- No access yet: repeat the call with `-H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70`. Speaker asks the owner, who reads your reason on the request, and answers when they decide. Without `Speaker-Wait` it answers at once, so you would never see the decision. For one service this is all you need; `POST /_speaker/requests` (see "Asking") is for several items at once.
-- A service's own answer carries `Speaker-Upstream: <service>`, so its 404 means a wrong path (see its help page), not a refusal. After a held call is approved, it also carries `Speaker-Granted: <item>`.
-- Every error is JSON with `error` and `message`, and has `next` where there is a next step. Do exactly that, and tell the user what `tell_user` says. On `denied`, stop: asking again only annoys the owner.
-- What you may ask for, and where you stand: `GET $SPEAKER_URL/_speaker/catalog`.
-- One service's usage and your state for it: `GET $SPEAKER_URL/_speaker/help/<service>`.
+Call a service (quote the URL; add the wait header only to ask the owner and hold the call until they decide):
+`curl -s -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" -H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70 "$SPEAKER_URL/<service>/<path>"`
 
-Sections below, in the order you will need them: Set up, What you can ask for, Asking, Folders and SSH, Secrets, Remote MCP servers, Errors. Read only the one you need.
+The three common errors (JSON with `error`, `message`, `next`; do what `next` says, tell the user what `tell_user` says):
+- `enroll`: no header file or unknown token. Enrol again.
+- `approval_required`: the owner has not decided. Repeat with `Speaker-Wait: 60`.
+- `denied`: stop. Asking again only annoys the owner.
 
-## Set up
+A 404 with `Speaker-Upstream: <service>` is the service's own: a wrong path. `Speaker-Upstream-Path` shows the path speaker called; `Speaker-Note` has the owner's note for the service.
 
-Do this once per user and machine. Skip it if the header file works. The token stays in a file on your machine, and speaker keeps only its hash.
+More: `GET $SPEAKER_URL/_speaker/help/<service>` (usage and your state), `GET $SPEAKER_URL/_speaker/catalog` (everything you may ask for, and your grants).
 
-Fill in `label` and `agent`. Speaker shows both to the owner as your claims, so the owner can tell agents apart. `want` may be empty.
+---
 
-- `label`: the task in at most 8 words, as the user would say it
-- `agent`: `<model> · <app> on <machine>`, for example `Opus 5.5 · Claude Code on PrimeX`. Write `unknown` for any part you do not know.
+Reference. Read only the part you need.
 
-sh (Linux, macOS, Git Bash). Run each step in the same shell:
+## Set up (by hand)
 
-1. `d="${XDG_STATE_HOME:-$HOME/.local/state}/speaker"; mkdir -p "$d"; chmod 700 "$d"; umask 077`
-2. `t=$(openssl rand -hex 32); printf 'Authorization: Bearer %s\n' "$t" > "$d/header"`
-3. `h=$(printf %s "$t" | (sha256sum 2>/dev/null || shasum -a 256) | cut -d' ' -f1); unset t`
-4. `curl -s $SPEAKER_URL/_speaker/agents -H 'content-type: application/json' -d '{"label":"<label>","agent":"<agent>","tokenHash":"'"$h"'","want":[]}'`
-
-From now on call with `curl -H @"$d/header" ...`.
-
-PowerShell:
-
-1. `$d = "$HOME\.local\state\speaker"; New-Item -ItemType Directory -Force $d | Out-Null; icacls $d /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F" | Out-Null`
-2. `$b = [byte[]]::new(32); [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $t = -join ($b | % { $_.ToString('x2') }); Set-Content "$d\header" "Authorization: Bearer $t"`
-3. `$h = -join ([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($t)) | % { $_.ToString('x2') }); $t = $null`
-4. `Invoke-RestMethod -Method Post $env:SPEAKER_URL/_speaker/agents -ContentType application/json -Body (@{label='<label>'; agent='<agent>'; tokenHash=$h; want=@()} | ConvertTo-Json)`
-
-From now on call with `curl.exe -H "@$d\header" ...`.
-
-Your token works only from the address you enrolled from, so a leaked token is useless elsewhere. From another address, set up again with a new token.
-
-## What you can ask for
-
-`GET $SPEAKER_URL/_speaker/catalog` lists everything you may ask for, each with your state: granted (until a time), `ask` (not granted yet), or `never` (the owner blocks it). It lists services, secrets, and groups, plus your grants, SSH commands and requests. Its `text` field is the same list in plain English.
-
-Two kinds are deliberately not listed: folders and SSH targets. Anyone who can reach speaker can enroll, so speaker does not hand out the names of the owner's machines. Use the exact name your task or the owner gave you. A name speaker does not know is refused with 400 and nothing reaches the owner.
+The script above does this: `d="${XDG_STATE_HOME:-$HOME/.local/state}/speaker"`, make it mode 700; `t=$(openssl rand -hex 32)`; write `Authorization: Bearer $t` to `$d/header` (mode 600); POST `{"label","agent","tokenHash":sha256($t),"want":[]}` to `$SPEAKER_URL/_speaker/agents`. On Windows do the same in PowerShell and call with `curl.exe -H "@$d\header"`. The token never leaves your machine, and works only from the address you enrolled from.
 
 ## Asking
 
-To use a service, call it with `Speaker-Wait: 60` and speaker asks the owner for you. To ask for several things at once, `POST $SPEAKER_URL/_speaker/requests` with the header `Speaker-Wait: 60` and this body:
-
-`{"want":["<item>","<item>"],"reason":"<one sentence>","duration":"2h"}`
-
-Items: `<service>.read` (read), `<service>.full` (read and change), `ssh:<target>`, `folder:<share>` (`folder:<share>:rw` to change files), `secret:<NAME>`, `group:<name>`.
-
-Ask for the minimum the task needs, because the owner reads every item. If you need three or more items from one group in the catalog, ask for the group: the owner then makes one decision. Otherwise ask for exactly those items, even if a group contains them.
-
-Durations: `30m`, `1h`, `2h` (default), `1d`, `30d`.
-
-The reply lists `granted` and `denied`. Work with what was granted. Do not ask again for what was denied. Each POST is its own request. Posting exactly the same items while that request is still pending joins it, which is how you keep waiting: repeat the call with `Speaker-Wait: 60`.
+A service call with `Speaker-Wait: 60` asks the owner for you. For several items, `POST $SPEAKER_URL/_speaker/requests` with `Speaker-Wait: 60` and `{"want":["<item>"],"reason":"<one sentence>","duration":"2h"}`. Items: `<service>.read`, `<service>.full` (also change), `ssh:<target>`, `folder:<share>` (`:rw` to change files), `secret:<NAME>`, `group:<name>` (when you need three or more of its items). Durations: `30m`, `1h`, `2h`, `1d`, `30d`. Ask for the minimum. Posting the same items again joins the pending request. Folders and SSH targets are not listed: use the exact name from your task.
 
 ## Folders and SSH
 
-Make a throwaway key once, with `ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"`, and send `"sshKey":"<contents of ssh_key.pub>"` with your first request. Speaker uses it to tell you apart from other agents. Then ask for `ssh:<target>` or `folder:<share>`, with names from the user or your task.
-
-After approval, the catalog lists complete command lines under `ssh`. Run its `knownHosts.save` command once, with `<known_hosts>` replaced by `"$d/known_hosts"`; this pins speaker's host key so nothing prompts. Then copy the command lines and fill in `<key>` (the path of `ssh_key`), `<known_hosts>` (`"$d/known_hosts"`), `<command>`, `<file>`, `<path>`, `<mountpoint>`.
-
-- Commands: use the `ssh` line. There is no terminal. For a script, end the line with `'sh -s' <<'EOF'`.
-- Folders: try `sshfs` first and work inside the mountpoint. If `sshfs` is not installed, use `sftp` or `scp` (fine for a few files). Paths start with the share name. Speaker refuses `rsync` and `scp -O`.
-- When a grant ends, the session stops. Read the catalog again.
+Make a throwaway key once (`ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"`) and send `"sshKey":"<ssh_key.pub>"` with your first request. After approval the catalog lists complete command lines under `ssh`: run its `knownHosts.save` once (with `<known_hosts>` as `"$d/known_hosts"`), then fill in `<key>`, `<known_hosts>`, `<command>`, `<file>`, `<path>`, `<mountpoint>`. Commands have no terminal (end a script with `'sh -s' <<'EOF'`). Folders: `sshfs`, else `sftp` or `scp` (not `rsync`, not `scp -O`). When a grant ends, the session stops.
 
 ## Secrets
 
-Ask for `secret:<NAME>`, with a name from the catalog. After approval, the catalog shows it under `secrets` with `environment` (a placeholder, not the token, plus `HTTPS_PROXY` and `SSL_CERT_FILE`), the allowed hosts, and the one-time `certificate` and `git` commands. Run those once. Then set the variables only on the command that needs them, so the placeholder goes nowhere else:
-
-`GH_TOKEN=<placeholder> HTTPS_PROXY=<value> SSL_CERT_FILE=<value> gh pr list`
-
-In `HTTPS_PROXY`, replace `<token>` with the part after `Bearer ` in your header file. Speaker refuses other hosts, and swaps the placeholder for the real token only on the allowed ones.
+Ask for `secret:<NAME>`. The catalog then shows `environment` (a placeholder, `HTTPS_PROXY`, `SSL_CERT_FILE`), the allowed hosts and the one-time `certificate` and `git` commands. Run those once, replace `<token>` in `HTTPS_PROXY` with the part of your header file after `Bearer `, and set the variables only on the command that needs them: `GH_TOKEN=<placeholder> HTTPS_PROXY=<value> SSL_CERT_FILE=<value> gh pr list`. Speaker swaps in the real token only for the allowed hosts. A secret marked `release` is read with `GET /_speaker/secrets/<NAME>`; do not store or repeat it.
 
 ## Remote MCP servers
 
-A service in the catalog with `mcp: true` is a remote MCP server. Ask for `<service>.read`, then point your MCP client at `$SPEAKER_URL/<service>` with the `Authorization` header from your header file.
+A catalog service with `mcp: true`: ask for `<service>.read`, then point your MCP client at `$SPEAKER_URL/<service>` with your header file's `Authorization`.
 
-## Errors
+## Other errors
 
-- `enroll`: your token is missing or unknown. Read "Set up" and enroll again.
-- `approval_required`: the owner has not decided yet. Repeat with `Speaker-Wait: 60`.
-- `denied`: stop. Tell the user.
-- `invalid`: fix the input. The message says what is accepted and `next` says where to look.
-- `not_found`: that route or service does not exist. Do what `next` says.
-- `rate_limited`: wait and retry.
-- `locked`: the owner has not signed in to speaker yet. Tell the user, then repeat the call later.
-- `no_key`: the service has no key yet. Tell the user.
-
-Always do `next`, and tell the user what `tell_user` says.
+`invalid`: fix the input (`next` says where to look). `not_found`: no such route or service. `rate_limited`: wait. `locked`: the owner has not signed in; tell the user. `no_key`: the service has no key; tell the user.

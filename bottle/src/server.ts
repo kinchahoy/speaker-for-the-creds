@@ -70,7 +70,7 @@ export const startControl = (config: Config, agents: Agents) => {
     }));
 
   const routes = app
-    .get("/api/state", (context) => context.json({ agents: listAgents(), finished: finishedAgents(config.outputRoot) }))
+    .get("/api/state", (context) => context.json({ agents: listAgents(), speaker: agents.speakerStatus(), finished: finishedAgents(config.outputRoot) }))
     .post(
       "/api/agents",
       validator("json", (body) => NewAgent.parse(body)),

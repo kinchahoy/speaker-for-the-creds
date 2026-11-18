@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  accessBlock,
   alreadyPendingText,
+  askList,
   changeMessage,
   decisionMessage,
   filedText,
@@ -161,53 +163,53 @@ export default async function (pi: ExtensionAPI) {
       }
     }
   };
+  // The access block rides on the launch prompt and on a restart's change message, so the model reads it once per run, not in every call.
+  const withAccess = (text: string) =>
+    call(speaker, "GET", "catalog").then(
+      (catalog) => tell(`${text}\n\n${accessBlock(catalog as CatalogView)}`),
+      () => tell(text),
+    );
   pi.on("session_start", (_event, ctx) => {
     report(false);
     for (const key of Object.keys(pending)) void watch(key);
     // The owner's one-shot prompt starts a fresh session once; a restart resumes without replaying it.
-    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) tell(readFileSync(PROMPT, "utf8"));
+    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) withAccess(readFileSync(PROMPT, "utf8"));
     // After a restart that changed ext:/mcp: grants, tell the agent once what loaded, what did not and what is gone.
     else if (existsSync(CHANGE)) {
       const change = JSON.parse(readFileSync(CHANGE, "utf8")) as GrantChange;
       if (change.id > (existsSync(REPORTED) ? Number(readFileSync(REPORTED, "utf8")) : 0)) {
         mkdirSync("/work/.speaker", { recursive: true });
         writeFileSync(REPORTED, String(change.id));
-        tell(changeMessage(change, pi.getActiveTools()));
+        withAccess(changeMessage(change, pi.getActiveTools()));
       }
     }
   });
-
-  // The guidance lives in the tool, so fetch what this agent may ask for now. A failure is shown to the model, not hidden.
-  let catalogText: string;
-  let catalogFailed = false;
-  try {
-    catalogText = ((await call(speaker, "GET", "catalog")) as CatalogView).text ?? "";
-    if (!catalogText) throw new Error("speaker's catalog has no text");
-  } catch (error) {
-    catalogFailed = true;
-    catalogText = `ERROR: could not read the list of what you can ask for from speaker (${(error as Error).message}). Tell the owner; do not guess item names.`;
-  }
 
   pi.registerTool(
     defineTool({
       name: "request_capability",
       label: "Request capability",
-      description: toolDescription(catalogText),
+      description: toolDescription,
       parameters: Type.Object({
-        want: Type.Array(Type.String(), { description: "Items to ask for, written exactly as in this tool's description." }),
+        want: Type.Array(Type.String(), { description: "Items to ask for, written as in the list this tool returns when want is empty ([])." }),
         reason: Type.String({ description: "One sentence on what this unblocks." }),
         duration: Type.Union(["30m", "1h", "2h", "1d", "30d"].map((v) => Type.Literal(v))),
       }),
       async execute(_id, params, signal) {
-        if (catalogFailed) throw new Error(catalogText);
         const done = (text: string, details: object = {}) => ({ content: [{ type: "text" as const, text }], details });
+        const catalog = async () => (await call(speaker, "GET", "catalog", undefined, signal)) as CatalogView;
+        if (!params.want.length) {
+          const view = await catalog();
+          return done(`${accessBlock(view)}\n\nYou can ask for:\n${askList(view)}`);
+        }
         const key = pendingKey(params.want);
         if (pending[key]) return done(alreadyPendingText(pending[key].id), pending[key]);
         let decision: Decision & { id?: number | string };
         try {
           decision = (await call(speaker, "POST", "requests", params, signal, FILE_WAIT_S)) as typeof decision;
         } catch (error) {
-          if (error instanceof SpeakerError && error.status === 400) return done(`Not requested: ${error.body.message ?? error.message}`);
+          if (error instanceof SpeakerError && error.status === 400)
+            return done(`Not requested: ${error.body.message ?? error.message}\n\nYou can ask for:\n${askList(await catalog())}`);
           throw error;
         }
         if (decision.status === "pending") {
