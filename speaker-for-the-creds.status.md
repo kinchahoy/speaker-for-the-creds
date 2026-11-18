@@ -3,7 +3,7 @@ project: speaker-for-the-creds
 topic: Agents & security
 state: paused
 priority: P1
-updated: 2026-11-18T14:55
+updated: 2026-11-18T16:40
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -12,18 +12,35 @@ tags: [workshop, status]
 
 Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
+## Real-time guidance (to be questioned)
+
+- 2026-11-18: "I like the purity of I just type in the creds and they die after X time (speaker recycles box) but in the future giving speaker some creds to automate this sounds helpful."
+
 ## Ideas
 
 - Secret-URL credentials in the encrypted store: some upstreams use the URL itself as the credential (ha-mcp's in-process server at `.../api/webhook/<id>` or `:9584/private_<random>`), so today that secret sits in plain service config as `baseUrl`; let a service's `baseUrl` (or a path segment) come from an encrypted secret instead: serves the star because the Home Assistant path the to-do agent depends on would keep its credential under the same unlock-and-log rules as every other key · cost S · 2026-11-18
+- Logged-in browser held by speaker: agent-browser runs outside any agent's VM, the owner types the login into the approval card (in-memory profile, killed on expiry, revoke or lock), agents get page outlines, clicks and screenshots through speaker as an MCP service with eval, state, upload and download denied; later speaker keeps the password in its store and logs in again itself. Where it runs is open: B, a child process of speaker as a separate user with Chromium's sandbox, or D, a separate bottle VM (stronger isolation and a real allowlist, but bottle would hold a secret): serves the star because the Home Assistant frontend keeps its token in the browser, so this is the way an agent can see HA dashboards without the token · cost L · 2026-11-18
 
 ## Next steps
 
 - [x] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
 - [x] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
 - [x] Give the go-ahead to commit and deploy the working tree (deployed speaker and bottle run `06525ba`) `size:S` `needs:me`
-- [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle `size:M` `needs:me`
+- [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle; also that the build passes its tools check and that `agent-browser open example.com` (granted) plus `screenshot` work in the guest `size:M` `needs:me`
 - [ ] Decide the wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command` `size:M` `needs:me`
 - [ ] Decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button) `size:M` `needs:me`
+
+## 2026-11-18 16:40 · paused
+
+The guest's tools now come from one file, `bottle/guest/locally-available-tools.md`: the Dockerfile installs each line in its source's layer (a first build stage splits it per source, so cache layers hold), ships the file to `/opt` for Pi, and fails the build when a named command is missing. `guest/mise.toml`, `guest/python/requirements.in` and `CLI_TOOLS` in `bottle/src/pi.ts` are gone; Pi's system note points to the file. agent-browser joined Playwright, on Playwright's Chromium, set up by `/etc/agent-browser.json`. Checked: the list split (lists stage built alone), `mise run check`, bottle tests 7/7. Not checked: a full image build and agent-browser in a real VM (on the rebuild task). Restore tag `pre-guest-tools-2026-11-18`.
+
+**Next**
+- See Next steps above.
+
+**Open**
+- 2026-11-18: Not verified until the rebuild: that Chromium starts as the guest user with `--no-sandbox`, that agent-browser accepts the full system bundle as `caCert`, and that the Debian `imagemagick` provides `magick`.
+- 2026-11-18: The Pi system note lost its separate Python, JavaScript and install lines; they now live in the tools file, which Pi must read. Watch whether Pi still reaches for uv without being told every turn.
+- Goal check: proposed addition to the North star, for the owner to rewrite: "Agents can see and act in logged-in web apps (Home Assistant first) through a browser speaker holds; the owner types the login and it dies with the session." (what changed: the 2026-11-18 guidance line about typing the login and letting it expire; question: is the logged-in browser part of the to-do agent's path, or a side track?)
 
 ## 2026-11-18 14:55 · paused
 
