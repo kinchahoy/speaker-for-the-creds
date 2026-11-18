@@ -39,7 +39,7 @@ The guest's tools now come from one file, `bottle/guest/locally-available-tools.
 
 **Open**
 - 2026-11-18: Not verified until the rebuild: that Chromium starts as the guest user with `--no-sandbox`, that agent-browser accepts the full system bundle as `caCert`, and that the Debian `imagemagick` provides `magick`.
-- 2026-11-18: The Pi system note lost its separate Python, JavaScript and install lines; they now live in the tools file, which Pi must read. Watch whether Pi still reaches for uv without being told every turn.
+- 2026-11-18: Per-call text from bottle is now one system line plus a short `request_capability` description (about 430 characters, was about 4,700); the briefing goes once as the first message and sits at `/etc/bottle/briefing.md`. Not run in a real bottle yet: watch that an attended launch without a prompt gets the briefing with the owner's first message, that Pi re-reads the file after compaction, and that it still uses uv and asks for access in one call. This needs a real Pi run (model calls), not an image rebuild.
 - Goal check: proposed addition to the North star, for the owner to rewrite: "Agents can see and act in logged-in web apps (Home Assistant first) through a browser speaker holds; the owner types the login and it dies with the session." (what changed: the 2026-11-18 guidance line about typing the login and letting it expire; question: is the logged-in browser part of the to-do agent's path, or a side track?)
 
 ## 2026-11-18 14:55 · paused
