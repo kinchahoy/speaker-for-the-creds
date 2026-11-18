@@ -94,8 +94,9 @@ export const loadCatalog = (config: Config): Catalog => {
 };
 
 const SESSION = "/work/.pi-session/agent.jsonl";
-// The last four are pi-subagents', always on in the image.
-const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability,subagents_enable,subagent,bg_wait,subagent_supervisor";
+// The last two are pi-subagents', always on in the image. Its bg_wait and subagent_supervisor stay off: about 1,600
+// characters of tool declarations on every model call, for waiting on background runs and children asking the parent.
+const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability,subagents_enable,subagent";
 
 /** Hosted providers listed in models.json work once the agent holds their speaker service (`<service>.full`). */
 export const availableModels = (config: Config) => [
