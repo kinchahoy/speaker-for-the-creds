@@ -108,7 +108,17 @@ export const startGuestListener = (config: Config, agents: Agents) => {
     "/guest/status",
     validator("json", (body) =>
       z
-        .object({ busy: z.boolean(), summary: z.string().max(400).optional(), title: z.string().trim().min(1).max(60).refine((t) => !/\p{Cc}/u.test(t), "title has control characters").optional() })
+        .object({
+          busy: z.boolean(),
+          summary: z.string().max(400).optional(),
+          title: z
+            .string()
+            .trim()
+            .min(1)
+            .max(60)
+            .refine((t) => !/\p{Cc}/u.test(t), "title has control characters")
+            .optional(),
+        })
         .strict()
         .parse(body),
     ),

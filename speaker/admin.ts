@@ -374,7 +374,9 @@ export function adminApp(core: Core) {
     const { vault } = core.unlocked()
     const value = input.value || vault.secrets[input.name]
     if (!value) throw new HTTPException(400, { message: 'A new secret needs a value' })
-    const setup = secretSetupSchema.safeParse(input.release ? { release: true } : { hosts: input.hosts, env: input.env })
+    const setup = secretSetupSchema.safeParse(
+      input.release ? { release: true } : { hosts: input.hosts, env: input.env },
+    )
     if (!setup.success) return back('secretHosts')
     // Inserted to released needs the value typed again, so one click never hands over a token speaker only inserts.
     const before = core.ownerConfig.secrets[input.name]
