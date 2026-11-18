@@ -24,6 +24,13 @@ const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env
 const PROMPT = "/etc/bottle/prompt.md";
 /** Rules, folders, tools and grants: sent once as the session's first message (Pi's system prompt holds one line). */
 const BRIEFING = "/etc/bottle/briefing.md";
+const SHORT_DESCRIPTIONS = {
+  read: "Read a file or image; offset/limit for long files.",
+  bash: "Run a shell command.",
+  edit: "Replace exact, unique text in one file.",
+  write: "Create or overwrite a file.",
+  subagent: "Delegate work to child agents (see your briefing).",
+};
 /** Requests filed and not yet delivered, kept so a Pi restart re-arms them. */
 const PENDING = "/work/.speaker/pending.json";
 const FILE_WAIT_S = 3;
@@ -203,6 +210,9 @@ export default async function (pi: ExtensionAPI) {
       name: "request_capability",
       label: "Request capability",
       description: toolDescription,
+      // Every declared tool's description goes with every model call, so the declared ones are one line each; the
+      // details are in the briefing ("Your tools"), sent once.
+      prepareLoadout: () => ({ descriptions: SHORT_DESCRIPTIONS }),
       parameters: Type.Object({
         want: Type.Array(Type.String(), { description: "Items to ask for, written as in the list this tool returns when want is empty ([])." }),
         reason: Type.String({ description: "One sentence on what this unblocks." }),

@@ -94,9 +94,10 @@ export const loadCatalog = (config: Config): Catalog => {
 };
 
 const SESSION = "/work/.pi-session/agent.jsonl";
-// The last two are pi-subagents', always on in the image. Its bg_wait and subagent_supervisor stay off: about 1,600
-// characters of tool declarations on every model call, for waiting on background runs and children asking the parent.
-const BUILT_IN_TOOLS = "read,bash,edit,write,grep,find,ls,request_capability,subagents_enable,subagent";
+// Every declared tool costs its declaration on every model call. grep, find and ls stay off (bash with rg and fdfind does
+// the same); so do pi-subagents' bg_wait and subagent_supervisor. The last two are pi-subagents', always on in the image.
+// request-capability.ts shortens the declared descriptions; the details are in the briefing's "Your tools".
+const BUILT_IN_TOOLS = "read,bash,edit,write,request_capability,subagents_enable,subagent";
 
 /** Hosted providers listed in models.json work once the agent holds their speaker service (`<service>.full`). */
 export const availableModels = (config: Config) => [
@@ -192,6 +193,14 @@ export const briefing = (
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`; with `want: []` it lists what you hold and what you can ask for. Call a service you hold with `speaker [METHOD] <service>/<path> [json-body]`; your first message lists what you hold.",
     "- Subagents (`subagent`) run in this VM with your access and spend your model request budget. Limits: at most 2 children per call, children cannot delegate further, and every child uses your model. Delegate only independent work large enough to be worth a fresh context, and write the final answer yourself.",
     "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it.",
+    "",
+    "## Your tools",
+    "",
+    "- `read`: a file or image. Long files are cut at 2000 lines or 50 KB; continue with `offset`/`limit`.",
+    "- `edit`: one file per call. Each `oldText` must match exactly once and not overlap another; merge nearby changes into one edit.",
+    "- `write`: new files and full rewrites only.",
+    "- `bash`: everything else. Search contents with `rg`, find files with `fdfind`.",
+    '- `subagent`: one child `{agent, task}`; parallel children `{workflow: "parallel", args: {tasks: [{agent, task}, ...]}}`. An unknown agent or model returns the valid choices. A child that finishes wakes you: do not poll or sleep. One writer per folder.',
     "",
     "## Asking for access (`request_capability`)",
     "",
