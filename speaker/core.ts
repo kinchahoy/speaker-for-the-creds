@@ -152,7 +152,10 @@ const selfReported = (field: 'label' | 'agent' | 'title') =>
     .max(identityFields[field].max)
     .refine((text) => !/\p{Cc}/u.test(text), 'Control characters are not allowed')
 export const titleSchema = selfReported('title')
-export const identitySchema = z.object({ label: selfReported('label'), agent: selfReported('agent').default('unknown') })
+export const identitySchema = z.object({
+  label: selfReported('label'),
+  agent: selfReported('agent').default('unknown'),
+})
 // A sandbox host's agent also names the extensions its template gave at launch. The host enforces them without speaker
 // (the owner started the template), so speaker only records and shows them; they are not grants and cannot be revoked here.
 export const hostAgentSchema = identitySchema.extend({
@@ -196,7 +199,10 @@ export const ownerSecretSchema = z.object({
   value: z.string().refine((value) => !/[\r\n]/.test(value), 'A secret value must be a single line'),
   // Released: the agent reads the value itself (no hosts, no variable). Otherwise speaker inserts it for the hosts.
   release: z.literal('on').optional(),
-  hosts: z.string().default('').transform((value) => value.split(/[\s,]+/).filter(Boolean)),
+  hosts: z
+    .string()
+    .default('')
+    .transform((value) => value.split(/[\s,]+/).filter(Boolean)),
   // The environment variable the agent sees (holding a placeholder, never the value).
   env: z.string().default(''),
 })
@@ -892,7 +898,9 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     if (!placeholders.has(key)) placeholders.set(key, `speaker-placeholder-${randomBytes(24).toString('hex')}`)
     return placeholders.get(key) as string
   }
-  const secretGrants = (agentId: string): (ProxySecret & { name: string; env: string; release: boolean; until: string | null })[] =>
+  const secretGrants = (
+    agentId: string,
+  ): (ProxySecret & { name: string; env: string; release: boolean; until: string | null })[] =>
     engine
       .grants(agentId)
       .filter((grant) => grant.kind === 'secret')
@@ -1041,7 +1049,8 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const checkPassword = (password: string) => openStore(storeFile, password)
   // config.json may be edited by hand (the data folder can be a plain folder): it is read again when it changes. A
   // file that does not parse is refused and logged, and the running setup stays.
-  watchFile(configFile, { interval: 2_000 }, async () => {
+  watchFile(configFile, { interval: 2_000 }, async (now) => {
+    if (!now.mtimeMs) return // the file is gone (or its folder): nothing to read, keep the running setup
     try {
       const next = configSchema.parse(await json(configFile))
       if (JSON.stringify(next) === JSON.stringify(ownerConfig)) return // speaker's own save
