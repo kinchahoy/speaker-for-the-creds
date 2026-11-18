@@ -22,7 +22,7 @@ const McpEntry = z
   })
   .strict();
 
-const RESERVED_FILES = new Set(["models.json", "settings.json", "mcp.json", "APPEND_SYSTEM.md", "proper-base.json"]);
+const RESERVED_FILES = new Set(["models.json", "settings.json", "mcp.json", "SYSTEM.md", "proper-base.json"]);
 
 export const Catalog = z
   .object({
@@ -147,9 +147,10 @@ const modelsJson = (config: Config) => ({
   },
 });
 
-/** The only text Pi adds to its system prompt, so to every model call. Fixed, so a restart keeps the prompt cache. */
-export const SYSTEM_LINE =
-  "You run in a disposable bottle VM. Your briefing (rules, folders, tools, how to get access) is the first message of this session; if it is no longer in view, read `/etc/bottle/briefing.md`.";
+/** Pi's whole system prompt (SYSTEM.md replaces Pi's default: its own docs, and a tool list the tool declarations repeat),
+ * so it goes with every model call. Fixed, so a restart keeps the prompt cache. */
+export const SYSTEM_PROMPT =
+  "You are a coding agent in a disposable VM. Your briefing is the first message; reread /etc/bottle/briefing.md if it is out of view.";
 
 /** Everything else the agent needs, sent once as the session's first message and kept at /etc/bottle/briefing.md. */
 export const briefing = (
@@ -268,7 +269,7 @@ export const writeGuestConfig = (
   });
   // proper-base is always on for session titles; its proactive subagent delegation is not wanted in a bottle.
   writeJson("proper-base.json", { proactiveDelegation: false });
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, SYSTEM_LINE);
+  writeFileSync(`${directory}/SYSTEM.md`, SYSTEM_PROMPT);
   writeFileSync(`${directory}/briefing.md`, briefing(agent, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
@@ -302,8 +303,6 @@ export const writeGuestConfig = (
     "--no-themes",
     "--no-context-files",
     "--no-approve",
-    "--append-system-prompt",
-    "/etc/bottle/APPEND_SYSTEM.md",
     "-e",
     "/etc/bottle/extensions/request-capability.ts",
     // `--no-extensions` also disables Pi's built-in MCP, so an MCP grant loads it explicitly.

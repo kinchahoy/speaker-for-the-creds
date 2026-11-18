@@ -171,6 +171,12 @@ export default async function (pi: ExtensionAPI) {
       (catalog) => `${text}\n\n${accessBlock(catalog as CatalogView)}`,
       () => text,
     );
+  // Skills are off in a bottle (--no-skills), but extension packages still list theirs, and proper-base adds a block on
+  // loading them: drop both, so the system prompt stays SYSTEM.md. Runs after the always-on extensions (loaded first).
+  pi.on("before_agent_start", (event) => {
+    event.systemPromptOptions.skills = [];
+    delete event.systemPromptOptions.sections.proper_base_skills;
+  });
   pi.on("session_start", (_event, ctx) => {
     report(false);
     for (const key of Object.keys(pending)) void watch(key);

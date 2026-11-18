@@ -246,7 +246,7 @@ A hosted provider is a speaker service (starters `openrouter`, `anthropic`, `ope
 1. Pin the npm package in `guest/pi-package.json`. Any dependency declaring a `pi` extension is linked automatically into `/opt/pi-plugins/<name>` (the part after the scope), except the always-on ones (`ALWAYS_ON` in the Dockerfile), which go to `/opt/pi-extensions`.
 2. `bottle build` rebuilds the image and copies the manifest to `<stateRoot>/guest-plugins.txt`.
 3. Add an entry to the live `<configRoot>/catalog.json` (`bottle/catalog.json` has the shipped ones): `label`, `guestPath`, `description`, `tools` (exactly the names the package registers; unlisted tools stay hidden), `sites` (hosts it contacts; added as `site:` grants that end with the extension's), optional `note` and `files`.
-4. `files`: `{ "<name>.json": {…} }` writes `~/.pi/agent/<name>.json` in the guest for agents that load it. No directory part; cannot replace `models.json`, `settings.json`, `mcp.json` or `APPEND_SYSTEM.md`. `pi-web-access` is the example.
+4. `files`: `{ "<name>.json": {…} }` writes `~/.pi/agent/<name>.json` in the guest for agents that load it. No directory part; cannot replace `models.json`, `settings.json`, `mcp.json`, `SYSTEM.md` or `proper-base.json`. `pi-web-access` is the example.
 5. Reload: `pkill -HUP -f "bottle/src/server.ts"`. The catalog is re-validated, swapped in and re-sent to speaker; a bad one is refused and the old stays. Running agents are not restarted for new entries; a grant for a removed one is skipped and that Pi restarts at idle without it.
 {.ai}
 
