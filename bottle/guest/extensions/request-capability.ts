@@ -22,6 +22,8 @@ const control = { url: process.env.BOTTLE_CONTROL!, token: process.env.BOTTLE_TO
 // which the host provisions, to every request body).
 const speaker = { url: `${process.env.SPEAKER_URL}/_speaker`, token: process.env.SPEAKER_TOKEN! };
 const PROMPT = "/etc/bottle/prompt.md";
+/** Rules, folders, tools and grants: sent once as the session's first message (Pi's system prompt holds one line). */
+const BRIEFING = "/etc/bottle/briefing.md";
 /** Requests filed and not yet delivered, kept so a Pi restart re-arms them. */
 const PENDING = "/work/.speaker/pending.json";
 const FILE_WAIT_S = 3;
@@ -163,24 +165,29 @@ export default async function (pi: ExtensionAPI) {
       }
     }
   };
-  // The access block rides on the launch prompt and on a restart's change message, so the model reads it once per run, not in every call.
+  // The access block rides on the briefing and on a restart's change message, so the model reads it once per run, not in every call.
   const withAccess = (text: string) =>
     call(speaker, "GET", "catalog").then(
-      (catalog) => tell(`${text}\n\n${accessBlock(catalog as CatalogView)}`),
-      () => tell(text),
+      (catalog) => `${text}\n\n${accessBlock(catalog as CatalogView)}`,
+      () => text,
     );
   pi.on("session_start", (_event, ctx) => {
     report(false);
     for (const key of Object.keys(pending)) void watch(key);
-    // The owner's one-shot prompt starts a fresh session once; a restart resumes without replaying it.
-    if (existsSync(PROMPT) && !ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) withAccess(readFileSync(PROMPT, "utf8"));
+    // A fresh session gets the briefing once: with the owner's one-shot prompt it starts the run; without one it waits
+    // for the owner's first message. A restart resumes without replaying either.
+    if (!ctx.sessionManager.getBranch().some((entry) => entry.type === "message")) {
+      const brief = readFileSync(BRIEFING, "utf8");
+      if (existsSync(PROMPT)) void withAccess(`${brief}\n\n## Owner prompt\n\n${readFileSync(PROMPT, "utf8")}`).then(tell);
+      else void withAccess(brief).then((content) => pi.sendMessage({ customType: "bottle-briefing", content, display: false }, { deliverAs: "nextTurn" }));
+    }
     // After a restart that changed ext:/mcp: grants, tell the agent once what loaded, what did not and what is gone.
     else if (existsSync(CHANGE)) {
       const change = JSON.parse(readFileSync(CHANGE, "utf8")) as GrantChange;
       if (change.id > (existsSync(REPORTED) ? Number(readFileSync(REPORTED, "utf8")) : 0)) {
         mkdirSync("/work/.speaker", { recursive: true });
         writeFileSync(REPORTED, String(change.id));
-        withAccess(changeMessage(change, pi.getActiveTools()));
+        void withAccess(changeMessage(change, pi.getActiveTools())).then(tell);
       }
     }
   });

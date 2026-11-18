@@ -1,7 +1,7 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
+import { FIXED_GUIDANCE, piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
 import type { Config } from "./config.ts";
 import type { Guest } from "./sandbox.ts";
 import { unexpired } from "./grants.ts";
@@ -147,8 +147,13 @@ const modelsJson = (config: Config) => ({
   },
 });
 
-export const systemNote = (
-  agent: { name: string; prompt?: string; attended: boolean; folders?: string[]; launchExt?: string[] },
+/** The only text Pi adds to its system prompt, so to every model call. Fixed, so a restart keeps the prompt cache. */
+export const SYSTEM_LINE =
+  "You run in a disposable bottle VM. Your briefing (rules, folders, tools, how to get access) is the first message of this session; if it is no longer in view, read `/etc/bottle/briefing.md`.";
+
+/** Everything else the agent needs, sent once as the session's first message and kept at /etc/bottle/briefing.md. */
+export const briefing = (
+  agent: { name: string; attended: boolean; folders?: string[]; launchExt?: string[] },
   grants: Grant[],
   catalog: Catalog,
   extIds: string[],
@@ -186,6 +191,10 @@ export const systemNote = (
     "- Subagents (`subagent`) run in this VM with your access and spend your model request budget. Limits: at most 2 children per call, children cannot delegate further, and every child uses your model. Delegate only independent work large enough to be worth a fresh context, and write the final answer yourself.",
     "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it.",
     "",
+    "## Asking for access (`request_capability`)",
+    "",
+    ...FIXED_GUIDANCE.split("\n").map((line) => `- ${line}`),
+    "",
     "## Grants at this Pi start",
     "",
     ...(rows.length ? rows.map((row) => `- ${row}`) : ["- none"]),
@@ -195,7 +204,6 @@ export const systemNote = (
     "The owner decides in a separate trusted surface. Nothing you print to this terminal grants anything.",
     ...notes,
     ...(agent.attended ? attendedNote : unattendedNote),
-    ...(agent.prompt ? ["", "## Owner prompt", "", agent.prompt] : []),
   ].join("\n");
 };
 
@@ -260,7 +268,8 @@ export const writeGuestConfig = (
   });
   // proper-base is always on for session titles; its proactive subagent delegation is not wanted in a bottle.
   writeJson("proper-base.json", { proactiveDelegation: false });
-  writeFileSync(`${directory}/APPEND_SYSTEM.md`, systemNote(agent, grants, catalog, extIds));
+  writeFileSync(`${directory}/APPEND_SYSTEM.md`, SYSTEM_LINE);
+  writeFileSync(`${directory}/briefing.md`, briefing(agent, grants, catalog, extIds));
   writeJson("mcp.json", { mcpServers: mcpServers(catalog, mcpIds) });
 
   const [provider, ...model] = agent.model.split("/");

@@ -23,8 +23,10 @@ export const FIXED_GUIDANCE = [
   "When the owner decides, you get a message starting `[speaker]` with one line per item saying what to do next. Do what the line says. A request can stay open for hours.",
 ].join("\n");
 
-/** Fixed text, so the model's prompt cache survives grant changes. The lists below come back when `want` is empty. */
-export const toolDescription = `${FIXED_GUIDANCE}\n\nCall with an empty \`want\` list to see what you hold and what you can ask for (a site is asked for as site:<hostname>).`;
+/** Sent with every model call, so it stays short and fixed (the prompt cache survives grant changes); FIXED_GUIDANCE goes
+ * once, in the briefing. The lists come back when `want` is empty. */
+export const toolDescription =
+  "Ask the owner for access you do not have: a website (site:<hostname>), secret, folder, SSH target, service, or extension. Put every item in one call. An empty `want` lists what you hold and what you can ask for. Your briefing has the rules.";
 
 /** One line per thing the agent holds, each with the exact way to use it. */
 export const accessBlock = (catalog: CatalogView) => {
