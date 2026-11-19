@@ -1,0 +1,21 @@
+# Typecheck, lint, format check and tests for speaker and bottle (`mise run ci`, about a minute).
+# Manual only for now (Actions tab → CI → Run workflow). To run it on every push, add:
+#   push: { branches: [main] }
+#   pull_request:
+name: CI
+on:
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # node and pnpm at the versions mise.toml names.
+      - uses: jdx/mise-action@v2
+      # The SSH and folder tests start a throwaway sshd; the browser test needs Chromium (from Playwright's cache).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends openssh-server
+      - run: mise run install
+      - run: pnpm dlx playwright install --with-deps chromium
+      - run: mise run ci

@@ -1,254 +1,167 @@
-<!-- author: ai -->
-
 # speaker
 
-<sub>AI-written</sub>
+_AI-drafted_
 
-Reference for running and configuring speaker. For what speaker is for and how it fits with bottle, see the [top-level README](../README.md). For the design and its rationale, see [DESIGN.md](DESIGN.md).
-{.ai}
-
-<!-- author: ai -->
+Reference for running and configuring speaker. What it is for, a two-minute try-out and where every setting lives are in the [top-level README](../README.md). The security model and the reasons behind it close this file.
 
 ## Running locally
 
-<sub>AI-written</sub>
+_AI-drafted_
 
 ```sh
 mise trust && mise install
 mise run init speaker
 ```
 
-Run this on the machine that hosts speaker. It asks its questions, creates the encrypted store, writes `speaker/.env`, and offers to start speaker. If it starts speaker, it signs in once with the password you typed, so speaker is unlocked (the password stays in memory only). Speaker keeps its data in `~/.local/share/speaker` by default. The web, secrets-proxy, and SSH ports default to 3000, 3128, and 2222, and each must be free. Agents and VMs need an address for this machine. They cannot use `127.0.0.1`, because inside a VM that is the VM itself, so `init` offers the machine's LAN address. Every question has a flag, so it also runs unattended. `init` needs a real terminal for its prompts; scripts use `--yes` and flags, and `mise run init speaker -- --help` lists them:
-{.ai}
+Run this on the machine that hosts speaker. It asks its questions, writes `speaker/.env`, creates the encrypted store and offers to start speaker, signing in once with the password typed (kept in memory only). Data goes to `~/.local/share/speaker` by default. The web, secrets-proxy and SSH ports default to 3000, 3128 and 2222 and must be free. Agents in VMs cannot use `127.0.0.1` (inside a VM that is the VM itself), so `init` offers the machine's LAN address. For scripts:
 
 ```sh
 printf '%s\n' "$PASSWORD" | mise run init speaker --yes --password-stdin --data-dir DIR --address IP
 ```
 
-The other flags are `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, and `--force`. On a separate sandbox machine, run `mise run init bottle` afterward.
-{.ai}
+Other flags: `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-proxy`, `--start`, `--no-start`, `--env-path`, `--force`. Start speaker later with `mise run speaker`, and sign in at `PUBLIC_URL/admin` after every restart.
 
-Open `PUBLIC_URL/admin` and sign in with the password you chose. You sign in again after every restart, which unlocks the stored keys (see Keys and sign-in). Start speaker later with `mise run speaker`.
-{.ai}
+## Docker deployment
 
-<!-- author: ai -->
+_AI-drafted_
+
+`speaker/compose.yaml` builds the image from the repository root, keeps state in a named volume at `/data`, and runs read-only with all capabilities dropped except `SETUID` and `SETGID` (the start script uses them to run the browser broker and speaker as two users) and the `chrome-seccomp.json` profile. `mise run init speaker` is for running without Docker; in Docker the owner sets the password on the first visit to `/admin`.
+
+```sh
+cd speaker
+cp .env.example .env && chmod 600 .env   # set PUBLIC_URL first
+docker compose up --build -d              # or: mise run speaker:up
+docker compose logs --tail=100 speaker
+```
+
+- `PUBLIC_URL` is the exact URL opened in the browser, with scheme and any nonstandard port: `http://localhost:3000` locally, `https://speaker.example.com` behind a proxy. After changing `.env`, run `docker compose up -d --force-recreate`; a plain restart does not reload it.
+- Compose binds `PORT` and `PROXY_PORT` to `127.0.0.1` and publishes `SSH_PORT` on every address. A bottle in a container on speaker's Docker network reaches them by service name. **When bottle runs on another machine**, publish `PROXY_PORT` on an address it can reach too (edit its `ports` line, as `compose.yaml`'s header shows), and keep both off the public internet. The SSH port never goes through a web reverse proxy.
+- The image installs the newest release of each dependency; `docker compose build --build-arg LOCKED=1` uses `pnpm-lock.yaml`. Chromium adds about 740 MB.
+- Bring a reverse proxy for HTTPS. Raise its timeout above 120 s, because speaker holds waiting calls that long. Set `TRUSTED_PROXY` to its IP or Docker service name (speaker looks the name up again every 30 seconds); speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from everyone else. External login middleware, if any, goes on `/admin` and its child paths only, so agents can still use their tokens.
+- Run one replica. Keep the data volume outside every agent's file access. `audit.jsonl` is append-only; rotate or delete it by hand.
 
 ## Services
 
-<sub>AI-written</sub>
+_AI-drafted_
 
-A request to speaker swaps the service name for the service's configured API base:
-{.ai}
+A request to speaker swaps the service name for the service's API base:
 
 ```text
 /obsidian/vault/note.md  → https://notes.example.com/api/vault/note.md
-/karakeep/bookmarks     → https://bookmarks.example.com/api/v1/bookmarks
 ```
 
-- Edit a service in `/admin` and enter its key. Speaker never shows a saved key again. For Basic auth, enter `username:password`.
-- Each service has a read rule and a write rule. Read is `ask` (the default), `open`, or `never`. Write is `ask` or `never`. Speaker answers `never` with `denied` at once. `open` lets any enrolled agent read without a grant or a card. Anyone who can reach speaker can enroll, so use `open` only for harmless state. Speaker never lists open services to agents.
-- `<service>.read` covers GET, HEAD, and OPTIONS, plus POST to the read paths listed on the service (for example, a search endpoint). `<service>.full` covers everything, including read.
-- `GET /_speaker/help/<service>` gives an agent the service's notes and its own current state.
-- A scope is a service named `parent:name` (for example `obsidian:tasks`) that uses the key of its parent, which must hold its own key. Its address must be on the same site and under the parent's address, and it has its own read and write rules (add one with the plus icon on the parent's row in Setup). So one key, entered once, serves several narrow scopes; the parent can be set to never for both read and write so that it only holds the key. A base address can be a single endpoint: a call to `/<service>` reaches it exactly as written, and `/parent:name/...` reaches a scope. A service stored by an older version with a differently named parent keeps working.
-- Auth type `path` stores a secret URL segment, such as a webhook ID, and inserts it after the base URL (`/hook/x` becomes `<baseUrl>/<secret>/x`). Logs record only the agent-facing path.
-- Tick "MCP server" for a streamable-HTTP MCP service. Speaker classifies each POST. Protocol housekeeping, tool listing, and tools annotated `readOnlyHint: true` are reads. Any other tool call needs full, and approval cards mark destructive tools. "Refresh tools" lists the tools and shows how they classify.
-- The `demo` service allows open reads and requires a grant for writes. `/demo/check` answers `"credential":"accepted"` without exposing the fake key.
+- Enter a service's key in `/admin`; it is never shown again. Auth types: Bearer, Basic (`username:password`), a custom header, `path` (a secret URL segment such as a webhook ID, inserted after the base URL), or none (a keyless API or MCP server that speaker only gates). Only the upstream ever receives the key.
+- Read rule: `ask` (default), `open` or `never`. Write rule: `ask` or `never`. `never` answers `denied` at once. `open` lets any enrolled agent read with no card; anyone who can reach speaker can enrol, so use it only for harmless state. Open services are never listed to agents.
+- `<service>.read` covers GET, HEAD, OPTIONS and POST to the read paths listed on the service (such as a search endpoint). `<service>.full` covers everything.
+- A scope is a service named `parent:name` (such as `obsidian:tasks`) that uses its parent's key, with its own address (same site, under the parent's) and its own rules. One key entered once then serves several narrow scopes; set the parent to `never` for both if it should only hold the key. Add one with the plus icon on the parent's row.
+- "MCP server" marks a streamable-HTTP MCP service. Protocol housekeeping, tool listing and tools annotated `readOnlyHint: true` are reads; any other tool call needs `.full`, and cards mark destructive tools. "Refresh tools" shows how each tool classifies.
+- `demo` has open reads and asked-for writes against a fake upstream; `/demo/check` answers `"credential":"accepted"`.
+- `GET /_speaker/help/<service>` gives an agent the service's notes and its own state. A call without access answers `approval_required` and files a request for that service's `.read` or `.full`; with `Speaker-Wait: <seconds>` (at most 120) the call waits for the owner and goes through once granted.
 
-A call without access answers `approval_required` with the request's ID, and files a request for exactly that service's `.read` or `.full`. With a `Speaker-Wait` header, the call waits for your decision and goes through once granted.
-{.ai}
+## Secrets
 
-<!-- author: ai -->
+_AI-drafted_
 
-## Who receives service credentials
+A secret in Setup has a name (letters, digits, `_`, `-`), a write-only value, the hosts it may reach (`*.domain` covers subdomains only) and the environment variable the agent sees. An agent granted `secret:<NAME>` gets a random per-agent placeholder from `GET /_speaker/catalog`, along with `HTTPS_PROXY`, the proxy certificate (`GET /_speaker/proxy/ca.pem`), `SSL_CERT_FILE` (or `GIT_SSL_CAINFO` for `git`) and the `gh auth setup-git` hint. It sets them on the one command that needs them.
 
-<sub>AI-written</sub>
+The proxy listens on `PROXY_PORT` and takes `CONNECT` with the agent's token as password (`http://agent:<token>@<speaker>:<PROXY_PORT>`). For an allowed host it terminates TLS with its own certificate authority (made at first need, kept in the encrypted store), swaps the placeholder for the real value in the `Authorization` header only (inside Basic credentials too, as `git` sends it) and forwards over TLS. Every other host gets `403`; it is not a general proxy. Grants are checked on every request, so revoke or expiry answers `403` at once, even in an open tunnel. The log records agent, host, method, path (no query) and status. All traffic to those hosts, large `git clone`s included, passes through speaker.
 
-| Service auth type | Stored by | Receives the real credential |
-| --- | --- | --- |
-| Bearer | Speaker, in the encrypted store | The configured upstream API, in `Authorization: Bearer …` |
-| Basic | Speaker, in the encrypted store, as `username:password` | The configured upstream API, encoded in `Authorization: Basic …` |
-| Custom header | Speaker, in the encrypted store; the header name is service configuration | The configured upstream API, in that header |
-| None | Nothing | Nothing: a keyless remote MCP server or API; speaker only gates and forwards |
-
-Speaker keeps these values encrypted on its data volume, decrypts them in memory after you sign in, and injects them only when it forwards a granted request. Agents receive a speaker token, never the upstream credential. The upstream API receives the real credential and the request data.
-{.ai}
-
-<!-- author: ai -->
-
-## Keys and sign-in
-
-<sub>AI-written</sub>
-
-Speaker keeps two files in `DATA_DIR`. `config.json` holds everything you set up except the values: services, groups, and each secret's name, allowed hosts and environment variable. It holds no key, so you can share it; another speaker that loads it answers `no_key` for each service until its owner adds the key, and offers a secret only once it has a value. Every value (service keys, secret values) and speaker's own SSH key and proxy certificate authority live in `store.json`. A random data key seals them (AES-256-GCM). A key derived from the owner password (scrypt) wraps the data key. Unwrapping the data key is the password check, so speaker stores no password hash. Clear values exist only in memory after sign-in.
-{.ai}
-
-- `mise run init speaker` sets the owner password. Without it, the first visit to `/admin` does. Sign-in uses a session cookie (HttpOnly, SameSite=Strict, Secure over HTTPS) and is rate limited: sign-in allows 5 failed attempts per 15 minutes. Plain HTTP from another machine works, but the sign-in page warns that the password crosses the network unencrypted.
-- In scripts, form posts to `/admin` (sign-in, approvals) need an `Origin` header matching the URL, such as `Origin: http://192.168.1.10:3000`. A successful sign-in answers `303` with the session cookie to send on later posts. Do not retry a failed sign-in blindly: after 5 failures speaker refuses for 15 minutes.
-- One lock rule: speaker serves agents, sandbox hosts, the secrets proxy and the proxy certificate only after you have set the owner password and signed in. Until then (first run, or after every restart) agent and sandbox-host calls answer `503` `locked` with a `next` and a `tell_user` line, and the proxy refuses. `/admin` shows only sign-in or the first-run password page. Signing in (the form or the owner API) unlocks.
-- Setup lists Secrets: a name, a value (write-only), the allowed hosts, and the environment variable the agent sees. Speaker inserts them through its HTTPS proxy (see Secrets proxy). A name may use letters, digits, `_` and `-`. Tick Released instead to hand the agent the value itself (no hosts): that cannot be taken back once read. Turning an inserted secret into a released one needs the value typed again.
-- Change the password in Setup. This re-wraps the data key. If you forget it, delete `store.json`: speaker resets, and you re-enter every key.
-
-<!-- author: ai -->
-
-## Secrets proxy
-
-<sub>AI-written</sub>
-
-Speaker's HTTPS proxy listens on `PROXY_PORT`, which is required. Publish the port next to `PORT`.
-{.ai}
-
-An agent holding `secret:<NAME>` sends HTTPS through the proxy with `CONNECT`. It authenticates with its speaker token as the proxy password: `http://agent:<token>@<speaker>:<PROXY_PORT>`. curl, `gh`, and `git` send it as Basic credentials.
-{.ai}
-
-For a host the secret's Setup entry allows, speaker terminates TLS with its own certificate authority. (`*.domain` covers subdomains only.) It replaces the agent's placeholder with the real value in the `Authorization` header only, including inside HTTP Basic credentials, which is how `git` sends it. Then it forwards the request to the real host over TLS.
-{.ai}
-
-Every other host gets `403` and a one-line message. This is not a general proxy. Speaker checks grants on every request, so a revoke or expiry answers `403` at once, even in an open tunnel.
-{.ai}
-
-- Speaker makes the certificate authority at first need, keeps it in the encrypted store, and serves it at `GET /_speaker/proxy/ca.pem`. It makes leaf certificates per host and caches them in memory. Agents trust the authority for the proxy only.
-- Each agent gets one random placeholder per secret, held in memory. For each secret grant, `GET /_speaker/catalog` shows the variable with its placeholder, `HTTPS_PROXY`, where to fetch the certificate, `SSL_CERT_FILE` for `gh` (`GIT_SSL_CAINFO` or `http.sslCAInfo` for `git`), the allowed hosts, and the `gh auth setup-git` hint.
-- Set those variables on the one command that needs them, not on the whole shell. The proxy refuses every other host.
-- The log records agent, host, method, path (no query), and status. It never records the token or bodies.
-- `site:` items stay sandbox-only. Direct agents can use `secret:` items.
-- A released secret skips the proxy: after approval the agent reads the value with `GET /_speaker/secrets/<NAME>` and a live grant (`403` otherwise). Each read is the audit event `secret_released` (agent and name, never the value) and counts as a use of the grant. The card marks it "agent receives the value". Revoking or expiry stops further reads; it cannot take back a value already read, and the value will be in the agent's context (its transcripts, the model provider's logs, anything it writes).
-
-<!-- author: ai -->
+**Released** secrets skip the proxy: after approval the agent reads the value with `GET /_speaker/secrets/<NAME>` (audit event `secret_released`), and the card says "agent receives the value". That cannot be taken back: the value lands in the agent's context, transcripts and model provider's logs. Turning an inserted secret into a released one needs the value typed again.
 
 ## Groups
 
-<sub>AI-written</sub>
+_AI-drafted_
 
-Define groups under `groups` in `DATA_DIR/config.json`:
-{.ai}
+A group (`/admin` Groups, stored under `groups` in `config.json`) is a named set of items with an optional one-line description; it may not contain other groups. An agent asks for the group and the owner sees its items on one card, each with its own checkbox. `GET /_speaker/catalog` offers a group only if the agent may ask for every item in it, so direct agents never see groups with `site:`, `mcp:` or `ext:` items. `speaker/config.example.json` has examples. Its `research` group is keyless Exa search through pi-web-access plus Wikipedia and arXiv; Parallel Search is left out because its hosted fetch reads any page without a `site:` grant, so an agent asks for `parallel-search.read` explicitly.
 
-```json
-{ "<name>": { "description": "<one line>", "items": ["<item>", "…"] } }
-```
+## SSH and folders
 
-The description is optional. A group may hold any items except other groups. [groups.example.json](groups.example.json) has examples. The `/admin` Groups page edits the file live. If you edit it by hand, restart speaker. (A speaker from before `config.json` moves its `services.json` and `groups.json` into it at start, and each secret's hosts and variable out of `store.json` at the first sign-in, keeping the old store as `store.json.bak`.)
-{.ai}
+_AI-drafted_
 
-A request names the group, and you approve it with the group's items. `GET /_speaker/catalog` offers an agent a group, and the agent may request it, only if the agent may request every item in it. So direct agents never see groups with `site:`, `mcp:`, or `ext:` items.
-{.ai}
+- **Targets** (Setup): alias, host, port, the account speaker uses there. Adding one pins its host key, refuses `root` unless confirmed, warns when `sudo -n true` works, and probes `sftp-server`. Add the line Setup shows to that account's `authorized_keys` first: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. `from=` makes the key useless elsewhere and `restrict` refuses forwarding; nothing else is installed on the target. Use a limited account. Speaker has one SSH key for all targets, in clear only inside `ssh-agent` after sign-in.
+- **Shares** (Setup): a name, a target and an absolute path; every share arrives over SSH. A folder on speaker's own machine is a share on a target for that machine (`127.0.0.1`, or the host's address from Docker) with `sshd` running; grant only `folder:` items there, since `ssh:` runs commands as that account.
+- **Asking.** Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Names are never listed to agents; an unknown one answers 400 `There is no folder named <share> that you can use.` and makes no card. After approval `GET /_speaker/catalog` gives complete command lines (`ssh … <target> '<command>'`, `sshfs`, `scp`, `sftp`, with the pinned host key, `IdentitiesOnly` and `BatchMode`). For `ssh:` grants, `scp`/`sftp` paths are `<target>/<absolute path>`.
+- **Jump server.** Speaker listens on `SSH_PORT` only while an SSH or folder grant is active, handing each connection to a stock non-root `sshd -i` with a new host key each start. Per agent it writes one memory-backed line, `restrict,from="<agent's address>",command="relay <agent>",expiry-time="<grant end>" <key>`, so the agent never gets a shell on speaker. `relay.ts` checks the grant and runs `ssh` to the target with the exact command, no local shell. Ending, revoking or restarting closes the session; `expiry-time` stops new logins even if speaker stalls. Active lists open sessions with **End**.
+- **Folder limits.** For `folder:` grants the relay reads each SFTP operation (`sftp`, `scp` and `sshfs` all use it): every path is resolved by the target and must stay inside the share, links are refused, read-only grants refuse writes, deletes, renames and permission changes, and the target's `sftp-server` also runs read-only (`-R`) in the share (`-d`). Commands, `rsync` and legacy `scp -O` are refused on folder grants. Limits: `ssh:` commands are not folder-limited, and a change by another process between check and operation could escape the share. Cards warn when a share is a home directory.
+- `sshfs` works in place but is slow for `grep -r`, `find` and `git status`: each operation is a round trip through speaker.
 
-## Inbox and Active
+## Browser sites
 
-<sub>AI-written</sub>
+_AI-drafted_
 
-- Each agent in `/admin` Active has a line of counts (requests, granted, denied, refused, blocked). Refused (rejected before reaching you, such as an unknown name) and blocked (a call refused for lack of a grant) turn red when non-zero; hover for the latest message. Counts reset when speaker restarts.
-- The Inbox and Active panels in `/admin` refresh every 5 seconds. Pending requests expire after 2 hours.
-- A card names the agent, where it came from, and "key" followed by the first 8 characters of the fingerprint (hash) of its agent token. Two agents that call themselves the same thing have different keys, so use it to tell them apart.
+A browser site is a website the owner signs in to by hand, for agents to use without seeing the login. Setup holds its name, start URL and the domains it may reach; list every domain the sign-in page loads from (CDNs too), since others are blocked. **Open** (lifetime 1h, 8h or 1d) starts a headless Chromium and a live view where the owner logs in; pasting works for passwords. An agent with `browser:<site>` sends allowlisted commands to `POST /_speaker/browser/<site>`: snapshot, click, fill, type, press, scroll, wait, open (the site's domains only), back, forward, reload, get, screenshot. Agents never get cookies, storage, JavaScript evaluation, uploads, downloads or the debugging port; the log records each command without its arguments.
 
-<!-- author: ai -->
+- A browser runs only while needed. **Open** works only while an agent holds or asks for `browser:<site>` (the card links to it). The browser closes, ending the login, when no agent holds or asks for it, after 15 minutes without a command or live-view input, at its lifetime, when its setup changes, or when speaker stops.
+- Chromium runs as its own OS user behind `browser-broker.ts`, a small HTTP server on 127.0.0.1 that only holds a bearer token; speaker makes every check. Speaker needs `BROWSER_BROKER_URL` and `BROWSER_BROKER_TOKEN` (32 characters or more); without them opening a site names the fix. The Docker image starts the broker itself, with a token made at each start unless `.env` sets one; `chrome-seccomp.json` is Docker's default profile plus `clone`, `unshare` and `setns`, so Chromium keeps its own sandbox.
+- Without Docker, run the broker as a separate user on speaker's machine: `sudo -u <browser user> env BROWSER_BROKER_PORT=3100 BROWSER_BROKER_TOKEN=<token> AGENT_BROWSER_EXECUTABLE_PATH=<chromium> node browser-broker.ts`, and give speaker `BROWSER_BROKER_URL=http://127.0.0.1:3100` and the same token. There any local process can reach Chromium's debugging and stream ports, so a logged-in session is open to every program on the machine: when other agents share it, use the container.
 
-## Owner API and the Herdr mod
+## Agents
 
-<sub>AI-written</sub>
+_AI-drafted_
 
-A small JSON API under `/admin/api` lets the Herdr mod in `herdr/mods/speaker` review and decide requests. It calls the same decide and revoke code as the `/admin` forms and writes the same audit lines.
-{.ai}
+Agents start at `$SPEAKER_URL/_speaker/help` (also `/`), served without a token: one document (`skill/SKILL.md`) with a one-screen top, then setup for sh and PowerShell, what to ask for, folders and SSH, secrets, browser sites, MCP servers and errors. It names no service, group, target or share. Commands in it use the address the caller used.
+
+| Item | Grants | Who may ask |
+| --- | --- | --- |
+| `<service>.read`, `<service>.full` | reads, or everything (see Services); remote MCP servers are services too | any |
+| `ssh:<target>`, `folder:<share>[:rw]` | commands as the target's account; a share, read-only unless `:rw` | any |
+| `secret:<NAME>`, `browser:<site>` | the secret inserted for its hosts; a logged-in browser site | any |
+| `site:<host>`, `site:*.<domain>` | network access from the VM | sandboxed |
+| `mcp:<id>`, `ext:<id>` | an in-VM MCP server or Pi extension from bottle's catalog | sandboxed |
+| `group:<name>` | every item in the group | any, if it may ask for all of them |
+
+- **Enrolment.** The agent makes a random token, keeps it in a user-only header file (`curl -H @file`, so it stays off command lines) and sends only its SHA-256, a label, an agent string and a first request. `enroll.sh` does this. Each request carries a one-sentence `reason`. Sandboxed agents are created by their sandbox host instead.
+- **Asking.** `POST /_speaker/requests` with `{"want":[…],"reason":"…","duration":"2h"}`, or just call a service with `Speaker-Wait`. `GET /_speaker/requests/<id>` watches a filed request. Posting the same items again joins the pending card. Durations: `30m`, `1h`, `2h` (default), `1d`, `30d`; the owner can also grant until revoked.
+- **Seeing where it stands.** `GET /_speaker/catalog` lists services, groups, secrets (name, hosts, variable, state), browser sites, the agent's grants (`applying` until a sandbox host reports one in force) with exact SSH and folder commands, and its requests.
+- **Errors** are JSON with `error`, `message`, and where useful `next` (the exact call to make, or "stop") and `tell_user` (one line with the approval link). An unknown name fails the whole request with 400 `invalid` before anything reaches the owner; an item that exists but cannot be delivered is `denied` at once and logged. All agent-facing text is written for a small model that follows steps literally.
+- **Denials.** After three denials of the same item to the same agent within 15 minutes, speaker answers `denied` with `retry_after` without asking, for 15 minutes.
+
+## The owner's side
+
+_AI-drafted_
+
+- **Inbox:** each request is a card naming the agent, its source address, "key" plus the first 8 characters of its token's fingerprint (two agents with the same name differ there), the reason and a duration. Every item has a checkbox, ticked by default; **Approve** grants what is ticked and denies the rest. Items that can change things (`.full`, `:rw`, `ssh:`) are tinted. Sandbox host registrations are cards too. Pending requests expire after 2 hours.
+- **Active:** grants with **Extend** (one more span of the original length) and **Revoke**, SSH sessions with **End**, approved hosts, and per-agent counts (requests, granted, denied, refused, blocked; the last two turn red when non-zero). Counts reset on restart. Inbox and Active refresh every 5 seconds.
+- **Setup** edits services, secrets, groups, targets, shares, browser sites and the password. **Log** shows recent audit lines.
+- Scripted form posts need an `Origin` header matching `PUBLIC_URL`; sign-in answers `303` with the session cookie. Sign-in allows 5 failures per 15 minutes, so do not retry blindly.
+
+### Owner API and the Herdr mod
+
+A JSON API under `/admin/api` serves the Herdr mod. It uses the same decide and revoke code and audit lines as the forms.
 
 | Route | Does |
 | --- | --- |
-| `POST /admin/api/signin` `{ "password": "…" }` | `{ "token": "…", "publicUrl": "…" }`: the same password check, rate limit (5 failures per 15 minutes, shared with the form) and audit lines as the form; it unlocks speaker after a restart the same way. The token lives in speaker's in-memory session map for 12 hours. `publicUrl` is speaker's `PUBLIC_URL`, where the browser UI accepts sign-ins, so a client that reaches the API by another address (a tailnet port) still opens the right page. |
-| `GET /admin/api/pending` | `{ pending: [card] }`, the same cards the Inbox shows, sandbox host registrations included: `{ id, subject, type: "agent" \| "host", who: { label, says?, via?, source, key?, at? }, reason, trigger?, duration, durations, want, items: [{ item, kind, text, reach, warning?, risk?, with? }], createdAt }` |
-| `GET /admin/api/active` | `{ grants: [{ id, who, item, expiresAt, text, reach, warning?, risk? }] }`, a sandbox host's approval included (revoking it removes the host) |
+| `POST /admin/api/signin` `{ "password" }` | `{ token, publicUrl }`; same check, rate limit and unlock as the form; the token lives in memory for 12 hours |
+| `GET /admin/api/pending` | `{ pending: [card] }`, the Inbox's cards: `{ id, subject, type: "agent" \| "host", who, reason, duration, durations, want, items: [{ item, kind, text, reach, warning?, risk? }], createdAt }` |
+| `GET /admin/api/active` | `{ grants: [{ id, who, item, expiresAt, text, reach, warning?, risk? }] }` |
 | `POST /admin/api/requests/<id>/approve` `{ "duration": "2h" }` | approves every pending item on the card (`204`) |
 | `POST /admin/api/requests/<id>/deny` | denies the card (`204`) |
 | `POST /admin/api/grants/<id>/revoke` | ends the grant (`204`) |
 
-- Every route except sign-in takes only `Authorization: Bearer <token>`. The session cookie is never accepted there, and an API token is never accepted as the cookie. Anything else answers `401` in speaker's error shape (`{ "error": "denied", "message": … }`).
-- Finer decisions (unticking items, Extend, Setup, Log) stay in `/admin`. A sandbox host's registration is a card like any other, so the mod approves and denies it too.
+Every route but sign-in takes only `Authorization: Bearer <token>`; the cookie is never accepted there and the token never as the cookie. Finer decisions (unticking items, Extend, Setup) stay in `/admin`.
 
-The mod: link it in with `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker` (from the repository root), then check it with `herdr-app check ~/.config/herdr-app/mods/speaker`. Its one-line bar (the part that polls and notifies; "speaker · set up" at first) shows only in a layout that has a block for it, and Herdr's own layouts are read-only, so clone one and add the block: `herdr-app do layout.clone '{"name":"main","as":"main-speaker"}'`, then in `~/.config/herdr-app/layouts/main-speaker.json` add `{"id":"speaker","type":"block","size":{"px":26},"content":{"mod":"speaker"}}` after the `status` block. Without that, only the inbox opened by its key works, and nothing announces a waiting request. Click it to open the inbox, enter speaker's URL, bottle's control URL and, when bottle runs on another Herdr machine (such as `wsl`), that machine's name under Settings (kept in Herdr's shared state, not in a file), and Save (Enter in any field saves too). Speaker's URL can be a tailnet address that skips a reverse proxy's login, such as `http://nuc.tailnet.ts.net:9110`. Then sign in with the owner password once per Herdr start (**Sign in** or Enter). **Open in browser** always goes to speaker's `PUBLIC_URL`, which the sign-in returns, because the browser UI refuses sign-ins from other addresses; until the mod has signed in, those buttons are dimmed. For debugging, the mod rewrites `~/.config/herdr-app/speaker.log` with its last 300 calls to speaker, bottle and programs: address, status or exit code, and the error line, never a password, token or response body. The token stays in the mod's memory, never on disk, and saving a different speaker URL drops it. The bar polls every 10 seconds ("speaker · 2 waiting (oldest 4m)", in the blocked colour from 5 minutes) and posts a toast for each new request; clicking the toast opens the inbox, which also polls every 10 seconds while it is open. Each card shows the agent, the items with any warning, the reason, a duration choice, **Approve as asked**, **Deny** and **Open in browser**. Below the cards are bottle's open agents (**Stop**; click a name to focus its terminal, click "waiting for approval" to highlight its request card), the last five finished agents (click one to open its archive folder in a new tab), a **Start an agent** section (an optional prompt and extra folders, then one button per model on each template; it runs `bottle run -d` in a terminal of the bottle space, so a slow cold start or an error stays visible), a short Active list with **Revoke**, and Settings. For a key, add `"global": { "alt-s": "mod.open:speaker" }` to `~/.config/herdr-app/keys.json`; it opens the inbox as an overlay (so does the command palette).
-{.ai}
+**Installing the mod.** From the repository root: `ln -s "$PWD/herdr/mods/speaker" ~/.config/herdr-app/mods/speaker`, then `herdr-app check ~/.config/herdr-app/mods/speaker`. Its one-line bar shows only in a layout with a block for it, and Herdr's own layouts are read-only: `herdr-app do layout.clone '{"name":"main","as":"main-speaker"}'`, then add `{"id":"speaker","type":"block","size":{"px":26},"content":{"mod":"speaker"}}` after the `status` block in `~/.config/herdr-app/layouts/main-speaker.json`. For a key, add `"global": { "alt-s": "mod.open:speaker" }` to `~/.config/herdr-app/keys.json`. In the mod's Settings enter speaker's URL (a tailnet address that skips a reverse proxy's login works), bottle's control URL and, when bottle runs on another Herdr machine, that machine's name; then sign in once per Herdr start.
 
-`herdr/mods/speaker` is the default mod. `herdr/mods/speaker-lite` is a trimmed variant kept for reference (about 100 lines: the bar, toasts, sign-in, and approve, deny or open each request; it reads the full mod's saved settings). It has no bottle agents, jump-to-terminal, Start an agent or Revoke, so it is not installed by default.
-{.ai}
+**Using it.** The bar polls every 10 seconds ("speaker · 2 waiting (oldest 4m)") and posts a toast per new request. The inbox shows each card with **Approve as asked**, **Deny** and **Open in browser** (always speaker's `PUBLIC_URL`, since the browser UI refuses sign-ins from other addresses); bottle's open agents (**Stop**, click to focus its terminal); the last five finished agents (click to open the archive); **Start an agent** (a prompt, extra folders, one button per template and model; runs `bottle run -d` in the bottle space); and Active with **Revoke**. The token stays in the mod's memory, never on disk. `~/.config/herdr-app/speaker.log` holds its last 300 calls (address, status, error line; never a password, token or body). `herdr/mods/speaker-lite` is a trimmed reference variant (about 100 lines: bar, toasts, sign-in, approve and deny), not installed by default.
 
-<!-- author: ai -->
+## Security model and design
 
-## Docker and home-server deployment
+_AI-drafted_
 
-<sub>AI-written</sub>
+**Principles.** The owner grants everything: no agent, rule or timer creates or lengthens access, except reads of services the owner marked open. Agents never hold the owner's keys. Agents ask for the minimum, with a reason; groups make review easier, not access wider. One call should be enough: missing access waits for the owner, and every failure says what to do next. Limits are enforced by speaker or the sandbox host, not by configuration on each target. Only settings, encrypted keys and the append-only log reach disk; agents, grants, requests, sessions and counts live in memory, and after a restart agents ask again.
 
-Run these from `speaker/`. The included Compose file builds the image, binds port 3000 to host loopback, and keeps state in a named volume. `mise run init speaker` is for running without Docker. It creates the store in a host directory, which Compose does not use. In Docker, you set the owner password on the first visit to `/admin`.
-{.ai}
+**Keys.** All values (service keys, secrets, speaker's SSH key, the proxy certificate authority) are sealed with one random data key (AES-256-GCM), wrapped by a key derived from the owner password (scrypt). Unwrapping is the password check, so no password hash is stored. Speaker starts **locked**: until the owner sets a password and signs in, agent, sandbox-host, proxy and certificate calls answer `503 locked` and `/admin` shows only sign-in. Values exist in clear only in memory. A copied disk or backup reveals none; a takeover of the running process can, which is why grants stay short and target accounts limited. Changing the password re-wraps the data key. A forgotten password means deleting `store.json` and entering every key again (and re-adding speaker's SSH key on targets); `config.json` holds no values and can be shared.
 
-```sh
-cp .env.example .env
-chmod 600 .env
-# Edit .env: set PUBLIC_URL before starting, then open /admin to set the owner password.
-docker compose config --quiet
-docker compose up --build -d
-docker compose logs --tail=100 speaker
-```
+**Tokens and addresses.** Agent and sandbox-host tokens are random, stored as SHA-256 hashes and bound to the address they enrolled or registered from (the socket address, or the last `X-Forwarded-For` entry when the peer is `TRUSTED_PROXY`). Enrolment is unauthenticated but rate limited (20 per 15 minutes in total) and refuses malformed hashes and the empty token's hash. An agent stays valid while it holds a grant or called in the last 7 days. **Revoke agent** ends its token and grants; the token then answers `denied` ("stop"), and asking again takes a new token that reaches the owner as a new agent. On one laptop every local client shares one address, so binding protects against accidents and keeps a record, not against a hostile agent running as the owner.
 
-The image builds from the repository root (the pnpm workspace) and installs the newest release of each dependency. For exactly the tested set in `pnpm-lock.yaml`, build with `docker compose build --build-arg LOCKED=1`.
+**Approval.** Only `/admin`, behind the owner's sign-in (HttpOnly, SameSite=Strict session cookie, Secure over HTTPS) with same-origin checks (Fetch Metadata, or an `Origin` matching `PUBLIC_URL`); do not disable them or add wildcard origins. Network identity such as a tailnet login is never accepted as the owner, because agents on the owner's machines share it. Plain HTTP from another machine works, with a warning on the sign-in page. Card details from the agent are shown as claims; the source address and fingerprint are speaker's own. The Herdr mod holds its token in memory, so a direct agent running as the owner's user on that machine could read it.
 
-For local access, use `PUBLIC_URL=http://localhost:3000` and open `http://localhost:3000/admin`. Behind a reverse proxy, set `PUBLIC_URL` to the exact URL you open in the browser, including `https://` and any nonstandard port, for example `https://speaker.example.com`. After you change environment settings, recreate the container with `docker compose up -d --force-recreate`. A plain restart does not reload them.
-{.ai}
+**Grants and lifecycles.** Approvals, requests, grants and hosts each follow one explicit table with one `transition()` (`lifecycle.ts`). A grant exists only while in force; ending it ends any session or mount it allowed. After any Setup change, a pending or granted approval whose item is gone ends, and so does a grant whose reach grew beyond what the card showed: what approving opens (a secret's hosts, a service's URL and read paths, a target's account, a share's path) is stored with the grant. A speaker restart ends every grant, request and session.
 
-- Bring your own proxy: it forwards to speaker and serves HTTPS. Raise its timeout above 120 s, because speaker holds requests for up to 120 s. The sample binds loopback, so a containerized proxy needs a shared Docker network or another explicit route. The public example configures no proxy or external login service.
-- Browser saves use same-origin Fetch Metadata, so HTTPS termination at a proxy does not cause false cross-origin rejections. Clients without that header must send an Origin matching `PUBLIC_URL` for form submissions. Speaker blocks cross-origin browser form and JSON writes. Do not disable CSRF checks or add wildcard origins.
-- Run one replica. `/data` persists services, groups, sandbox hosts, the encrypted store, and the log (`audit.jsonl`, append-only; rotate or delete it by hand). Agents, grants, and requests live in memory. A restart ends them, and agents enroll and ask again.
-- Keep the data volume outside the agents' filesystem access. Keys are encrypted at rest, so a copied volume or backup reveals none. Keep the owner password safe: without it, nobody can read the keys, and you re-enter every key.
-- The admin page uses speaker's own sign-in (a session cookie). Agent API routes use bearer tokens. If you add external login middleware, apply it to `/admin` and its child paths so agents can still use their tokens.
+**Sandbox hosts.** A host (bottle) registers unauthenticated, which only adds a pending card, and the owner approves it. Approving removes any older host with the same name and address, with its tokens and agents. Speaker keeps the host record but not its approval, so after a restart every host is a card again; bottle stops if it is not re-approved within 5 minutes. Per run the host creates an agent (the template's items become its first request), and speaker binds the agent's token to the host's address. The host holds a WebSocket, receives every grant and revocation, applies it in the VM and reports what is in force; silent for 30 seconds, it drops its agents' grants. An extension's sites end with the extension's grant unless the agent asked for them itself.
 
-<!-- author: ai -->
+**What agents can see.** Anyone who can reach speaker can enrol, so lists shown to agents are shown to the whole network. Services needing a grant are listed; open services are not. Groups are listed with their items (folders and targets only as a count). Every secret is listed by name, hosts and variable: names reveal little, and the agent only ever holds a placeholder. Folders and SSH targets are never listed; names come from the owner or the task. Sandboxed agents also see the host's in-VM MCP servers and extensions.
 
-## SSH and folders
+**Proxy boundary.** Speaker keeps each request on the service's origin and under its base path. Before adding the credential it strips caller credentials, cookies, proxy identity and hop-by-hop headers. It streams replies, returns upstream redirects without following them, and redacts a key embedded in an upstream URL from replies and logs. It checks read or full access per call; it does not authorize individual paths or bodies.
 
-<sub>AI-written</sub>
-
-Agents run commands on your hosts and use your folders through a jump server inside speaker's container. Speaker listens on `SSH_PORT` only while an SSH or over-SSH folder grant is active. It hands each connection to a stock, non-root `sshd -i` with a new host key each time it starts. The relay (`relay.ts`) is each session's forced command. `SSH_PORT` is required. [DESIGN.md](DESIGN.md#ssh-and-shares-how-speaker-controls-them) explains how the relay controls sessions and folders.
-
-- Targets (Setup): an alias, a host, a port, and the account speaker uses there. Adding a target pins its host key (`ssh-keyscan`), refuses `root` unless you confirm, warns when `sudo -n true` works, and probes the target's `sftp-server`. Setup shows speaker's public key and the line to add to that account's `authorized_keys`: `from="<speaker's address>",restrict ssh-ed25519 AAAA… speaker`. Add the line first. You can edit the address list per target.
-- Shares (Setup): a name, a target, and an absolute path; every share arrives over SSH. A folder on speaker's own machine is a share on a target for that machine: `127.0.0.1` (or, with speaker in Docker, the host's address), with `sshd` and `sftp-server` running there and Setup's `authorized_keys` line added. Prefer a limited account for it, and grant only `folder:` items there: an `ssh:` grant on that target runs commands as that account. Cards show the account (and any sudo warning) for `ssh:<target>`. For `folder:<share>[:rw]` they show the share and whether it is read-only or read-write.
-- Agents send one throwaway public key (`sshKey`) and ask for `ssh:<target>` or `folder:<share>[:rw]`. Speaker refuses an unknown name with 400 (`There is no folder named <share> that you can use.`, never listing real names) and creates no card; an item that exists but cannot be delivered is answered `denied` at once and logged. After approval, `GET /_speaker/catalog` lists complete command lines (with `-p`, `IdentitiesOnly`, `BatchMode`, and the jump server's host key): `ssh … <command>` for commands, and `sshfs`, `scp`, and `sftp` for folders. The login name in them is the account speaker runs as.
-- For an `ssh:` grant, `scp` and `sftp` paths are `<target>/<absolute path on the target>`. Speaker refuses `rsync`, legacy `scp -O`, and commands on a folder grant, with a pointer to `sftp`.
-- The Active page lists open sessions with **End**. Ending a grant, revoking it, or restarting speaker ends its sessions.
-- Container: the image has `openssh-server` and `openssh-client`, and `compose.yaml` publishes `SSH_PORT`. The SSH port does not go through a web reverse proxy; open it separately. Speaker's SSH key lives encrypted in the store, and in clear only in memory inside `ssh-agent`. The jump server's files (public keys, its per-start host key, the ssh-agent socket) sit in a private temporary directory.
-
-<!-- author: ai -->
-
-## Browser sites
-
-<sub>AI-written</sub>
-
-A browser site is a website the owner signs in to by hand, for agents to use without seeing the login. Setup holds each site's name, start URL and the domains it may reach; list every domain the sign-in page loads from (CDNs too), since requests to any other are blocked. **Open** (with a lifetime of 1h, 8h or 1d) starts a headless Chromium for it and shows a live view where the owner clicks and types the login; pasting works for passwords. An agent asks for `browser:<site>` (ask on use, like a service) and sends allowlisted commands to `POST /_speaker/browser/<site>`: snapshot, click, fill, type, press, scroll, wait, open (only the site's domains), back, forward, reload, get, screenshot. Agents never get cookies, storage, JavaScript evaluation, uploads, downloads or the debugging port, and the log records each command without its arguments. Nothing persists: a login ends when the owner closes the site, its lifetime runs out, its setup changes, or speaker stops.
-{.ai}
-
-- A browser runs only while needed. **Open** works only while an agent holds `browser:<site>` or has asked for it (the approval card links to it), and the browser closes by itself once no agent holds or asks for it, after 15 minutes without an agent command or live-view input, or at the lifetime chosen at Open. Each close ends the login.
-- Chromium runs as its own OS user behind `browser-broker.ts`, a small HTTP server on 127.0.0.1 that runs agent-browser for speaker. Speaker makes every check; the broker only holds the bearer token. Speaker needs `BROWSER_BROKER_URL` and `BROWSER_BROKER_TOKEN` (32 characters or more); without them Setup still lists sites, and opening one names the fix.
-- Docker: the image has Chromium and starts the broker as `browser` and speaker as `node`, with a token made at each start unless `.env` sets one. `compose.yaml` adds `init`, the `SETUID` and `SETGID` capabilities the start script needs, and `chrome-seccomp.json` (Docker's default profile plus `clone`, `unshare` and `setns`, so Chromium keeps its own sandbox). Chromium adds about 740 MB to the image.
-- Laptop: run the broker as a separate user, for example `sudo -u <browser user> env BROWSER_BROKER_PORT=3100 BROWSER_BROKER_TOKEN=<token> AGENT_BROWSER_EXECUTABLE_PATH=<chromium> node browser-broker.ts`, and give speaker `BROWSER_BROKER_URL=http://127.0.0.1:3100` and the same token. Speaker connects to the live view's stream port on 127.0.0.1, so the broker runs on speaker's machine. On a laptop any local process can reach Chromium's debugging and stream ports on 127.0.0.1, so a logged-in session is open to every program on the machine: when other agents share it, run speaker and the broker in the container.
-
-<!-- author: ai -->
-
-## Agent access
-
-<sub>AI-written</sub>
-
-Give agents the setup guide at `https://your-speaker-host/_speaker/help`. Speaker serves it without authentication so a new agent can bootstrap. It is one document: a top part that fits one screen (the call form, how to wait, where things are), then sections for setup (sh and PowerShell, a token kept in a curl header file, nothing to install), what an agent can ask for, asking, folders and SSH, secrets, remote MCP servers and errors. `/` serves the same document, also without a token. Services, rules, and groups stay behind auth, at `GET /_speaker/catalog`, which also lists every secret by name and state (never folders or SSH targets). Commands in these pages use the address the caller used to reach speaker. Keep `/admin` protected.
-{.ai}
-
-- Every agent error is JSON with `error` and a `message`, and carries a `next` step where one exists. Where an approval is needed, it also carries a `tell_user` line with the approval link.
-- Registering a sandbox host again (same name, same address) leaves the old entry until you approve the new one; approving removes the old entry and its agents. Host cards show address and registration time, so stale entries are easy to spot.
-- An extension's sites end with it: revoking or expiring `ext:<id>` ends the sites it brought, unless the agent asked for them itself.
-- An agent works only from the address it enrolled from, and a sandbox host only from the address it registered from: the socket address. Behind a reverse proxy, set `TRUSTED_PROXY` to the proxy's IP, or to a name such as its Docker service name (`traefik`), which speaker looks up again every 30 seconds so it follows the container. Speaker then takes the last `X-Forwarded-For` entry from it and ignores that header from every other sender.
-- Only you extend access. Extend on a grant adds the span you originally granted.
-- If you deny the same item to the same agent three times within 15 minutes, speaker answers further requests as denied without asking you, until 15 minutes after the third denial.
-
-<!-- author: ai -->
-
-## Proxy boundary
-
-<sub>AI-written</sub>
-
-Speaker keeps each request on the configured upstream origin and inside its base path. Before it injects the service credential, it strips caller credentials, cookies, proxy identity, and hop-by-hop headers. It streams responses and returns upstream redirects without following them. It checks read or full access on each call. It does not authorize individual paths or request bodies.
-{.ai}
-
-An agent with direct upstream credentials or a local vault mount can bypass speaker. If speaker must control all access, remove those routes. Revocation blocks later proxy calls. It cannot undo completed operations, and it cannot guarantee cancellation of a request already forwarded.
-{.ai}
+**Limits.** Speaker cannot stop an agent misusing access it was granted, and revocation cannot undo completed operations or reliably cancel a request already forwarded. An agent with its own upstream credentials or a local vault mount bypasses speaker; remove those routes if speaker must control all access. Hence short grants, least-privilege upstream tokens, limited target accounts, everything logged and one-click revoke.
