@@ -34,6 +34,14 @@ import { type ErrorFields, itemForms, kindOf } from './items.ts'
 export type SpeakerApi = ReturnType<typeof agentApi>
 
 export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
+  // When this speaker started: a restart forgets every agent and grant, so errors and the health check say when.
+  const startedAt = new Date().toISOString()
+  // The name an agent gave itself for its task (Speaker-Agent: <name>-<nonce>): shown on cards and in the log so the
+  // owner can tell callers apart. Self-reported, so it only labels; grants follow the token.
+  const selfName = (c: Context) => {
+    const name = c.req.header('speaker-agent')?.trim()
+    return name && /^[\w .:@-]{1,60}$/.test(name) ? name : undefined
+  }
   const tellUser = (c: Context, anchor: string) => `Ask the owner to approve at ${core.baseOf(c)}/admin#${anchor}`
   const withAddress = (c: Context, text: string) => text.replaceAll('$SPEAKER_URL', core.baseOf(c))
   const unauthorized = (
@@ -85,7 +93,16 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       const found = core.resolveAgent(token, core.sourceOf(c))
       if ('agent' in found) c.set('caller', { role: 'agent', agent: found.agent })
       else if (found.refused === 'revoked') return revokedReply(c)
-      else return unauthorized(c, 'enroll', 'This token is not enrolled for this address', { next: enrollNext })
+      else
+        return unauthorized(
+          c,
+          'enroll',
+          `This token is not enrolled for this address. Speaker started at ${startedAt}, and a restart forgets every agent and grant`,
+          {
+            next: enrollNext,
+            tell_user: `Speaker restarted at ${startedAt}: earlier approvals are gone, so I am asking again`,
+          },
+        )
     }
     await next()
   }
@@ -200,7 +217,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       if (error instanceof HTTPException) core.tally(agent, 'refused', error.message)
       throw error
     }
-    const request = core.engine.request('agent', agent.id, items, { ...input, bundled })
+    const request = core.engine.request('agent', agent.id, items, { ...input, bundled, as: selfName(c) })
     await hold(c, () => settled(request))
     return core.engine.serial(() => outcome(c, request))
   }
@@ -247,6 +264,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       reason: c.req.header('speaker-reason')?.trim().slice(0, 500) ?? '',
       duration: '2h',
       trigger,
+      as: selfName(c),
     })
     await hold(c, () => core.engine.statusOf(request) !== 'pending')
     const grant = await core.engine.serial(() => core.engine.held(agent.id, covers))
@@ -284,7 +302,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
   const markdown = { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'max-age=3600' }
   return (
     app
-      .get('/_speaker/health', (c) => c.json({ ok: true }))
+      .get('/_speaker/health', (c) => c.json({ ok: true, startedAt }))
       .get('/_speaker/proxy/ca.pem', locked, async (c) =>
         c.text((await core.certificateAuthority()).cert, 200, { 'content-type': 'application/x-pem-file' }),
       )
@@ -536,7 +554,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
           return agentError(c, 403, 'denied', `Not granted: ask for secret:${name} first`, { next: catalogHint })
         core.useOf(grant)
         core.useOf(agent)
-        core.audit('secret_released', { agent: agent.id, secret: name })
+        core.audit('secret_released', { agent: agent.id, as: selfName(c), secret: name })
         return c.text(owned.value, 200, { 'cache-control': 'no-store' })
       })
       // A logged-in browser site: an allowlisted command, gated like a service call (ask on use). Never the arguments in
@@ -571,7 +589,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         core.browser.touch(site)
         if (gated.grant) core.useOf(gated.grant)
         core.useOf(agent)
-        core.audit('browser_command', { agent: agent.id, site, command: args[0], ok: result.ok })
+        core.audit('browser_command', { agent: agent.id, as: selfName(c), site, command: args[0], ok: result.ok })
         if (!result.ok)
           return agentError(c, 422, 'invalid', String(result.error), { next: 'Take a new snapshot and retry' })
         if (result.png) return c.body(Buffer.from(result.png, 'base64'), 200, { 'content-type': 'image/png' })
@@ -669,6 +687,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         })
         core.audit('proxy', {
           agent: agent.id,
+          as: selfName(c),
           service: serviceId,
           method,
           path,

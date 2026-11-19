@@ -1,6 +1,6 @@
 ---
 name: access-and-creds
-version: 10
+version: 11
 description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH hosts, folders, and secrets such as GitHub tokens. Use when a task needs access, a credential, API key, token, SSH or `gh` you lack, or a call returns 401 or 403."
 ---
 
@@ -11,8 +11,10 @@ Speaker holds the owner's keys and makes calls for you. The owner approves each 
 Enrol once per machine (label: the task in at most 8 words; agent: `<model> · <app> on <machine>`):
 `curl -s $SPEAKER_URL/_speaker/enroll.sh | sh -s -- "<label>" "<model · app on machine>"`
 
+Name yourself once per task: a short name plus a nonce you make (`openssl rand -hex 3`), such as `tests-fix-3fa2c1`. Send it as `Speaker-Agent` on every call; the owner sees it on approval cards.
+
 Call a service (quote the URL; add the wait header only to ask the owner and hold the call until they decide):
-`curl -s -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" -H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70 "$SPEAKER_URL/<service>/<path>"`
+`curl -s -H @"${XDG_STATE_HOME:-$HOME/.local/state}/speaker/header" -H 'Speaker-Agent: <your name>' -H 'Speaker-Wait: 60' -H 'Speaker-Reason: <one sentence>' --max-time 70 "$SPEAKER_URL/<service>/<path>"`
 
 The three common errors (JSON with `error`, `message`, `next`; do what `next` says, tell the user what `tell_user` says):
 - `enroll`: no header file or unknown token. Enrol again.

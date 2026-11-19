@@ -72,6 +72,8 @@ export type Request = {
   reason: string
   duration: Duration
   trigger?: string
+  // The name the agent gave itself for this task (Speaker-Agent), shown on the card; self-reported, never trusted.
+  as?: string
   // Items that came only with another item of this request (item -> the item that brought it).
   bundled?: Record<string, string>
   approvals: string[]
@@ -208,7 +210,14 @@ export function createEngine(env: {
     type: SubjectType,
     subject: string,
     items: string[],
-    input: { want?: string[]; reason: string; duration: Duration; trigger?: string; bundled?: Record<string, string> },
+    input: {
+      want?: string[]
+      reason: string
+      duration: Duration
+      trigger?: string
+      as?: string
+      bundled?: Record<string, string>
+    },
   ) {
     const itemsOf = (r: Request) => of(r).map((a) => a.item)
     const existing = [...requests.values()].find(
@@ -230,6 +239,7 @@ export function createEngine(env: {
       reason: input.reason,
       duration: input.duration,
       trigger: input.trigger,
+      as: input.as,
       ...(input.bundled && Object.keys(input.bundled).length ? { bundled: input.bundled } : {}),
       approvals: [],
       createdAt: Date.now(),
@@ -389,6 +399,7 @@ export function createEngine(env: {
         who: env.subjects[r.type].who(r.subject),
         reason: r.reason,
         trigger: r.trigger,
+        as: r.as,
         duration: env.subjects[r.type].durations.includes(r.duration) ? r.duration : env.subjects[r.type].durations[0],
         durations: env.subjects[r.type].durations,
         want: r.want,

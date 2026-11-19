@@ -29,13 +29,17 @@ const grant = async (f: Fixture, a: Awaited<ReturnType<Fixture['enrol']>>, ...wa
 test('an approved agent reaches the upstream with the real key, never sees it, and a write needs .full', async (t) => {
   const f = await notes(t)
   const a = await f.enrol()
-  const first = await a.as('/notes/things?q=1')
+  const first = await a.as('/notes/things?q=1', {}, { 'speaker-agent': 'notes-reader-3fa2c1' })
   assert.equal([first.status, await error(first)].join(), '403,approval_required')
   assert.equal(f.seen.length, 0)
+  // The name the agent gave itself is on the card, and never reaches the upstream.
+  assert.equal((await f.cards())[0].as, 'notes-reader-3fa2c1')
+  assert.ok((await (await f.call('/_speaker/health')).json()).startedAt)
   await f.decide((await body(await a.as('/notes/x'))).request, 'approve', ['notes.read'])
   const read = await a.as('/notes/things?q=1')
   assert.equal(read.status, 200)
   assert.deepEqual([f.seen[0].url, f.seen[0].headers.authorization], ['/base/things?q=1', `Bearer ${KEY}`])
+  assert.equal(f.seen[0].headers['speaker-agent'], undefined)
   assert.ok(![...read.headers.values(), await read.text(), JSON.stringify(await a.catalog())].join().includes(KEY))
   const write = () => a.as('/notes/x', { method: 'PUT', body: '{}' })
   assert.equal(await error(await write()), 'approval_required')
