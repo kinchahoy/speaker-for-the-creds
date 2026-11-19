@@ -1,7 +1,9 @@
 // Logged-in browser sites (`browser:<site>`). The owner opens a site's headless Chromium from Setup and signs in by hand
 // in the live view; agents holding a grant send allowlisted commands (POST /_speaker/browser/<site>, in api.ts). Chromium
 // runs as another OS user behind browser-broker.ts: this module only calls the broker and relays the live view. Nothing
-// persists: a session ends when the owner closes it, its lifetime runs out, its setup changes, or speaker stops.
+// persists: a session ends when the owner closes it, its lifetime runs out, its setup changes, or speaker stops. A
+// browser runs only while needed: it opens only while an agent asks for or holds the site, and closes when none does or
+// after `idleLimit` without a command or live-view input.
 import { upgradeWebSocket } from '@hono/node-server'
 import type { Context, Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
@@ -15,13 +17,16 @@ type Env = {
   broker?: { url: string; token: string }
   publicOrigin: string
   sites: () => Record<string, BrowserSite>
+  /** Whether an agent holds `browser:<site>` or has asked for it (a pending request). */
+  wanted: (site: string) => boolean
   audit: (event: string, fields?: Record<string, unknown>) => void
 }
-type Session = { state: BrowserState; until: number; port?: number; setup: string }
+type Session = { state: BrowserState; until: number; used: number; port?: number; setup: string }
 
 export const brokerMissing =
   'Browser sites are not set up: set BROWSER_BROKER_URL and BROWSER_BROKER_TOKEN and start browser-broker.ts as the browser user'
 export const lifetimes = { '1h': 3600_000, '8h': 28_800_000, '1d': 86_400_000 }
+export const idleLimit = 15 * 60_000
 // What an agent may send: the command, then its arguments. No argument may look like a flag (agent-browser reads flags
 // anywhere, so `--session` or `--profile` would escape the site), except snapshot's own -i and -c.
 export const browserUsage = [
@@ -110,6 +115,10 @@ export function createBrowser(env: Env) {
   async function open(site: string, life: number) {
     const setup = Object.hasOwn(env.sites(), site) ? env.sites()[site] : undefined
     if (!setup) throw new HTTPException(404, { message: `There is no browser site ${site}` })
+    if (!env.wanted(site))
+      throw new HTTPException(409, {
+        message: `No agent holds or is asking for browser:${site}; it opens once one does (from its approval card or here)`,
+      })
     transition('browser', browserTable, sessions.get(site)?.state ?? 'off', 'open')
     // A session left by an earlier speaker would keep its old domains and login: start from nothing.
     await run(['--session', site, 'close'])
@@ -124,7 +133,7 @@ export function createBrowser(env: Env) {
       setup.startUrl,
     ])
     if (!opened.ok) throw new HTTPException(502, { message: `Could not open ${site}: ${String(opened.error)}` })
-    const session: Session = { state: 'live', until: Date.now() + life, setup: JSON.stringify(setup) }
+    const session: Session = { state: 'live', until: Date.now() + life, used: Date.now(), setup: JSON.stringify(setup) }
     sessions.set(site, session)
     env.audit('browser_opened', { site, until: new Date(session.until).toISOString() })
     const status = await run(['--session', site, 'stream', 'status'])
@@ -138,12 +147,22 @@ export function createBrowser(env: Env) {
     env.audit('browser_closed', { site, why })
     await run(['--session', site, 'close'])
   }
-  const closeQuietly = (site: string, why: string) =>
-    close(site, why).catch((error) => env.audit('browser_close_failed', { site, why: String(error) }))
-  // Clock and setup: a session past its lifetime, or whose site was changed or removed, closes.
+  // Closes the sweep started; stop() waits for them.
+  const closing = new Set<Promise<unknown>>()
+  const closeQuietly = (site: string, why: string) => {
+    const done = close(site, why)
+      .catch((error) => env.audit('browser_close_failed', { site, why: String(error) }))
+      .finally(() => closing.delete(done))
+    closing.add(done)
+  }
+  // An agent command or live-view input keeps a session from closing as idle.
+  const touch = (site: string) => void (sessions.has(site) && (sessions.get(site)!.used = Date.now()))
+  // A session closes past its lifetime, when idle, when no agent needs it any more, or when its site changed.
   function sweep() {
     for (const [site, session] of sessions)
       if (session.until <= Date.now()) void closeQuietly(site, 'expired')
+      else if (Date.now() - session.used > idleLimit) void closeQuietly(site, 'idle')
+      else if (!env.wanted(site)) void closeQuietly(site, 'no agent holds or asks for it')
       else if (JSON.stringify(env.sites()[site]) !== session.setup) void closeQuietly(site, 'setup changed')
   }
 
@@ -183,7 +202,9 @@ export function createBrowser(env: Env) {
           },
           onMessage(event) {
             const input = inputSchema.safeParse(parseJson(String(event.data)))
-            if (input.success && upstream?.readyState === WebSocket.OPEN) upstream.send(JSON.stringify(input.data))
+            if (!input.success || upstream?.readyState !== WebSocket.OPEN) return
+            touch(site)
+            upstream.send(JSON.stringify(input.data))
           },
           onClose: () => upstream?.close(),
         }
@@ -197,12 +218,13 @@ export function createBrowser(env: Env) {
     until: (site: string) => sessions.get(site)?.until,
     check,
     run,
+    touch,
     open,
     close,
     sweep,
     routes,
     async stop() {
-      await Promise.allSettled([...sessions.keys()].map((site) => close(site, 'speaker stopped')))
+      await Promise.allSettled([...closing, ...[...sessions.keys()].map((site) => close(site, 'speaker stopped'))])
     },
   }
 }

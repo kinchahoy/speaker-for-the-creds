@@ -568,6 +568,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
             tell_user: `The owner has not opened ${site}; it opens from Setup at ${core.baseOf(c)}/admin?section=services#setup-browsers`,
           })
         const result = await core.browser.run(['--session', site, ...args], args[0] === 'screenshot')
+        core.browser.touch(site)
         if (gated.grant) core.useOf(gated.grant)
         core.useOf(agent)
         core.audit('browser_command', { agent: agent.id, site, command: args[0], ok: result.ok })

@@ -589,6 +589,11 @@ test('a browser site: the owner signs in through the live view, then a granted a
   await once(broker.stdout, 'data')
   const f = await start(t, { env: { BROWSER_BROKER_URL: `http://127.0.0.1:${port}`, BROWSER_BROKER_TOKEN: token } })
   assert.equal((await f.form('/browsers/save', { name: 'shop', startUrl, domains: '127.0.0.1' })).status, 303)
+  // No browser runs without need: it opens only once an agent asks for the site.
+  assert.equal((await f.form('/browser/shop/open', { life: '1h' })).status, 409)
+  const a = await f.enrol()
+  const command = (args: string[], name = 'shop') => a.as(`/_speaker/browser/${name}`, f.json({ args }))
+  assert.equal(await error(await command(['snapshot', '-i'])), 'approval_required')
   const opened = await f.form('/browser/shop/open', { life: '1h' })
   assert.deepEqual([opened.status, opened.headers.get('location')], [303, '/admin/browser/shop'])
   const page = await f.call('/admin/browser/shop', { headers: { cookie: f.cookie() } })
@@ -625,10 +630,7 @@ test('a browser site: the owner signs in through the live view, then a granted a
   await sleep(1000)
   ws.close()
 
-  // The agent: asks on use, then commands; arguments never reach the log.
-  const a = await f.enrol()
-  const command = (args: string[], name = 'shop') => a.as(`/_speaker/browser/${name}`, f.json({ args }))
-  assert.equal(await error(await command(['snapshot', '-i'])), 'approval_required')
+  // The owner approves; the agent's commands run, and their arguments never reach the log.
   await grant(f, a, 'browser:shop')
   const snapshot = await command(['snapshot'])
   assert.match(await snapshot.text(), /Welcome carol/)
@@ -647,8 +649,12 @@ test('a browser site: the owner signs in through the live view, then a granted a
 
   assert.equal((await f.form('/browser/shop/close', {})).status, 303)
   assert.equal((await command(['snapshot'])).status, 409)
+  // Once no agent holds or asks for the site, an open browser closes by itself.
+  assert.equal((await f.form('/browser/shop/open', { life: '1h' })).status, 303)
+  for (const card of await f.cards()) await f.decide(card.id, 'deny')
   await f.revoke('browser:shop')
   assert.equal((await command(['snapshot'])).status, 403)
+  assert.ok((await f.audit()).some((e) => e.event === 'browser_closed' && e.why === 'no agent holds or asks for it'))
   const logged = (await f.audit()).filter((e) => e.event === 'browser_command')
   assert.deepEqual(
     logged.map((e) => e.command),

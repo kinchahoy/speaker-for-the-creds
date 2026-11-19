@@ -426,7 +426,7 @@ export function agents(
       : ''
   }
   const pick = (i: Card['items'][number]) =>
-    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
+    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.kind === 'browser' ? html` <a href="/admin?section=services#setup-browsers" hx-boost="false">Open it to log in</a>` : ''}${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
   // Self-reported identity and what speaker itself knows stay on separate, labelled lines.
   const meta = ({ who, type, subject }: Card) =>
     type === 'host'

@@ -507,6 +507,10 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       : undefined,
     publicOrigin: new URL(config.PUBLIC_URL).origin,
     sites: () => ownerConfig.browsers,
+    wanted: (site) =>
+      [...engine.approvals.values()].some(
+        (a) => a.item === `browser:${site}` && (a.state === 'pending' || engine.grants(a.subject).includes(a)),
+      ),
     audit,
   })
   function sweep() {
