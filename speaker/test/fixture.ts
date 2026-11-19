@@ -99,7 +99,7 @@ export async function start(t: TestContext, { dir, env = {} }: { dir?: string; e
     }
     return (await call(`/admin/api${path}`, { headers: { authorization: `Bearer ${token}` } })).json()
   }
-  type Card = { id: string; items: { item: string; wider?: boolean }[] }
+  type Card = { id: string; as?: string; items: { item: string; wider?: boolean }[] }
   const cards = async () => ((await api('/pending')) as { pending: Card[] }).pending
   const grants = async () => ((await api('/active')) as { grants: { id: string; item: string }[] }).grants
   // Taps Approve (all items the card shows, or only `only`) or Deny on a card.
