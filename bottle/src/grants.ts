@@ -111,7 +111,7 @@ export const speakerRequestAllowed = (speaker: URL, url: URL, method: string, mo
     return (
       (method === "GET" && /^\/_speaker\/(health|catalog|help(?:\/[a-zA-Z0-9_-]+(?::[a-zA-Z0-9_-]+)?)?)$/.test(path)) ||
       (method === "GET" && /^\/_speaker\/(requests|secrets)\/[a-zA-Z0-9_-]+$/.test(path)) ||
-      (method === "POST" && path === "/_speaker/requests")
+      (method === "POST" && (path === "/_speaker/requests" || /^\/_speaker\/browser\/[a-zA-Z0-9_-]+$/.test(path)))
     );
   // A service, or a scope of one (`service:scope`); a scope of a hosted model's service is as closed as the service.
   const service = /^\/([a-zA-Z0-9_-]+)(?::[a-zA-Z0-9_-]+)?(?:\/|$)/.exec(path)?.[1];

@@ -213,6 +213,19 @@ Agents run commands on your hosts and use your folders through a jump server ins
 
 <!-- author: ai -->
 
+## Browser sites
+
+<sub>AI-written</sub>
+
+A browser site is a website the owner signs in to by hand, for agents to use without seeing the login. Setup holds each site's name, start URL and the domains it may reach; list every domain the sign-in page loads from (CDNs too), since requests to any other are blocked. **Open** (with a lifetime of 1h, 8h or 1d) starts a headless Chromium for it and shows a live view where the owner clicks and types the login; pasting works for passwords. An agent asks for `browser:<site>` (ask on use, like a service) and sends allowlisted commands to `POST /_speaker/browser/<site>`: snapshot, click, fill, type, press, scroll, wait, open (only the site's domains), back, forward, reload, get, screenshot. Agents never get cookies, storage, JavaScript evaluation, uploads, downloads or the debugging port, and the log records each command without its arguments. Nothing persists: a login ends when the owner closes the site, its lifetime runs out, its setup changes, or speaker stops.
+{.ai}
+
+- Chromium runs as its own OS user behind `browser-broker.ts`, a small HTTP server on 127.0.0.1 that runs agent-browser for speaker. Speaker makes every check; the broker only holds the bearer token. Speaker needs `BROWSER_BROKER_URL` and `BROWSER_BROKER_TOKEN` (32 characters or more); without them Setup still lists sites, and opening one names the fix.
+- Docker: the image has Chromium and starts the broker as `browser` and speaker as `node`, with a token made at each start unless `.env` sets one. `compose.yaml` adds `init`, the `SETUID` and `SETGID` capabilities the start script needs, and `chrome-seccomp.json` (Docker's default profile plus `clone`, `unshare` and `setns`, so Chromium keeps its own sandbox). Chromium adds about 740 MB to the image.
+- Laptop: run the broker as a separate user, for example `sudo -u <browser user> env BROWSER_BROKER_PORT=3100 BROWSER_BROKER_TOKEN=<token> AGENT_BROWSER_EXECUTABLE_PATH=<chromium> node browser-broker.ts`, and give speaker `BROWSER_BROKER_URL=http://127.0.0.1:3100` and the same token. Speaker connects to the live view's stream port on 127.0.0.1, so the broker runs on speaker's machine. On a laptop any local process can reach Chromium's debugging and stream ports on 127.0.0.1, so a logged-in session is open to every program on the machine: when other agents share it, run speaker and the broker in the container.
+
+<!-- author: ai -->
+
 ## Agent access
 
 <sub>AI-written</sub>

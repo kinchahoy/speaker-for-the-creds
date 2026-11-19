@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
-import { request as httpRequest } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { createServer as httpsServer } from 'node:https'
 import { connect, getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { once } from 'node:events'
 import { mkdir, mkdtemp, symlink, readFile, rm, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { tmpdir, userInfo } from 'node:os'
+import { existsSync, readdirSync } from 'node:fs'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import test, { type TestContext } from 'node:test'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -534,4 +534,124 @@ test('the proxy swaps an inserted secret’s placeholder for the real value, for
   assert.deepEqual(received, [`Bearer ${real}`])
   assert.equal(await proxied('example.org'), 403, 'a host the secret does not cover gets no tunnel')
   assert.deepEqual(received, [`Bearer ${real}`])
+})
+
+// The dev Chromium from Playwright's cache; the broker runs as this same user here.
+const chromium = () => {
+  const cache = join(homedir(), '.cache/ms-playwright')
+  const found = (existsSync(cache) ? readdirSync(cache) : [])
+    .filter((name) => /^chromium-\d+$/.test(name))
+    .map((name) => join(cache, name, 'chrome-linux64/chrome'))
+    .findLast(existsSync)
+  assert.ok(found, `No Chromium in ${cache}: run pnpm dlx playwright install chromium`)
+  return found
+}
+
+test('a browser site: the owner signs in through the live view, then a granted agent drives it with allowlisted commands', async (t) => {
+  // A login form that sets a cookie and greets the signed-in user.
+  const site = createServer((req, res) => {
+    if (req.method === 'POST') {
+      let form = ''
+      req.on('data', (chunk) => (form += chunk))
+      req.on('end', () => {
+        const user = new URLSearchParams(form).get('username')
+        res.writeHead(302, { 'set-cookie': `sid=${user}; HttpOnly`, location: '/home' }).end()
+      })
+      return
+    }
+    const user = /sid=(\w+)/.exec(req.headers.cookie ?? '')?.[1]
+    res.writeHead(200, { 'content-type': 'text/html' })
+    res.end(
+      req.url === '/home'
+        ? `<h1>${user ? `Welcome ${user}` : 'not signed in'}</h1>`
+        : '<title>Login</title><form method=post action=/login><input name=username placeholder=username aria-label=username><input name=password type=password aria-label=password><button>Sign in</button></form>',
+    )
+  })
+  site.listen(0, '127.0.0.1')
+  await once(site, 'listening')
+  const startUrl = `http://127.0.0.1:${(site.address() as { port: number }).port}/`
+  const token = 'browser-broker-token-for-tests-0123456789'
+  const port = await freePort()
+  const broker = spawn('node', ['browser-broker.ts'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      BROWSER_BROKER_PORT: String(port),
+      BROWSER_BROKER_TOKEN: token,
+      AGENT_BROWSER_EXECUTABLE_PATH: chromium(),
+    },
+    stdio: ['ignore', 'pipe', 'inherit'],
+  })
+  t.after(() => {
+    broker.kill()
+    site.close()
+  })
+  await once(broker.stdout, 'data')
+  const f = await start(t, { env: { BROWSER_BROKER_URL: `http://127.0.0.1:${port}`, BROWSER_BROKER_TOKEN: token } })
+  assert.equal((await f.form('/browsers/save', { name: 'shop', startUrl, domains: '127.0.0.1' })).status, 303)
+  const opened = await f.form('/browser/shop/open', { life: '1h' })
+  assert.deepEqual([opened.status, opened.headers.get('location')], [303, '/admin/browser/shop'])
+  const page = await f.call('/admin/browser/shop', { headers: { cookie: f.cookie() } })
+  assert.match(await page.text(), /<canvas/)
+  const setupPage = await (await f.call('/admin?section=services', { headers: { cookie: f.cookie() } })).text()
+  assert.match(setupPage, /id="setup-browsers"[\s\S]*shop[\s\S]*open, closes/)
+
+  // The live view: only from the public origin, with the owner's cookie.
+  const view = (origin: string) =>
+    new WebSocket(`${f.url.replace('http', 'ws')}/admin/browser/shop/ws`, { headers: { cookie: f.cookie(), origin } })
+  const [, refused] = await once(
+    view('http://evil.example').on('error', () => undefined),
+    'unexpected-response',
+  )
+  assert.equal((refused as { statusCode: number }).statusCode, 403)
+  const ws = view('http://localhost')
+  const [frame] = (await once(ws, 'message')) as [Buffer]
+  assert.deepEqual([...frame.subarray(0, 2)], [0xff, 0xd8], 'frames arrive as JPEG')
+  const send = (message: object) => ws.send(JSON.stringify(message))
+  const click = async (x: number, y: number) => {
+    for (const eventType of ['mousePressed', 'mouseReleased'])
+      send({ type: 'input_mouse', eventType, x, y, button: 'left', clickCount: 1 })
+    await sleep(200)
+  }
+  const type = (text: string) => [...text].forEach((c) => send({ type: 'input_keyboard', eventType: 'char', text: c }))
+  await click(100, 18)
+  type('carol')
+  send({ type: 'navigate', url: 'http://example.com/' }) // anything but input is dropped
+  await click(285, 18)
+  type('pw')
+  const enter = { type: 'input_keyboard', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }
+  send({ ...enter, eventType: 'keyDown', text: '\r' })
+  send({ ...enter, eventType: 'keyUp' })
+  await sleep(1000)
+  ws.close()
+
+  // The agent: asks on use, then commands; arguments never reach the log.
+  const a = await f.enrol()
+  const command = (args: string[], name = 'shop') => a.as(`/_speaker/browser/${name}`, f.json({ args }))
+  assert.equal(await error(await command(['snapshot', '-i'])), 'approval_required')
+  await grant(f, a, 'browser:shop')
+  const snapshot = await command(['snapshot'])
+  assert.match(await snapshot.text(), /Welcome carol/)
+  assert.match(await (await command(['get', 'url'])).text(), /\/home$/)
+  const shot = await command(['screenshot'])
+  assert.equal(shot.headers.get('content-type'), 'image/png')
+  assert.deepEqual([...new Uint8Array(await shot.arrayBuffer()).subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47])
+  for (const args of [
+    ['eval', '1'],
+    ['fill', 'e1', '--session', 'other'],
+    ['open', 'http://example.com/'],
+  ])
+    assert.equal((await command(args)).status, 400, args.join(' '))
+  assert.equal((await command(['snapshot'], 'nowhere')).status, 404)
+  assert.deepEqual((await a.catalog()).browsers.shop.open, true)
+
+  assert.equal((await f.form('/browser/shop/close', {})).status, 303)
+  assert.equal((await command(['snapshot'])).status, 409)
+  await f.revoke('browser:shop')
+  assert.equal((await command(['snapshot'])).status, 403)
+  const logged = (await f.audit()).filter((e) => e.event === 'browser_command')
+  assert.deepEqual(
+    logged.map((e) => e.command),
+    ['snapshot', 'get', 'screenshot'],
+  )
 })

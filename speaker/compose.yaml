@@ -20,9 +20,15 @@ services:
     volumes:
       - data:/data
     read_only: true
+    # tini reaps Chromium's processes; SETUID and SETGID let the start script switch to the `node` and `browser` users.
+    init: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    cap_add: [SETUID, SETGID]
+    # Docker's default seccomp profile plus clone, unshare and setns for Chromium's sandbox.
+    security_opt: [no-new-privileges:true, seccomp=./chrome-seccomp.json]
     tmpfs: [/tmp]
+    # Chromium uses /dev/shm for page rendering; Docker's 64 MB default is too small for it.
+    shm_size: 256m
 
 volumes:
   data:

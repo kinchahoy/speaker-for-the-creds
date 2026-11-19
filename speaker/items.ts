@@ -3,7 +3,7 @@
 
 // A service is `name` or a scope `name:scope` (the part before the colon is the service whose key it uses); the other
 // kinds' prefixes can never be a scope's parent, so `site:x.read` stays a site.
-export const kindPrefixes = ['site', 'secret', 'ssh', 'folder', 'mcp', 'ext', 'group', 'host']
+export const kindPrefixes = ['site', 'secret', 'ssh', 'folder', 'mcp', 'ext', 'group', 'host', 'browser']
 // Items are strings; the pattern table doubles as the list of accepted forms in error messages.
 export const itemPatterns = {
   service: new RegExp(`^(?!(?:${kindPrefixes.join('|')}):)[a-zA-Z0-9_-]+(:[a-zA-Z0-9_-]+)?\\.(read|full)$`),
@@ -14,6 +14,8 @@ export const itemPatterns = {
   mcp: /^mcp:[a-zA-Z0-9_-]+$/,
   ext: /^ext:[a-zA-Z0-9_-]+$/,
   group: /^group:[a-zA-Z0-9_-]+$/,
+  // A logged-in browser site the owner set up and opens by hand (see browser.ts).
+  browser: /^browser:[a-zA-Z0-9_-]+$/,
   // A sandbox host's own registration (`host:<id>`); only a sandbox host asks for it, by registering.
   host: /^host:[a-zA-Z0-9_-]+$/,
 }
@@ -29,6 +31,7 @@ export const itemForms = [
   'mcp:<id>',
   'ext:<id>',
   'group:<name>',
+  'browser:<site>',
 ]
 export const kindOf = (item: string) =>
   (Object.entries(itemPatterns) as [ItemKind, RegExp][]).find(([, pattern]) => pattern.test(item))?.[0]

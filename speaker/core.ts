@@ -19,7 +19,8 @@ import {
   type Kind,
   type Refusal as Refused,
 } from './engine.ts'
-import { durationNames, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
+import { createBrowser } from './browser.ts'
+import { coversAny, durationNames, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
 import { createStore, generateSshKey, openStore, type OwnerSecret, type Store, type Vault } from './store.ts'
@@ -211,11 +212,19 @@ export const secretSetupSchema = z.union([
   z.object({ release: z.literal(true) }),
   z.object({ hosts: secretHostsSchema, env: envNameSchema }),
 ])
+// A logged-in browser site: where its session starts, and the only domains it may reach (the start URL among them).
+export const browserSiteSchema = z
+  .object({ startUrl: urlSchema, domains: secretHostsSchema })
+  .refine((site) => coversAny(site.domains, new URL(site.startUrl).hostname), {
+    message: 'The start URL must be on one of the domains',
+    path: ['startUrl'],
+  })
 // config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
 export const configSchema = z.object({
   services: z.record(serviceIdSchema, serviceSchema),
   groups: groupsSchema.default({}),
   secrets: z.record(ownerSecretSchema.shape.name, secretSetupSchema).default({}),
+  browsers: z.record(idSchema, browserSiteSchema).default({}),
 })
 // What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 export const decisionSchema = z.object({
@@ -313,6 +322,13 @@ export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
       // The reverse proxy whose last X-Forwarded-For entry names the real caller (ignored from anyone else): its address,
       // or a name such as a Docker service name, which follows the container wherever it lands.
       TRUSTED_PROXY: z.union([z.ipv4(), z.ipv6(), z.hostname()]).optional(),
+      // The browser broker (browser-broker.ts, run as the browser user) for `browser:<site>`; both or neither.
+      BROWSER_BROKER_URL: z.url().optional(),
+      BROWSER_BROKER_TOKEN: z.string().min(32).optional(),
+    })
+    .refine((env) => !env.BROWSER_BROKER_URL === !env.BROWSER_BROKER_TOKEN, {
+      message: 'Set both BROWSER_BROKER_URL and BROWSER_BROKER_TOKEN, or neither',
+      path: ['BROWSER_BROKER_TOKEN'],
     })
     .parse(environment)
 }
@@ -485,10 +501,19 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     expire: () => sweep(),
   })
   const syncJump = () => void jump.sync().catch(() => undefined)
+  const browser = createBrowser({
+    broker: config.BROWSER_BROKER_URL
+      ? { url: config.BROWSER_BROKER_URL, token: config.BROWSER_BROKER_TOKEN ?? '' }
+      : undefined,
+    publicOrigin: new URL(config.PUBLIC_URL).origin,
+    sites: () => ownerConfig.browsers,
+    audit,
+  })
   function sweep() {
     const now = Date.now()
     for (const [id, end] of sessions) if (end <= now) sessions.delete(id)
     engine.sweep()
+    browser.sweep()
     for (const agent of enrolled())
       if (now - agent.lastSeen > agentIdleLimit && !engine.grants(agent.id).length) agents.delete(agent.id)
   }
@@ -601,13 +626,15 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   const serviceItem = (item: string) => {
     return kindOf(item) === 'service' ? { id: item.slice(0, -5), write: item.endsWith('.full') } : undefined
   }
-  // Item kinds an agent may ask for: services, groups, secrets, SSH and folders, plus what its sandbox host enforces.
+  // Item kinds an agent may ask for: services, groups, secrets, SSH, folders and browser sites, plus what its sandbox
+  // host enforces.
   const allowedKinds = (agent: Agent): string[] => [
     'service',
     'group',
     'secret',
     'ssh',
     'folder',
+    'browser',
     ...(hostOf(agent)?.kinds ?? []),
   ]
   const hostItem = (id: string) => `host:${id}`
@@ -744,6 +771,36 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       }),
     },
     ssh: { ...overSsh, where: 'speaker' },
+    // A browser site: speaker runs every command itself. Sessions belong to the site, shared by the agents that hold it,
+    // so ending a grant only stops that agent's access.
+    browser: {
+      ...base,
+      where: 'speaker',
+      validate: (item) =>
+        Object.hasOwn(ownerConfig.browsers, item.slice('browser:'.length))
+          ? undefined
+          : refuse(
+              item,
+              Object.keys(ownerConfig.browsers).map((site) => `browser:${site}`),
+              'Browser sites',
+            ),
+      admission: (item) =>
+        Object.hasOwn(ownerConfig.browsers, item.slice('browser:'.length))
+          ? { to: 'ask' }
+          : unavailable(`there is no browser site ${item.slice('browser:'.length)}`),
+      describe(item) {
+        const site = item.slice('browser:'.length)
+        const setup = Object.hasOwn(ownerConfig.browsers, site) ? ownerConfig.browsers[site] : undefined
+        return setup
+          ? {
+              text: `use the logged-in browser for ${site} (${setup.domains.join(', ')})`,
+              reach: setup.domains,
+              warning: broad(setup.domains),
+              risk: 'browser',
+            }
+          : { text: 'no longer set up', reach: [] }
+      },
+    },
     folder: { ...overSsh, where: 'both' },
     mcp: {
       ...base,
@@ -1054,7 +1111,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     try {
       const next = configSchema.parse(await json(configFile))
       if (JSON.stringify(next) === JSON.stringify(ownerConfig)) return // speaker's own save
-      for (const key of ['services', 'groups', 'secrets'] as const) {
+      for (const key of ['services', 'groups', 'secrets', 'browsers'] as const) {
         for (const name of Object.keys(ownerConfig[key])) delete ownerConfig[key][name]
         Object.assign(ownerConfig[key], next[key])
       }
@@ -1084,6 +1141,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     readLog,
     mcpTools,
     jump,
+    browser,
     proxy,
     get vault() {
       return vault

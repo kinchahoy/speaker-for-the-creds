@@ -7,6 +7,7 @@
     "@hono/node-server": "catalog:",
     "@modelcontextprotocol/client": "latest",
     "@peculiar/x509": "latest",
+    "agent-browser": "latest",
     "hono": "catalog:",
     "hono-rate-limiter": "latest",
     "htmx.org": "latest",

@@ -136,6 +136,20 @@ export function catalogView(
     // Complete command lines for the agent's SSH and folder grants.
     ssh: jump.commands(agent.id, new URL(baseOf(c)).hostname.replace(/^\[|\]$/g, '')),
     groups: groupsView,
+    // Logged-in browser sites: open says whether the owner has a session running now.
+    browsers: Object.fromEntries(
+      Object.keys(core.ownerConfig.browsers).map((site) => {
+        const grant = mine.find((held) => held.item === `browser:${site}`)
+        return [
+          site,
+          {
+            ...(grant ? { state: 'granted', until: grant.expiresAt } : { state: 'ask' }),
+            open: core.browser.live(site),
+            use: `POST ${baseOf(c)}/_speaker/browser/${site} {"args":["snapshot","-i"]}`,
+          },
+        ]
+      }),
+    ),
     requests: requests.map((request) => ({ ...outcome(request), want: request.want, reason: request.reason })),
   }
 }

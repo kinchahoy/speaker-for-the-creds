@@ -34,6 +34,13 @@ test("a call from inside the sandbox reaches its service with the real key only 
   ]);
   assert.equal((await f.guestCall("/_speaker/catalog")).status, 200);
   assert.deepEqual(await text(await f.guestCall("/_speaker/secrets/RELEASED")), [200, "released-value"]);
+  // A browser command passes the door (speaker answers it: there is no site x).
+  const browse = await fetch(`${f.doors.speaker}/_speaker/browser/x`, {
+    method: "POST",
+    headers: { authorization: "Bearer guest-dummy", "content-type": "application/json" },
+    body: JSON.stringify({ args: ["snapshot", "-i"] }),
+  });
+  assert.equal(browse.status, 404);
 
   // What stays closed: the parent of the granted scope, speaker's admin, the hosted model's service and a scope of it,
   // another agent's records, and the rest of speaker's own routes.

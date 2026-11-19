@@ -21,7 +21,7 @@ export type Description = {
   hint?: string
   // Not pre-ticked on the card.
   wider?: boolean
-  risk?: 'read/write' | 'secret' | 'SSH'
+  risk?: 'read/write' | 'secret' | 'SSH' | 'browser'
 }
 export type Refusal = { message: string; next: string }
 

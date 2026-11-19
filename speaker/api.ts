@@ -26,6 +26,7 @@ import {
   same,
   union,
 } from './core.ts'
+import { browserCommandSchema, browserUsage } from './browser.ts'
 import { catalogView, visibleServices } from './catalog.ts'
 import type { Approval, Request } from './engine.ts'
 import { type ErrorFields, itemForms, kindOf } from './items.ts'
@@ -537,6 +538,45 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
         core.useOf(agent)
         core.audit('secret_released', { agent: agent.id, secret: name })
         return c.text(owned.value, 200, { 'cache-control': 'no-store' })
+      })
+      // A logged-in browser site: an allowlisted command, gated like a service call (ask on use). Never the arguments in
+      // the log: fill and type may carry what the agent writes into the page.
+      .post('/_speaker/browser/:site', async (c) => {
+        const agent = agentCaller(c),
+          site = c.req.param('site')
+        if (!Object.hasOwn(core.ownerConfig.browsers, site))
+          return agentError(c, 404, 'not_found', `There is no browser site ${site}`, { next: catalogHint })
+        const { args } = browserCommandSchema.parse(await c.req.json())
+        const wrong = core.browser.check(site, args)
+        if (wrong)
+          throw invalid(
+            wrong,
+            browserUsage,
+            400,
+            'Send {"args":["snapshot","-i"]} first: its refs are what click, fill and type take',
+          )
+        const item = `browser:${site}`
+        const gated = await gate(c, agent, item, [item], `browser ${site}`, `browser ${site} ${args[0]}`)
+        if (gated instanceof Response) return gated
+        if (!core.browser.ready)
+          return agentError(c, 503, 'upstream_unavailable', 'Browser sites are not set up on this speaker', {
+            tell_user: `The owner sets up the browser broker (see speaker's README, "Browser sites")`,
+          })
+        if (!core.browser.live(site))
+          return agentError(c, 409, 'conflict', `The owner has not opened ${site}`, {
+            next: 'Wait, or tell the user',
+            tell_user: `The owner has not opened ${site}; it opens from Setup at ${core.baseOf(c)}/admin?section=services#setup-browsers`,
+          })
+        const result = await core.browser.run(['--session', site, ...args], args[0] === 'screenshot')
+        if (gated.grant) core.useOf(gated.grant)
+        core.useOf(agent)
+        core.audit('browser_command', { agent: agent.id, site, command: args[0], ok: result.ok })
+        if (!result.ok)
+          return agentError(c, 422, 'invalid', String(result.error), { next: 'Take a new snapshot and retry' })
+        if (result.png) return c.body(Buffer.from(result.png, 'base64'), 200, { 'content-type': 'image/png' })
+        const data = result.data ?? {}
+        const text = [data.snapshot, data.text, data.url, data.title].find((value) => typeof value === 'string')
+        return c.text(text ?? `ok: ${args[0]}`)
       })
       .all('/_speaker/*', (c) =>
         agentError(c, 404, 'not_found', 'Unknown route', { next: 'Read "Asking" in GET /_speaker/help' }),

@@ -1,5 +1,5 @@
-// Explicit lifecycles: one approval (every kind of item, for an agent or a sandbox host) and one relay session. A state
-// change goes through transition(); a move missing from a table throws.
+// Explicit lifecycles: one approval (every kind of item, for an agent or a sandbox host), one relay session and one
+// browser site. A state change goes through transition(); a move missing from a table throws.
 
 export type Table<S extends string, E extends string> = Readonly<Record<S, Readonly<Partial<Record<E, S>>>>>
 
@@ -35,4 +35,12 @@ export const sessionTable: Table<SessionState, 'begin' | 'close'> = {
   connecting: { begin: 'open', close: 'closed' },
   open: { close: 'closed' },
   closed: {},
+}
+
+// One logged-in browser site: off, or live (a Chromium session the owner opened) until the owner closes it, its lifetime
+// runs out, its setup changes, or speaker stops.
+export type BrowserState = 'off' | 'live'
+export const browserTable: Table<BrowserState, 'open' | 'close'> = {
+  off: { open: 'live' },
+  live: { close: 'off' },
 }

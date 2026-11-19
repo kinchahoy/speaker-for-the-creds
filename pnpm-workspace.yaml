@@ -14,3 +14,7 @@ catalog:
   oxfmt: latest
   oxlint: latest
   typescript: latest
+
+# agent-browser's postinstall only links its native binary; its launcher does that on first use.
+allowBuilds:
+  agent-browser: false

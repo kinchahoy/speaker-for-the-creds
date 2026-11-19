@@ -8,6 +8,7 @@ import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
   agentError,
+  browserSiteSchema,
   type Core,
   decisionSchema,
   groupDescriptionSchema,
@@ -24,7 +25,7 @@ import {
 } from './core.ts'
 import { kindPrefixes } from './items.ts'
 import { WrongPassword } from './store.ts'
-import { agents, icons, layout, log, setPasswordPage, setup, signInPage } from './ui.ts'
+import { agents, browserPage, icons, layout, log, setPasswordPage, setup, signInPage } from './ui.ts'
 
 const textLines = (text = '') =>
   text
@@ -266,6 +267,14 @@ export function adminApp(core: Core) {
         scope: c.req.query('scope'),
         sshTarget: c.req.query('sshTarget'),
         sshShare: c.req.query('sshShare'),
+        browsers: core.ownerConfig.browsers,
+        live: Object.fromEntries(
+          Object.keys(core.ownerConfig.browsers).flatMap((site) => {
+            const until = core.browser.until(site)
+            return until ? [[site, until]] : []
+          }),
+        ),
+        brokerReady: core.browser.ready,
         error: c.req.query('error'),
       }
       return c.html(layout(nonce, 'services', setup(data), core.engine.cards().length))
@@ -403,6 +412,39 @@ export function adminApp(core: Core) {
     core.engine.reconcile()
     return c.redirect('/admin?section=services', 303)
   })
+  admin.post('/browsers/save', async (c) => {
+    const form = await fields(c)
+    const name = idSchema.safeParse(form.name)
+    const site = browserSiteSchema.safeParse({
+      startUrl: form.startUrl,
+      domains: String(form.domains ?? '')
+        .split(/[\s,]+/)
+        .filter(Boolean),
+    })
+    if (!name.success || !site.success) return c.redirect('/admin?section=services&error=browser#setup-browsers', 303)
+    core.ownerConfig.browsers[name.data] = site.data
+    await core.saveConfig()
+    core.audit('browser_saved', { site: name.data })
+    // A wider domain list ends the grants already given; a live session with the old setup closes at the next sweep.
+    core.engine.reconcile()
+    return c.redirect('/admin?section=services#setup-browsers', 303)
+  })
+  admin.post('/browsers/delete', async (c) => {
+    const { name } = z.object({ name: idSchema }).parse(await fields(c))
+    if (!Object.hasOwn(core.ownerConfig.browsers, name))
+      throw new HTTPException(404, { message: 'Unknown browser site' })
+    delete core.ownerConfig.browsers[name]
+    await core.saveConfig()
+    core.audit('browser_deleted', { site: name })
+    core.engine.reconcile()
+    return c.redirect('/admin?section=services#setup-browsers', 303)
+  })
+  admin.get('/browser/:site', (c) => {
+    const site = c.req.param('site'),
+      until = core.browser.until(site)
+    if (!until) return c.redirect('/admin?section=services#setup-browsers', 303)
+    return c.html(browserPage(c.get('secureHeadersNonce'), site, until))
+  })
   admin.post('/password', async (c) => {
     const { current, ...next } = z
       .object({ current: z.string() })
@@ -486,6 +528,7 @@ export function adminApp(core: Core) {
     return redirect(c)
   })
   core.jump.routes(admin, fields, core.engine.reconcile)
+  core.browser.routes(admin, fields)
   admin.all('*', (c) => c.json({ error: 'admin_route_not_found' }, 404))
   return admin
 }

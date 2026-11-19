@@ -192,6 +192,7 @@ export const briefing = (
     "- What is installed and how to use it (Python only through uv, TypeScript, the browser for pages and screenshots): read `/opt/locally-available-tools.md` before installing anything. Get a missing tool from a package registry (`uv add`, `pnpm add`); request direct binary downloads only when no registry package exists.",
     "- To get access to anything (websites, secrets, folders, services, extensions), call `request_capability`; with `want: []` it lists what you hold and what you can ask for. Call a service you hold with `speaker [METHOD] <service>/<path> [json-body]`; your first message lists what you hold.",
     "- Subagents (`subagent`) run in this VM with your access and spend your model request budget. Limits: at most 2 children per call, children cannot delegate further, and every child uses your model. Delegate only independent work large enough to be worth a fresh context, and write the final answer yourself.",
+    '- A `browser:<site>` grant is a website the owner signed in to: send `speaker POST _speaker/browser/<site> \'{"args":["snapshot","-i"]}\'`, then `click`, `fill`, `type`, `press` with its refs, `open <url>`, `get url|text`, `screenshot`.',
     "- Never `sleep` to wait for a decision: the `[speaker]` message about it arrives only between your tool calls. Keep working on what does not need it.",
     "",
     "## Your tools",

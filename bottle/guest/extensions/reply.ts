@@ -10,6 +10,7 @@ export type CatalogView = {
   grants?: { item: string; applying?: boolean }[];
   extensions?: Record<string, { tools: string[]; state?: string }>;
   mcp?: Record<string, { tools: string[]; state?: string }>;
+  browsers?: Record<string, { state?: string; open?: boolean }>;
 };
 /** The part of POST /_speaker/requests the reply reads. */
 export type Decision = { status: string; granted?: string[]; applying?: string[]; denied?: string[]; expiresAt?: string };
@@ -27,6 +28,9 @@ export const FIXED_GUIDANCE = [
  * once, in the briefing. The lists come back when `want` is empty. */
 export const toolDescription =
   "Ask the owner for access you do not have: a website (site:<hostname>), secret, folder, SSH target, service, or extension. Put every item in one call. An empty `want` lists what you hold and what you can ask for. Your briefing has the rules.";
+
+/** A logged-in browser site's first command; its refs feed click, fill and type. */
+const browse = (site: string) => `speaker POST _speaker/browser/${site} '{"args":["snapshot","-i"]}'`;
 
 /** One line per thing the agent holds, each with the exact way to use it. */
 export const accessBlock = (catalog: CatalogView) => {
@@ -50,6 +54,9 @@ export const accessBlock = (catalog: CatalogView) => {
       return [];
     }),
     ...(catalog.ssh ?? []).map(({ item, commands }) => [item, "ssh", commands[0] ?? ""]),
+    ...Object.entries(catalog.browsers ?? {}).flatMap(([name, { state, open }]) =>
+      state === "granted" ? [[`browser:${name}`, "browser", `${browse(name)}${open ? "" : " (not open yet: the owner opens it)"}`]] : [],
+    ),
     ...Object.entries(catalog.secrets ?? {}).flatMap(([name, secret]) => {
       if (secret.state !== "granted") return [];
       const [variable, value] = Object.entries(secret.environment ?? {})[0] ?? [];
@@ -91,6 +98,9 @@ export const askList = (catalog: CatalogView) =>
     ...Object.entries(catalog.mcp ?? {})
       .filter(([, entry]) => entry.state !== "granted")
       .map(([name]) => `mcp:${name} ask`),
+    ...Object.entries(catalog.browsers ?? {})
+      .filter(([, entry]) => entry.state !== "granted")
+      .map(([name]) => `browser:${name} ask`),
   ].join("\n") || "nothing more to ask for";
 
 const until = (iso: string | undefined, now = Date.now()) => {
@@ -163,6 +173,7 @@ export const grantedLine = (item: string, catalog: CatalogView, expiresAt?: stri
       "Keep working on anything that does not need them."
     );
   }
+  if (item.startsWith("browser:")) return `${head}. A website the owner signed in to: ${browse(item.slice(8))}, then click, fill, type or press with its refs.`;
   if (/\.(read|full)$/.test(item)) {
     const service = item.replace(/\.(read|full)$/, "");
     const how = catalog.services?.[service]?.mcp

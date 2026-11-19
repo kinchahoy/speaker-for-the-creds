@@ -320,7 +320,7 @@ export const speakerDoor =
         res,
         403,
         "this speaker path is not available to a sandboxed task",
-        "Available: <service>/<path>, /_speaker/catalog, /_speaker/help/<service>, /_speaker/secrets/<name>, /_speaker/requests",
+        "Available: <service>/<path>, /_speaker/catalog, /_speaker/help/<service>, /_speaker/secrets/<name>, /_speaker/requests, POST /_speaker/browser/<site>",
       );
     const requests = req.method === "POST" && target.pathname === "/_speaker/requests";
     await forward(req, res, target, {

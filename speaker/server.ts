@@ -57,7 +57,10 @@ export async function createApp(config: ReturnType<typeof readConfig>) {
   agentApi(app, core, adminApp(core))
   core.proxy.listen(config.PROXY_PORT, '0.0.0.0')
   await once(core.proxy, 'listening')
-  return Object.assign(app, { proxy: core.proxy, stop: () => core.jump.stop() })
+  return Object.assign(app, {
+    proxy: core.proxy,
+    stop: async () => void (await Promise.all([core.jump.stop(), core.browser.stop()])),
+  })
 }
 
 if (import.meta.main) {
@@ -71,7 +74,8 @@ if (import.meta.main) {
     }
   })()
   const app = await createApp(config)
-  // Stop the jump server and ssh-agent with speaker: left running, they keep SSH_PORT and block the next start.
+  // Stop the jump server and ssh-agent with speaker (left running, they keep SSH_PORT and block the next start), and close
+  // every browser session.
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.once(signal, () => void app.stop().finally(() => process.exit(0)))
   serve({ fetch: app.fetch, port: config.PORT, hostname: '0.0.0.0', websocket: { server: wss } }, (info) =>

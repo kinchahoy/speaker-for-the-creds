@@ -2,6 +2,7 @@
 // confirmations and form posts. The panel polls every 5 seconds and is morphed (idiomorph), so open disclosures and focus stay.
 import { html, raw } from 'hono/html'
 import { type Group, identityFields, type LogEntry, type Service, type View } from './core.ts'
+import { type BrowserSite, brokerMissing, lifetimes } from './browser.ts'
 import type { SshSetup } from './jump.ts'
 type Html = ReturnType<typeof html>
 type Owned = Record<string, { hosts?: string[]; env?: string; release?: true }>
@@ -17,6 +18,10 @@ export type Setup = {
   scope?: string
   sshTarget?: string
   sshShare?: string
+  browsers: Record<string, BrowserSite>
+  // Open sessions: site → when its lifetime ends (ms).
+  live: Record<string, number>
+  brokerReady: boolean
   error?: string
 }
 const css = `
@@ -99,6 +104,7 @@ export const icons: Record<string, [icon: string, hue: number]> = {
   host: ['shield-check', 250],
   agent: ['bot', 180],
   ssh: ['terminal', 95],
+  browser: ['app-window', 160],
   edit: ['pencil', 0],
   log: ['scroll-text', 0],
   del: ['trash', 0],
@@ -280,6 +286,7 @@ const kinds = {
   ssh: 'SSH',
   mcp: 'MCP',
   ext: 'Extensions',
+  browser: 'Browser sites',
 }
 const filterBar = html`<div class="chips" role="search" hidden><input type="text" name="q" placeholder="Filter by name or item" aria-label="Search"><label><input type="radio" name="kind" value="" checked>All</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${mark(k)}${text}</label>`)}</div>`
 const filterEmpty = html`<div id="filter-empty" class="panel" hidden><p>No items match this filter.</p><button type="button" class="secondary" data-clear-filter>Clear filter</button></div>`
@@ -559,7 +566,7 @@ export function agents(
 }
 const groupErrors: Record<string, string> = {
   empty: 'Group not saved: list at least one item, one per line.',
-  line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], mcp:<id> or ext:<id>.',
+  line: 'Group not saved: each line must be an item: <service>.read, <service>.full, site:<host>, secret:<NAME>, ssh:<target>, folder:<share>[:rw], browser:<site>, mcp:<id> or ext:<id>.',
   id: 'Group not saved: the id may use letters, numbers, - and _ (up to 64 characters).',
   description: 'Group not saved: keep the description to one line of at most 200 characters.',
 }
@@ -593,6 +600,9 @@ export function setup({
   scope,
   sshTarget,
   sshShare,
+  browsers,
+  live,
+  brokerReady,
   error,
 }: Setup) {
   const chosen = selected && Object.hasOwn(services, selected) ? services[selected] : undefined
@@ -758,13 +768,36 @@ export function setup({
     html`<tr>${td('Group', html`<strong>${id}</strong><br><small>${plural(group.items.length, 'item', 'items')}</small>`)}${td('Purpose', group.description ?? '')}${td('Members', preview(group.items, true))}${act(button('/admin/groups/delete', hidden('id', id), `Delete ${id}`, `Delete group ${id}? Agents can no longer request it. Existing grants stay.`, 'del'))}</tr>`,
     more(4, 'Edit', groupForm(id, group)),
   ])
-  const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
+  const browserForm = (name = '', site?: BrowserSite) =>
+    html`<form method="post" action="/admin/browsers/save">${input('name', 'Name (agents ask for browser:NAME)', 'text', name)}${input('startUrl', 'Start URL (the sign-in page)', 'url', site?.startUrl)}${area('domains', 'Domains it may reach, one per line (example.com, *.example.com)', site?.domains.join('\n'))}${consequence('Saving closes an open session for it; adding a domain ends the grants already given.')}<button>Save browser site</button></form>`
+  const browserRows = Object.entries(browsers).flatMap(([name, site]) => {
+    const q = encodeURIComponent(name)
+    const until = live[name]
+    const open = html`<form method="post" action="/admin/browser/${q}/open" hx-boost="false" class="actions"><select name="life" aria-label="Lifetime" style="width:auto;margin:0">${Object.keys(lifetimes).map((life) => html`<option>${life}</option>`)}</select><button class="secondary">Open</button></form>`
+    return [
+      html`<tr>${td('Name', html`${ico('browser')}<strong>${name}</strong>`)}${td('Start URL', html`<code>${site.startUrl}</code>`)}${td('Domains', preview(site.domains, true))}${td('State', until ? html`open, closes ${local(until, 'Closes ')}` : 'closed')}${act(
+        until
+          ? html`<a class="action-btn" href="/admin/browser/${q}" hx-boost="false">View</a>${button(`/admin/browser/${q}/close`, '', `Close ${name}`, `Close ${name}? Its login ends.`)}`
+          : open,
+        button(
+          '/admin/browsers/delete',
+          hidden('name', name),
+          `Delete ${name}`,
+          `Delete browser site ${name}? Its session and grants end.`,
+          'del',
+        ),
+      )}</tr>`,
+      more(5, 'Edit', browserForm(name, site)),
+    ]
+  })
+  const browserPanel = html`${brokerReady ? '' : html`<p class="warn" role="note">${brokerMissing}.</p>`}${error === 'browser' ? html`<p class="warn" role="alert">Browser site not saved: the name uses letters, numbers, - and _; the start URL is http(s), without a query, on one of the domains.</p>` : ''}${browserRows.length ? table(['Name', 'Start URL', 'Domains', 'State', 'Actions'], browserRows) : empty('No browser sites. A browser site is a website you sign in to by hand; agents then use it without seeing the login.')}<details><summary>Add a browser site</summary>${browserForm()}</details>`
+  const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="#setup-browsers">Browsers</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-browsers"><h2 title="A browser site is a headless Chromium session you open and sign in to by hand; agents with a grant drive it with commands and never see its cookies.">Browser sites</h2>${browserPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
 }
 const s = (value: unknown) => String(value ?? '')
 const arr = (v: unknown) => (Array.isArray(v) ? v.map(s) : [])
 const itemKind = (item: string) =>
-  /^(site|ext|secret|folder|ssh|mcp):/.exec(item)?.[1] ?? (/\.(read|full)$/.test(item) ? 'service' : '')
+  /^(site|ext|secret|folder|ssh|mcp|browser):/.exec(item)?.[1] ?? (/\.(read|full)$/.test(item) ? 'service' : '')
 const tokens: Record<string, string> = {
   request_created: 'request',
   grant_created: 'grant +',
@@ -794,7 +827,7 @@ const what = (e: LogEntry) => {
           e.op,
           e.path,
           e.command ?? (e.event === 'ssh_session' ? 'sftp' : ''),
-          ...items.map((i) => (same ? i.replace(/^(site|ext|secret|folder|ssh|mcp):/, '') : i)),
+          ...items.map((i) => (same ? i.replace(/^(site|ext|secret|folder|ssh|mcp|browser):/, '') : i)),
           e.why,
           e.reason,
         ]
@@ -856,3 +889,31 @@ export function log(
         : empty('No events yet. Calls and decisions appear here as they happen.')
   }</section>`
 }
+
+// The live view of one open browser site: frames drawn on a canvas, the owner's mouse and keys sent back (browser.ts relays
+// only input events). No htmx here, so leaving the page closes the stream.
+const viewScript = `const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d'), status = document.querySelector('#status')
+const ws = new WebSocket(location.origin.replace(/^http/, 'ws') + location.pathname + '/ws')
+ws.binaryType = 'blob'
+ws.onmessage = async (e) => { ctx.drawImage(await createImageBitmap(e.data), 0, 0, canvas.width, canvas.height); status.textContent = 'Live' }
+ws.onclose = () => { status.textContent = 'Closed: reopen it from Setup' }
+const send = (message) => ws.readyState === 1 && ws.send(JSON.stringify(message))
+const at = (e) => { const r = canvas.getBoundingClientRect(); return { x: Math.round((e.clientX - r.left) * 1280 / r.width), y: Math.round((e.clientY - r.top) * 720 / r.height) } }
+const mouse = (eventType, e, more = {}) => send({ type: 'input_mouse', eventType, ...at(e), button: 'left', clickCount: 1, ...more })
+canvas.onmousedown = (e) => { canvas.focus(); mouse('mousePressed', e) }
+canvas.onmouseup = (e) => mouse('mouseReleased', e)
+canvas.onmousemove = (e) => mouse('mouseMoved', e, { button: 'none', clickCount: 0 })
+canvas.onwheel = (e) => { e.preventDefault(); mouse('mouseWheel', e, { button: 'none', clickCount: 0, deltaX: e.deltaX, deltaY: e.deltaY }) }
+const codes = { Enter: 13, Backspace: 8, Tab: 9, Escape: 27, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 }
+const char = (text) => send({ type: 'input_keyboard', eventType: 'char', text })
+canvas.onkeydown = (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return
+  e.preventDefault()
+  if (codes[e.key]) for (const eventType of ['keyDown', 'keyUp'])
+    send({ type: 'input_keyboard', eventType, key: e.key, code: e.code, windowsVirtualKeyCode: codes[e.key], ...(e.key === 'Enter' && eventType === 'keyDown' ? { text: '\\r' } : {}) })
+  else if (e.key.length === 1) char(e.key)
+}
+// A pasted password (from a password manager) is typed in, one character at a time.
+document.onpaste = (e) => { for (const c of e.clipboardData.getData('text')) char(c) }`
+export const browserPage = (nonce: string | undefined, site: string, until: number) =>
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${site} · Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/open-props.css"><style>${raw(css)}canvas{display:block;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface-2)}</style></head><body><main><h2>${site} <small id="status">Connecting</small></h2><p>Click into the page and sign in; paste works for passwords. Agents holding <code>browser:${site}</code> use this session until it closes ${local(until, 'Closes ')}. <a href="/admin?section=services#setup-browsers">Back to Setup</a></p><canvas width="1280" height="720" tabindex="0" aria-label="Live view of ${site}"></canvas><script nonce="${nonce ?? ''}">${raw(viewScript)}</script></main></body></html>`

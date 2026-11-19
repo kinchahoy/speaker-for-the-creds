@@ -1,6 +1,6 @@
 ---
 name: access-and-creds
-version: 9
+version: 10
 description: "Get owner-approved access through speaker: homelab APIs (Obsidian, Home Assistant, ...), SSH hosts, folders, and secrets such as GitHub tokens. Use when a task needs access, a credential, API key, token, SSH or `gh` you lack, or a call returns 401 or 403."
 ---
 
@@ -33,7 +33,7 @@ The script above does this: `d="${XDG_STATE_HOME:-$HOME/.local/state}/speaker"`,
 
 ## Asking
 
-A service call with `Speaker-Wait: 60` asks the owner for you. For several items, `POST $SPEAKER_URL/_speaker/requests` with `Speaker-Wait: 60` and `{"want":["<item>"],"reason":"<one sentence>","duration":"2h"}`. Items: `<service>.read`, `<service>.full` (also change), `ssh:<target>`, `folder:<share>` (`:rw` to change files), `secret:<NAME>`, `group:<name>` (when you need three or more of its items). Durations: `30m`, `1h`, `2h`, `1d`, `30d`. Ask for the minimum. Posting the same items again joins the pending request. Folders and SSH targets are not listed: use the exact name from your task.
+A service call with `Speaker-Wait: 60` asks the owner for you. For several items, `POST $SPEAKER_URL/_speaker/requests` with `Speaker-Wait: 60` and `{"want":["<item>"],"reason":"<one sentence>","duration":"2h"}`. Items: `<service>.read`, `<service>.full` (also change), `ssh:<target>`, `folder:<share>` (`:rw` to change files), `secret:<NAME>`, `browser:<site>`, `group:<name>` (when you need three or more of its items). Durations: `30m`, `1h`, `2h`, `1d`, `30d`. Ask for the minimum. Posting the same items again joins the pending request. Folders and SSH targets are not listed: use the exact name from your task.
 
 ## Folders and SSH
 
@@ -42,6 +42,10 @@ Make a throwaway key once (`ssh-keygen -t ed25519 -N '' -f "$d/ssh_key"`) and se
 ## Secrets
 
 Ask for `secret:<NAME>`. The catalog then shows `environment` (a placeholder, `HTTPS_PROXY`, `SSL_CERT_FILE`), the allowed hosts and the one-time `certificate` and `git` commands. Run those once, replace `<token>` in `HTTPS_PROXY` with the part of your header file after `Bearer `, and set the variables only on the command that needs them: `GH_TOKEN=<placeholder> HTTPS_PROXY=<value> SSL_CERT_FILE=<value> gh pr list`. Speaker swaps in the real token only for the allowed hosts. A secret marked `release` is read with `GET /_speaker/secrets/<NAME>`; do not store or repeat it.
+
+## Browser sites
+
+A `browser:<site>` in the catalog's `browsers` is a website the owner signs in to by hand; you drive that session without seeing its login. `POST $SPEAKER_URL/_speaker/browser/<site>` with `{"args":["snapshot","-i"]}` answers the page as text with refs (`e1`); then `click <ref>`, `fill <ref> <text>`, `type <ref> <text>`, `press <key>`, `scroll <dir> [px]`, `wait <ref|ms>`, `open <url>` (only the site's domains), `back`, `forward`, `reload`, `get url|title|text [ref]`, or `screenshot` (a PNG). No argument may start with `-` (except snapshot's `-i`, `-c`). `conflict` means the owner has not opened the site: tell the user.
 
 ## Remote MCP servers
 
