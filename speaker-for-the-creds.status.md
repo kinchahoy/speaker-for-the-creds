@@ -14,6 +14,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Real-time guidance (to be questioned)
 
+- 2026-11-18: "I like jump-to-terminal so got to keep those powers" (on the Herdr mod: the full `herdr/mods/speaker` stays; `speaker-lite` lacks bottle's agents and jump-to-terminal)
 - 2026-11-18: "I like the purity of I just type in the creds and they die after X time (speaker recycles box) but in the future giving speaker some creds to automate this sounds helpful."
 
 ## Ideas
@@ -40,6 +41,7 @@ The guest's tools now come from one file, `bottle/guest/locally-available-tools.
 **Open**
 - 2026-11-18: Not verified until the rebuild: that Chromium starts as the guest user with `--no-sandbox`, that agent-browser accepts the full system bundle as `caCert`, and that the Debian `imagemagick` provides `magick`.
 - 2026-11-18: Measured with a fake model server (no model calls): Pi's per-call system text went from about 6,900 to about 150 characters (SYSTEM.md replaces Pi's default; extension skill lists and proper-base's skills block are dropped), and tool declarations from about 10,100 to 8,500 (bg_wait and subagent_supervisor off; agents lose waiting on background runs and children asking the parent). pi-loop-police kept: it adds no prompt text and guards small local models. Biggest remaining cost: `subagent` at 3,400 characters; making subagents opt-in per task would save it.
+- 2026-11-18: Herdr: the full mod stays the one in use (the owner wants jump-to-terminal). `herdr/mods/speaker-lite` (97 lines, a Mac audition: bar, toast, sign-in, approve/deny/web) is kept, unused, as the reference for trimming the full mod (389 lines) later. Windows now runs the full mod in a `main-speaker` layout (a hand-made clone must not carry `cloned_from` without its `version`; Herdr writes why to `layout.error`).
 - 2026-11-18: Per-call text from bottle is now one system line plus a short `request_capability` description (about 430 characters, was about 4,700); the briefing goes once as the first message and sits at `/etc/bottle/briefing.md`. Not run in a real bottle yet: watch that an attended launch without a prompt gets the briefing with the owner's first message, that Pi re-reads the file after compaction, and that it still uses uv and asks for access in one call. This needs a real Pi run (model calls), not an image rebuild.
 - Goal check: proposed addition to the North star, for the owner to rewrite: "Agents can see and act in logged-in web apps (Home Assistant first) through a browser speaker holds; the owner types the login and it dies with the session." (what changed: the 2026-11-18 guidance line about typing the login and letting it expire; question: is the logged-in browser part of the to-do agent's path, or a side track?)
 
