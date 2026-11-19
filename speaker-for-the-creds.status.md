@@ -24,7 +24,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Next steps
 
-- [ ] Build the speaker image and try a browser site for real: Chromium's sandbox under `chrome-seccomp.json`, setpriv with only SETUID/SETGID, the live view in a real browser (canvas, keys, paste), then Home Assistant `size:M` `needs:me`
+- [ ] Try a browser site for real on the 411 speaker (image built, Chromium sandboxed): the live view in a real browser (canvas, keys, paste), then Home Assistant `size:M` `needs:me`
 - [x] Logged-in browser held by speaker (agent-browser as a separate user, owner logs in live through a relayed view in /admin, agents act through `browser:<site>` grants) `size:L` `needs:agent`
 - [x] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
 - [x] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
@@ -43,7 +43,7 @@ Moved out of the README, kept here so nothing is lost. Goal: "a to-do list kept 
 - See Next steps above.
 
 **Open**
-- 2026-11-18: Other machines running bottle (nuc10i5) need the same hand update before restarting: stop bottle, move `templates` from `~/.bottle/config/templates.json` into `~/.bottle/config.json`, delete `configRoot`, then remove `~/.bottle/config/`.
+- 2026-11-18: Deployed to nuc10i5 (the 411 server) over hc: speaker and bottle images from `6cf6777`, the new guest image loaded, bottle's config migrated in its volume (backups `config.json.bak-2026-11-18`, `config.bak-2026-11-18/`; old image kept as `bottle:pre-2026-11-18`), bottle re-registered and connected. The 411 speaker stack needed `init`, `cap_add` SETUID/SETGID/SYS_CHROOT, `chrome-seccomp.json` and `shm_size`; Chromium there reports full sandboxing. Those edits sit uncommitted in the server's systemsandinfo checkout, and that repo's `stacks/bottle/Dockerfile` copy is stale (the repo's `bottle/Dockerfile` replaces it; its howto still describes the old config files). Not yet tried: an agent launch on the new guest, and a browser site.
 - 2026-11-18: The example config still has owner-flavoured examples (the `notes-read` and `life` groups; obsidian, karakeep and homeassistant services). Keep as realistic examples, or trim for strangers?
 - 2026-11-18: `bottle/compose.yaml` (bottle in a container) is unfinished: nothing creates its config, `bottle build` cannot run inside it, libkrun under `cap_drop: ALL` is untested. Its header says so. Finish or delete?
 - 2026-11-18: Still to decide for distribution: install from the lockfile by default (owner: "not yet, soon"), published images, a prebuilt guest image, an upgrade story.
