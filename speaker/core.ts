@@ -370,19 +370,19 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   await mkdir(dataDir, { recursive: true, mode: 0o700 })
   const file = (name: string) => join(dataDir, name)
   // config.json: everything the owner set up except the values (services, groups, what each secret may reach), so it
-  // can be shared; the values live in the encrypted store. A fresh install starts from the starter services.
+  // can be shared; the values live in the encrypted store. A fresh install starts from config.example.json.
   const configFile = file('config.json')
   const json = async (path: string | URL) => {
     const text = await optionalFile(path)
     return text === undefined ? undefined : JSON.parse(text)
   }
   const starter = async () => {
-    const services = await json(new URL('./services.example.json', import.meta.url))
-    services.demo.baseUrl = `http://127.0.0.1:${config.PORT}/_demo-upstream`
-    return services
+    const example = await json(new URL('./config.example.json', import.meta.url))
+    example.services.demo.baseUrl = `http://127.0.0.1:${config.PORT}/_demo-upstream`
+    return example
   }
   const stored = await json(configFile)
-  const ownerConfig = configSchema.parse(stored ?? { services: await starter() })
+  const ownerConfig = configSchema.parse(stored ?? (await starter()))
   const saveConfig = () => save(configFile, ownerConfig)
   if (!stored) await saveConfig()
   const { services, groups } = ownerConfig

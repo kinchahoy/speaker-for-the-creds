@@ -1,5 +1,6 @@
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { FIXED_GUIDANCE, piToolNames, type GrantChange } from "../guest/extensions/reply.ts";
 import type { Config } from "./config.ts";
@@ -75,9 +76,10 @@ export type Catalog = z.infer<typeof Catalog>;
 /** `bottle build` writes this list of the guest image's linked plugins next to the agent state. */
 const manifestPath = (config: Config) => `${config.stateRoot}/guest-plugins.txt`;
 
-/** Reads and validates `<configRoot>/catalog.json`; every extension's guestPath must exist in the guest image, per the build's manifest. */
+/** Reads and validates the repository's catalog.json (it describes the guest image built from this repository); every extension's guestPath must exist in the guest image, per the build's manifest. */
+const catalogPath = fileURLToPath(new URL("../catalog.json", import.meta.url));
 export const loadCatalog = (config: Config): Catalog => {
-  const catalog = Catalog.parse(JSON.parse(readFileSync(`${config.configRoot}/catalog.json`, "utf8")));
+  const catalog = Catalog.parse(JSON.parse(readFileSync(catalogPath, "utf8")));
   let manifest: Set<string>;
   try {
     manifest = new Set(readFileSync(manifestPath(config), "utf8").split("\n"));
@@ -88,7 +90,7 @@ export const loadCatalog = (config: Config): Catalog => {
     if (!manifest.has(guestPath))
       throw new Error(
         `catalog extension "${id}" names ${guestPath}, which is not in the guest image (${config.guestImage}). ` +
-          `Fix: correct guestPath in ${config.configRoot}/catalog.json, or pin the package in guest/pi-package.json and run bottle build`,
+          `Fix: correct guestPath in ${catalogPath}, or pin the package in guest/pi-package.json and run bottle build`,
       );
   return catalog;
 };

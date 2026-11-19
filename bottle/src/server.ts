@@ -7,7 +7,7 @@ import { z } from "zod";
 import { reconcile } from "./sandbox.ts";
 import { configPathFromEnv, loadConfig, type Config } from "./config.ts";
 import { errorBody } from "../../speaker/items.ts";
-import { codes, loadTemplates, StatusError } from "./grants.ts";
+import { codes, StatusError } from "./grants.ts";
 import { loadCatalog } from "./pi.ts";
 import { readHostToken } from "./speaker.ts";
 import { closed, finishedAgents, Agents, type Agent } from "./agents.ts";
@@ -144,11 +144,10 @@ export const startGuestListener = (config: Config, agents: Agents) => {
 /** Starts the trusted service: catalog, launch templates, agent manager, and both listeners. */
 export const startService = (config: Config) => {
   const catalog = loadCatalog(config);
-  const templates = loadTemplates(`${config.configRoot}/templates.json`);
-  const agents = new Agents(config, templates, catalog, readHostToken(config));
+  const agents = new Agents(config, catalog, readHostToken(config));
   startControl(config, agents);
   startGuestListener(config, agents);
-  console.log(`templates ${[...templates.keys()].join(" ")}`);
+  console.log(`templates ${config.templates.map(({ id }) => id).join(" ")}`);
   return { agents };
 };
 

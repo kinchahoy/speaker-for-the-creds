@@ -1,4 +1,7 @@
 # syntax=docker/dockerfile:1
+# The Linux system inside every agent's VM (not a container to run). `bottle build` (guest/build.sh) builds it and
+# loads it into microsandbox; run that again after editing. To add a command-line tool, add a line to
+# locally-available-tools.md; to add a Pi extension, pin it in pi-package.json and list it in ../catalog.json.
 # The guest image, on Debian slim, in five layers (least-changing first). Latest releases throughout, except the pinned
 # Pi extensions. guest/build.sh builds it for the host architecture (linux/amd64 and linux/arm64 share this file) and
 # loads it into microsandbox, which runs it as is.

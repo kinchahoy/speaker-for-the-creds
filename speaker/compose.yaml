@@ -1,3 +1,13 @@
+# Runs speaker in its hardened container: `docker compose up -d --build` here (or `mise run speaker:up`).
+# Edit speaker/.env, not this file, for PUBLIC_URL, PORT, PROXY_PORT and SSH_PORT (see .env.example). State (config,
+# encrypted secrets, audit log) lives in the named volume `data`; open PUBLIC_URL/admin to set the owner password.
+# Speaker's own port and the secrets proxy are published on 127.0.0.1 only, which is right when bottle runs on this
+# machine or in a container on this Docker network. When bottle runs on another machine, publish PROXY_PORT (and keep
+# SSH_PORT reachable) on an address that machine can reach, such as the LAN or tailnet address, never the public
+# internet. For example change
+#   - "127.0.0.1:${PROXY_PORT:?...}:${PROXY_PORT:?...}"
+# to
+#   - "100.64.0.10:${PROXY_PORT:?...}:${PROXY_PORT:?...}"
 services:
   speaker:
     build:
@@ -15,7 +25,8 @@ services:
       - "127.0.0.1:${PORT:-3000}:3000"
       # The secrets proxy (PROXY_PORT in .env, published on the same port number).
       - "127.0.0.1:${PROXY_PORT:?Set PROXY_PORT in .env}:${PROXY_PORT:?Set PROXY_PORT in .env}"
-      # The jump server, which listens only while an SSH or folder grant is active.
+      # The jump server, which listens only while an SSH or folder grant is active. Published on every address; put an
+      # address in front (as above) to narrow it.
       - "${SSH_PORT:?Set SSH_PORT in .env}:${SSH_PORT:?Set SSH_PORT in .env}"
     volumes:
       - data:/data

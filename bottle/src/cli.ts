@@ -10,7 +10,7 @@ import { attach } from "./sandbox.ts";
 import type { ControlApi } from "./server.ts";
 import { registerHost } from "./speaker.ts";
 import { bottleHome, configPathFromEnv, controlOrigin, loadConfig, localModelUp, type Config } from "./config.ts";
-import { givenAtLaunch, loadTemplates } from "./grants.ts";
+import { givenAtLaunch } from "./grants.ts";
 import { availableModels, loadCatalog } from "./pi.ts";
 import { finishedAgents } from "./agents.ts";
 
@@ -352,7 +352,7 @@ program
   .action(async ({ json }) => {
     const { config } = connect();
     const { extensions } = loadCatalog(config);
-    const templates = [...loadTemplates(`${config.configRoot}/templates.json`).values()].map((template) => ({
+    const templates = config.templates.map((template) => ({
       id: template.id,
       label: template.label,
       ...(template.model && { model: template.model }),

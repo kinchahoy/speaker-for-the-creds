@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
@@ -73,14 +73,6 @@ export const givenAtLaunch = (template: Template, extensions: Record<string, { s
 export const launchRequest = (template: Template, agentId: string, extra: string[] = [], given: string[] = []) => {
   const want = [...new Set([...template.want.filter((item) => !given.includes(refOf(item)) || !item.startsWith("ext:")), ...extra])];
   return want.length ? { agentId, want, reason: `launch template ${template.id}: ${template.label}`, duration: template.duration } : undefined;
-};
-
-export const loadTemplates = (path: string) => {
-  const templates = z
-    .array(Template)
-    .refine((list) => new Set(list.map(({ id }) => id)).size === list.length, "templates repeat an id")
-    .parse(JSON.parse(readFileSync(path, "utf8")));
-  return new Map(templates.map((template) => [template.id, template]));
 };
 
 /** An entry carries its own expiry; every use compares it with the current time. */

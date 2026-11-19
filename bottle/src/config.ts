@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { Template } from "./grants.ts";
 
 const port = z.number().int().min(1).max(65_535);
 const model = z.object({
@@ -42,7 +43,6 @@ const ConfigFile = z
     // proxyPort is speaker's PROXY_PORT: where requests to a granted secret's hosts go so speaker can insert the secret.
     // sshPort is speaker's SSH_PORT: where the guest reaches the jump server for `folder:` grants.
     speaker: z.object({ url: z.url(), proxyPort: port, sshPort: port }),
-    configRoot: z.string(),
     stateRoot: z.string(),
     outputRoot: z.string(),
     // The guest's model endpoint (guestHost) always exists for hosted providers; the local model server behind it is
@@ -56,6 +56,8 @@ const ConfigFile = z
       wake: z.object({ command: z.string().min(1), waitSeconds: z.number().positive().default(180) }).optional(),
     }),
     hostedProviders: z.array(HostedProviderSchema),
+    // What `bottle run -t <id>` launches: VM limits, the items asked for at launch, and the folders mounted.
+    templates: z.array(Template).min(1),
     // A detached agent (run -d, or Ctrl-\ during run) gets a tab in the Herdr app's "bottle" space when `hc` is on PATH; false turns that off.
     herdr: z.boolean().optional(),
     // A bottle that `run` started stops itself once no agent has been open for this long; `serve` never does.
@@ -82,6 +84,7 @@ const ConfigFile = z
     if (new Set(config.localModel.models.map((entry) => entry.id)).size !== config.localModel.models.length) fail("localModel repeats a model id");
     const aliases = [...config.localModel.models, ...config.hostedProviders.flatMap((provider) => provider.models)].flatMap((entry) => entry.alias ?? []);
     if (new Set(aliases).size !== aliases.length) fail("model aliases must be unique");
+    if (new Set(config.templates.map(({ id }) => id)).size !== config.templates.length) fail("templates repeat an id");
   });
 
 export type Config = z.infer<typeof ConfigFile>;
@@ -139,7 +142,6 @@ export const localModelReady = ({ localModel: { upstream, wake } }: Config, poll
 
 export const validateConfig = (data: unknown): Config => {
   const config = ConfigFile.parse(data);
-  assertDirectory("configRoot", config.configRoot);
   assertDirectory("stateRoot", config.stateRoot);
   assertDirectory("outputRoot", config.outputRoot);
   return config;

@@ -8,7 +8,6 @@
 !speaker/items.ts
 !speaker/lifecycle.ts
 !bottle/start.sh
-!bottle/templates.json
 !bottle/catalog.json
 !bottle/config.example.json
 !bottle/src

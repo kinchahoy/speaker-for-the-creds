@@ -5,7 +5,6 @@ import {
   accessSync,
   closeSync,
   constants,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -93,13 +92,13 @@ const untilFixed = async (problem: () => Promise<string | undefined>, fix: strin
 };
 /** The parts of an existing config.json that become the defaults when updating it. */
 type Previous = {
-  configRoot?: string;
   controlPort?: number;
   guestPort?: number;
   guestImage?: string;
   speaker?: { url?: string };
   localModel?: { upstream?: string; models?: { id: string }[] };
   hostedProviders?: unknown[];
+  templates?: unknown[];
 };
 const readPrevious = (path: string): Previous | undefined => {
   if (!existsSync(path)) return undefined;
@@ -263,8 +262,8 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   checkHost(!flags["skip-build"]);
   ok("KVM access, setsid, and Docker are available.");
 
-  const [configRoot, stateRoot, outputRoot] = ["config", "state", "output"].map((name) => join(home, name));
-  for (const directory of [home, configRoot, stateRoot, outputRoot]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const [stateRoot, outputRoot] = ["state", "output"].map((name) => join(home, name));
+  for (const directory of [home, stateRoot, outputRoot]) mkdirSync(directory, { recursive: true, mode: 0o700 });
   // The guest image and VM disks need room, and microsandbox refuses a folder with a group- or world-writable ancestor.
   const msbHome = microsandboxHome();
   const disk = statfsSync(existingAncestor(msbHome));
@@ -350,21 +349,22 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
   const image = await ask(flags.image, yes, oldImage, () =>
     p.text({ message: `Guest image: the Linux system each agent's VM boots (Enter keeps ${oldImage})`, placeholder: oldImage, defaultValue: oldImage }),
   );
+  const example = JSON.parse(readFileSync(join(here, "config.example.json"), "utf8"));
   const config = {
-    ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")),
+    ...example,
     bindHost: "127.0.0.1",
     controlPort,
     guestPort,
     guestImage: image,
     // The ports are placeholders from config.example.json until `register` learns the real ones from speaker.
-    speaker: { ...JSON.parse(readFileSync(join(here, "config.example.json"), "utf8")).speaker, url: speakerUrl },
-    configRoot,
+    speaker: { ...example.speaker, url: speakerUrl },
     stateRoot,
     outputRoot,
   };
   // The starter hosted providers (OpenRouter, Claude, OpenAI) work once their keys are on the speaker services; an
-  // existing config keeps its own list.
+  // existing config keeps its own list, and its own templates.
   if (previous?.hostedProviders) config.hostedProviders = previous.hostedProviders;
+  if (previous?.templates) config.templates = previous.templates;
   config.localModel = model
     ? { ...config.localModel, upstream: endpoint, models: [{ id: model, label: model }] }
     : { guestHost: config.localModel.guestHost, models: [] };
@@ -374,8 +374,9 @@ export async function initBottle(flags: BottleFlags, ownerPassword?: string) {
     fail(`these settings are not valid: ${(error as Error).message}`, "correct the answer, then run init again");
   }
   writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  for (const file of ["templates.json", "catalog.json"]) copyFileSync(join(here, file), join(configRoot, file));
-  ok(`Wrote ${configPath}. Config, state, and output are under ${home}.`);
+  // The shared folder the starter templates mount read-write into every agent.
+  mkdirSync(join(homedir(), "agent-space"), { recursive: true });
+  ok(`Wrote ${configPath}; state and output are under ${home}. Agents share ~/agent-space.`);
 
   if (
     !flags["skip-link"] &&

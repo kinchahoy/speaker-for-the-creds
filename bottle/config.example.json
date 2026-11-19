@@ -9,7 +9,6 @@
     "proxyPort": 7003,
     "sshPort": 7004
   },
-  "configRoot": "/srv/bottle/config",
   "stateRoot": "/srv/bottle/state",
   "outputRoot": "/srv/bottle/output",
   "localModel": {
@@ -42,7 +41,10 @@
           "id": "deepseek/deepseek-v4.1-flash-1017",
           "label": "DeepSeek V4.1 Flash",
           "alias": "deepseek",
-          "openRouterRouting": { "only": ["deepinfra/fp8"], "allow_fallbacks": false }
+          "openRouterRouting": {
+            "only": ["deepinfra/fp8"],
+            "allow_fallbacks": false
+          }
         }
       ]
     },
@@ -77,6 +79,66 @@
           "label": "GPT-5 mini"
         }
       ]
+    }
+  ],
+  "templates": [
+    {
+      "id": "sealed",
+      "label": "Sealed: the agent space, no network",
+      "limits": {
+        "cpus": 2,
+        "memoryMiB": 2048,
+        "rootfsGiB": 8,
+        "workGiB": 20,
+        "maxRuntimeHours": 24
+      },
+      "want": ["ext:pi-cc-monitor", "ext:pi-cc-loop"],
+      "duration": "1d",
+      "folders": ["~/agent-space:rw"]
+    },
+    {
+      "id": "builder",
+      "label": "Builder: agent space, packages, public GitHub, docs and web search",
+      "limits": {
+        "cpus": 2,
+        "memoryMiB": 2048,
+        "rootfsGiB": 8,
+        "workGiB": 20,
+        "maxRuntimeHours": 72,
+        "maxModelRequests": 1500
+      },
+      "want": ["ext:pi-cc-monitor", "ext:pi-cc-loop", "group:developer", "group:research"],
+      "duration": "1d",
+      "folders": ["~/agent-space:rw"]
+    },
+    {
+      "id": "trusted",
+      "label": "Trusted: builder plus Parallel web search and fetch of any page",
+      "limits": {
+        "cpus": 2,
+        "memoryMiB": 2048,
+        "rootfsGiB": 8,
+        "workGiB": 20,
+        "maxRuntimeHours": 24
+      },
+      "want": ["ext:pi-cc-monitor", "ext:pi-cc-loop", "group:developer", "group:research", "parallel-search.read"],
+      "duration": "1d",
+      "folders": ["~/agent-space:rw"]
+    },
+    {
+      "id": "cron",
+      "label": "Cron: wakes itself on a schedule for up to a week, with web search",
+      "limits": {
+        "cpus": 2,
+        "memoryMiB": 2048,
+        "rootfsGiB": 8,
+        "workGiB": 20,
+        "maxRuntimeHours": 168,
+        "maxModelRequests": 3000
+      },
+      "want": ["ext:pi-cc-monitor", "ext:pi-cc-loop", "group:research"],
+      "duration": "30d",
+      "folders": ["~/agent-space:rw"]
     }
   ]
 }

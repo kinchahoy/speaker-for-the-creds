@@ -6,5 +6,5 @@
 !bottle/package.json
 !speaker/package.json
 !speaker/*.ts
-!speaker/services.example.json
+!speaker/config.example.json
 !speaker/skill

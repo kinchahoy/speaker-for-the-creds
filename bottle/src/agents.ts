@@ -9,7 +9,7 @@ import { kindOf, type ItemKind } from "../../speaker/items.ts";
 import { type Table, transition } from "../../speaker/lifecycle.ts";
 import { localModelReady, type Config } from "./config.ts";
 import { boot, note, type Boot, type Guest, type Live } from "./sandbox.ts";
-import { givenAtLaunch, launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired, type Template } from "./grants.ts";
+import { givenAtLaunch, launchFolders, launchRequest, refOf, secretHosts, siteRef, StatusError, unexpired } from "./grants.ts";
 import { availableModels, grantChange, pi, writeGrantChange, writeGuestConfig, type Catalog } from "./pi.ts";
 import { speakerCa, speakerClient, speakerProxy, watchGrants, type Grant, type SecretInfo, type Snapshot } from "./speaker.ts";
 
@@ -191,13 +191,11 @@ export class Agents {
   secrets: SecretInfo[] = [];
   readonly speaker: ReturnType<typeof speakerClient>;
   readonly config: Config;
-  readonly templates: Map<string, Template>;
   catalog: Catalog;
 
   /** `vm` starts an agent's VM; tests pass a stand-in. */
-  constructor(config: Config, templates: Map<string, Template>, catalog: Catalog, hostToken: string, vm: Boot = boot) {
+  constructor(config: Config, catalog: Catalog, hostToken: string, vm: Boot = boot) {
     this.config = config;
-    this.templates = templates;
     this.catalog = catalog;
     this.#boot = vm;
     this.speaker = speakerClient(config, hostToken);
@@ -244,7 +242,7 @@ export class Agents {
     // Closed and failed-archive agents stay listed for the owner but no longer hold a slot.
     if (this.list().filter((agent) => !closed(agent)).length >= this.config.maxAgents)
       throw new StatusError(409, `already running ${this.config.maxAgents} agents`);
-    const template = this.templates.get(input.template);
+    const template = this.config.templates.find(({ id }) => id === input.template);
     if (!template) throw new StatusError(400, `no template ${input.template}`);
     const attended = input.attended ?? true;
     const name = input.name ?? template.id;

@@ -1,3 +1,9 @@
+# Runs bottle (the agent VM host) in a container beside speaker's: `docker compose up -d --build` here.
+# Unfinished and untested end to end: the usual install runs bottle on the host with `mise run init bottle`.
+# Set BOTTLE_NAME, AGENT_SPACE, BOTTLE_OUTPUT, KVM_GID and SPEAKER_NETWORK in bottle/.env. Before the first start, by
+# hand: put a config.json in the data volume at /data/config.json (from config.example.json, with speaker.url
+# http://speaker:3000 and bindHost 127.0.0.1), and load the guest image, which is built with Docker on the host, into
+# /data/microsandbox (docker save <image> | msb load --tag <guestImage>); then register with speaker as below.
 services:
   bottle:
     build:

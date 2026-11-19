@@ -161,7 +161,7 @@ export async function startBottle(t: TestContext) {
   const hostToken = await speaker.host();
 
   const root = await mkdtemp(join(tmpdir(), "bottle-agents-"));
-  const dirs = { configRoot: join(root, "config"), stateRoot: join(root, "state"), outputRoot: join(root, "output") };
+  const dirs = { stateRoot: join(root, "state"), outputRoot: join(root, "output") };
   for (const dir of Object.values(dirs)) await mkdir(dir);
   const config = {
     ...dirs,
@@ -210,7 +210,8 @@ export async function startBottle(t: TestContext) {
       close: async () => {},
     } satisfies Guest;
   };
-  const agents = new Agents(config, new Map([["work", Template.parse(work)]]), catalog, hostToken, boot);
+  config.templates = [Template.parse(work)];
+  const agents = new Agents(config, catalog, hostToken, boot);
   t.after(() => {
     agents.stop();
     servers.forEach(close);

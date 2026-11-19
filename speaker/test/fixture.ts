@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { createServer as createSocket } from 'node:net'
 import type { AddressInfo } from 'node:net'
@@ -31,8 +31,7 @@ export async function start(t: TestContext, { dir, env = {} }: { dir?: string; e
   const restarted = dir !== undefined
   const dataDir = dir ?? (await mkdtemp(join(tmpdir(), 'speaker-test-')))
   if (!restarted) {
-    const services = JSON.parse(await readFile(new URL('../services.example.json', import.meta.url), 'utf8'))
-    await writeFile(join(dataDir, 'config.json'), JSON.stringify({ services, groups: {} }))
+    await copyFile(new URL('../config.example.json', import.meta.url), join(dataDir, 'config.json'))
   }
   const seen: { url?: string; headers: Record<string, unknown> }[] = []
   const upstream = createServer((req, res) => {
