@@ -3,7 +3,7 @@ project: speaker-for-the-creds
 topic: Agents & security
 state: paused
 priority: P1
-updated: 2026-11-18T16:40
+updated: 2026-11-18T18:30
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -14,6 +14,7 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Real-time guidance (to be questioned)
 
+- 2026-11-18: On the logged-in browser: Chromium runs as a separate user now ("Separate user now"), and "Lets start with me doing the login live?"
 - 2026-11-18: "I like jump-to-terminal so got to keep those powers" (on the Herdr mod: the full `herdr/mods/speaker` stays; `speaker-lite` lacks bottle's agents and jump-to-terminal)
 - 2026-11-18: "I like the purity of I just type in the creds and they die after X time (speaker recycles box) but in the future giving speaker some creds to automate this sounds helpful."
 
@@ -24,12 +25,26 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Next steps
 
+- [ ] Build the speaker image and try a browser site for real: Chromium's sandbox under `chrome-seccomp.json`, setpriv with only SETUID/SETGID, the live view in a real browser (canvas, keys, paste), then Home Assistant `size:M` `needs:me`
+- [x] Logged-in browser held by speaker (agent-browser as a separate user, owner logs in live through a relayed view in /admin, agents act through `browser:<site>` grants) `size:L` `needs:agent`
 - [x] Review the uncommitted combined diff (speaker, bottle, Herdr mod; the Herdr mod is about 23% over the owner's 20% budget) `size:M` `needs:agent`
 - [x] Format `speaker/init.ts` and `speaker/test/proxy.test.ts` so `mise run check` passes (formatting only) `size:S` `needs:agent`
 - [x] Give the go-ahead to commit and deploy the working tree (deployed speaker and bottle run `06525ba`) `size:S` `needs:me`
 - [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle; also that the build passes its tools check and that `agent-browser open example.com` (granted) plus `screenshot` work in the guest `size:M` `needs:me`
 - [ ] Decide the wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command` `size:M` `needs:me`
 - [ ] Decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button) `size:M` `needs:me`
+
+## 2026-11-18 18:30 · paused
+
+Browser sites are built: `browser:<site>` grants, a broker (`speaker/browser-broker.ts`) that runs agent-browser and Chromium as a separate user, a live view in /admin where the owner logs in by hand, and an allowlist of agent commands (open within the site's domains, snapshot, click, fill, type, press, scroll, wait, back, forward, reload, screenshot, get). Nothing persists: a login ends at close, expiry (1h, 8h, 1d), a setup change or restart. Checked: `mise run check`, speaker tests 18/18 (one end-to-end test with real Chromium: live-view login, approval, commands, refusals, close, revoke), bottle 7/7. Not checked: the Docker image (not built), the live view in a real browser. Restore tag `pre-browser-2026-11-18`.
+
+**Next**
+- See Next steps above.
+
+**Open**
+- 2026-11-18: pnpm re-resolved the `latest` catalog when agent-browser was added, so the lockfile also moved hono, lucide-static, oxfmt and oxlint; reverting gives the same bumps. Kept; say if they should be pinned back.
+- 2026-11-18: Known v1 limits: after a speaker crash (not a clean stop) a site's browser keeps running until it is opened again; two Opens at the same moment could both start; on a laptop any local process can reach Chromium's debugging port on 127.0.0.1 (the README says to use the container when other agents share the machine); text an agent types cannot start with `-` (flag injection guard).
+- 2026-11-18: agent-browser's domain allowlist also blocks page assets from unlisted domains, so a site's domains must include its CDNs.
 
 ## 2026-11-18 16:40 · paused
 
