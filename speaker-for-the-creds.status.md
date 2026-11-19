@@ -3,7 +3,7 @@ project: speaker-for-the-creds
 topic: Agents & security
 state: paused
 priority: P1
-updated: 2026-11-18T18:30
+updated: 2026-11-18T21:00
 repo: ~/code/workshop/speaker-for-the-creds
 tags: [workshop, status]
 ---
@@ -21,7 +21,6 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 ## Ideas
 
 - Secret-URL credentials in the encrypted store: some upstreams use the URL itself as the credential (ha-mcp's in-process server at `.../api/webhook/<id>` or `:9584/private_<random>`), so today that secret sits in plain service config as `baseUrl`; let a service's `baseUrl` (or a path segment) come from an encrypted secret instead: serves the star because the Home Assistant path the to-do agent depends on would keep its credential under the same unlock-and-log rules as every other key · cost S · 2026-11-18
-- Logged-in browser held by speaker: agent-browser runs outside any agent's VM, the owner types the login into the approval card (in-memory profile, killed on expiry, revoke or lock), agents get page outlines, clicks and screenshots through speaker as an MCP service with eval, state, upload and download denied; later speaker keeps the password in its store and logs in again itself. Where it runs is open: B, a child process of speaker as a separate user with Chromium's sandbox, or D, a separate bottle VM (stronger isolation and a real allowlist, but bottle would hold a secret): serves the star because the Home Assistant frontend keeps its token in the browser, so this is the way an agent can see HA dashboards without the token · cost L · 2026-11-18
 
 ## Next steps
 
@@ -33,6 +32,21 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 - [ ] Rebuild the guest image and check titles, pi-subagents and Pi status reports in a real bottle; also that the build passes its tools check and that `agent-browser open example.com` (granted) plus `screenshot` work in the guest `size:M` `needs:me`
 - [ ] Decide the wake-on-demand design: bottle events to URLs with an optional sidecar, in place of `localModel.wake.command` `size:M` `needs:me`
 - [ ] Decide whether to build the Atuin threads push (`bottle thread <id>` plus a Save to Atuin button) `size:M` `needs:me`
+
+## 2026-11-18 21:00 · paused
+
+Ready-for-strangers pass after an outside review: MIT license (Varun Rao), a CI workflow that runs only by hand for now, docs cut from 927 to about 480 lines (DESIGN.md folded into speaker/README.md's "Security model and design"; every section opens with `_AI-drafted_`; the root README opens with what/why/a demo and a placeholder for the owner's overview, and has one "Where configuration lives" table), and fewer configuration places: speaker is `.env` plus /admin (one `speaker/config.example.json` seeds services and groups), bottle is one `~/.bottle/config.json` (templates inside; the catalog is the repo's `bottle/catalog.json`). Shipped templates no longer name the owner's models or services. node 26 and pnpm latest everywhere. Checked: `mise run check`, speaker 18/18, bottle 7/7, `bottle templates` on this machine after hand-updating `~/.bottle` (backups: `config.json.bak-2026-11-18`, `config.bak-2026-11-18/`). Restore tag `pre-distribution-2026-11-18`.
+
+Moved out of the README, kept here so nothing is lost. Goal: "a to-do list kept by an agent that wakes about every 3 hours, with back-and-forth from the owner's phone, updating the owner's iOS Reminders through Home Assistant" (also in the Goal check below the 16:40 entry). Not yet: one recorded end-to-end pass on real endpoints (ask, approve, call, revoke); the A-L checklist is in `git show pre-distribution-2026-11-18:speaker/DESIGN.md`, "Verifying end to end". Side tracks: Atuin threads (`bottle thread <id>`, Save to Atuin in the Herdr inbox); Langfuse export of model calls; pre-warmed VM snapshots (`Sandbox.restore()`, `cowMemory()`); Pi packages `pi-tool-repair`, `@sting8k/pi-vcc` if a real problem shows up; Signal channels for agents (signal-cli-rest-api, `signal-tasks`/`signal-routine` services). Planned (from DESIGN.md): bottle status in /admin as bounded untrusted text; a Herdr launch form (template, model, mode, folders); one WebSocket per agent for most routes; a to-do list kept across runs and a channel that reaches the owner away from a browser or Herdr.
+
+**Next**
+- See Next steps above.
+
+**Open**
+- 2026-11-18: Other machines running bottle (nuc10i5) need the same hand update before restarting: stop bottle, move `templates` from `~/.bottle/config/templates.json` into `~/.bottle/config.json`, delete `configRoot`, then remove `~/.bottle/config/`.
+- 2026-11-18: The example config still has owner-flavoured examples (the `notes-read` and `life` groups; obsidian, karakeep and homeassistant services). Keep as realistic examples, or trim for strangers?
+- 2026-11-18: `bottle/compose.yaml` (bottle in a container) is unfinished: nothing creates its config, `bottle build` cannot run inside it, libkrun under `cap_drop: ALL` is untested. Its header says so. Finish or delete?
+- 2026-11-18: Still to decide for distribution: install from the lockfile by default (owner: "not yet, soon"), published images, a prebuilt guest image, an upgrade story.
 
 ## 2026-11-18 18:30 · paused
 
