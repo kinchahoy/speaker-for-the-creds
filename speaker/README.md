@@ -25,7 +25,7 @@ Other flags: `--port`, `--proxy-port`, `--ssh-port`, `--public-url`, `--trusted-
 
 _AI-drafted_
 
-`speaker/compose.yaml` builds the image from the repository root, keeps state in a named volume at `/data`, and runs read-only with all capabilities dropped except `SETUID` and `SETGID` (the start script uses them to run the browser broker and speaker as two users) and the `chrome-seccomp.json` profile. `mise run init speaker` is for running without Docker; in Docker the owner sets the password on the first visit to `/admin`.
+`speaker/compose.yaml` builds the image from the repository root, keeps state in a named volume at `/data`, and runs read-only with all capabilities dropped except `SETUID` and `SETGID` (the start script uses them to run the browser broker and speaker as two users) and `SYS_CHROOT` (Chromium's sandbox chroots inside its own user namespace), with the `chrome-seccomp.json` profile and `no-new-privileges`. Checked on Ubuntu 26.04 with Docker 28: Chromium reports itself fully sandboxed (PID and network namespaces, seccomp-BPF). `mise run init speaker` is for running without Docker; in Docker the owner sets the password on the first visit to `/admin`.
 
 ```sh
 cd speaker

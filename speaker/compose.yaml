@@ -34,7 +34,9 @@ services:
     # tini reaps Chromium's processes; SETUID and SETGID let the start script switch to the `node` and `browser` users.
     init: true
     cap_drop: [ALL]
-    cap_add: [SETUID, SETGID]
+    # SETUID and SETGID let the start script switch to the `node` and `browser` users. SYS_CHROOT: Chromium's sandbox
+    # chroots inside its own user namespace, and without it in the bounding set Chromium's zygote dies at start.
+    cap_add: [SETUID, SETGID, SYS_CHROOT]
     # Docker's default seccomp profile plus clone, unshare and setns for Chromium's sandbox.
     security_opt: [no-new-privileges:true, seccomp=./chrome-seccomp.json]
     tmpfs: [/tmp]
