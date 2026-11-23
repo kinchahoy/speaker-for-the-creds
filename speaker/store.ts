@@ -14,6 +14,7 @@ const run = promisify(execFile)
 
 // A released secret has no hosts and no variable: the agent reads the value itself.
 export type OwnerSecret = { value: string; hosts: string[]; env: string; release: boolean }
+export type PushSubscriptionRecord = { endpoint: string; keys: { p256dh: string; auth: string } }
 export type Vault = {
   // Upstream key of each service, by service id.
   services: Record<string, string>
@@ -23,6 +24,9 @@ export type Vault = {
   ssh: { private: string; public: string }
   // Certificate authority of the secrets proxy (PEM), made at first need.
   ca?: { cert: string; key: string }
+  // Web Push VAPID keypair and device subscriptions for /admin PWA notifications.
+  vapid?: { publicKey: string; privateKey: string }
+  pushSubscriptions?: PushSubscriptionRecord[]
 }
 export type Store = { vault: Vault; save(): Promise<void>; setPassword(password: string): Promise<void> }
 export class WrongPassword extends Error {

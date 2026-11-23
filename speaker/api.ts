@@ -24,7 +24,6 @@ import {
   noCounts,
   requestSchema,
   same,
-  union,
 } from './core.ts'
 import { browserCommandSchema, browserUsage } from './browser.ts'
 import { catalogView, visibleServices } from './catalog.ts'
@@ -128,9 +127,8 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       group.items.every((item) => core.allowedKinds(agent).includes(kindOf(item) ?? '')),
     )
   const catalogHint = 'GET /_speaker/catalog'
-  // Expands groups, adds the sites each extension needs (remembering which extension brought them), and asks each kind
-  // whether the name is real: one name the agent may not ask for fails the whole call, with the names it may use
-  // (never shares or targets), before anything reaches the owner.
+  // Expands groups and asks each kind whether the name is real: one name the agent may not ask for fails the whole
+  // call, with the names it may use (never shares or targets), before anything reaches the owner.
   function resolveItems(want: string[], agent: Agent) {
     const items = want.flatMap((item) => {
       if (kindOf(item) !== 'group') return [item]
@@ -155,15 +153,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       const refused = core.kinds[kind].validate(item, agent.id)
       if (refused) throw invalid(refused.message, undefined, 400, refused.next)
     }
-    // An extension brings the sites it needs, so one approval covers both. A site brought only by an extension (not
-    // asked for itself) is recorded against it: it ends with that extension's grant.
-    const catalog = core.connections.get(agent.host ?? '')?.catalog
-    const bundled: Record<string, string> = {}
-    for (const item of items)
-      if (kindOf(item) === 'ext')
-        for (const host of catalog?.extensions.find(({ id }) => `ext:${id}` === item)?.sites ?? [])
-          if (!items.includes(`site:${host}`)) bundled[`site:${host}`] ??= item
-    return { items: union(items, Object.keys(bundled)), bundled }
+    return [...new Set(items)]
   }
   const applying = (request: Request) =>
     core.engine
@@ -198,9 +188,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
     }
   }
   async function ask(c: Context<Env>, agent: Agent, input: z.infer<typeof requestSchema>) {
-    let items: string[], bundled: Record<string, string>
+    let items: string[]
     try {
-      ;({ items, bundled } = resolveItems(input.want, agent))
+      items = resolveItems(input.want, agent)
       if (input.sshKey) {
         agent.sshKey = input.sshKey
         core.syncJump()
@@ -217,7 +207,7 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
       if (error instanceof HTTPException) core.tally(agent, 'refused', error.message)
       throw error
     }
-    const request = core.engine.request('agent', agent.id, items, { ...input, bundled, as: selfName(c) })
+    const request = core.engine.request('agent', agent.id, items, { ...input, as: selfName(c) })
     await hold(c, () => settled(request))
     return core.engine.serial(() => outcome(c, request))
   }
@@ -393,11 +383,9 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
               const connection = core.connections.get(id)
               if (connection?.ws !== ws) return
               const message = z
-                .discriminatedUnion('type', [
-                  z.object({ type: z.literal('applied'), grantIds: z.array(z.string()) }),
-                  z.object({ type: z.literal('titles'), titles: z.record(z.string(), titleSchema) }),
-                  z.object({
-                    type: z.literal('catalog'),
+                .object({
+                  type: z.literal('state'),
+                  catalog: z.object({
                     mcps: z.array(z.object({ id: idSchema, label: z.string(), tools: z.array(z.string()) })),
                     extensions: z.array(
                       z.object({
@@ -405,24 +393,27 @@ export function agentApi(app: Hono<Env>, core: Core, admin: Hono) {
                         label: z.string(),
                         description: z.string(),
                         tools: z.array(z.string()),
-                        // Each site becomes a `site:` item, so it must be a valid one.
                         sites: z.array(
                           z.string().refine((host) => kindOf(`site:${host}`) === 'site', 'Not a site name'),
                         ),
                       }),
                     ),
                   }),
-                ])
+                  applied: z.array(z.string()),
+                  titles: z.record(z.string(), titleSchema),
+                })
                 .parse(JSON.parse(String(event.data)))
-              if (message.type === 'catalog') {
-                connection.catalog = { mcps: message.mcps, extensions: message.extensions }
+              if (JSON.stringify(connection.catalog) !== JSON.stringify(message.catalog)) {
+                connection.catalog = message.catalog
                 core.audit('host_catalog', {
                   host: id,
-                  mcps: message.mcps.length,
-                  extensions: message.extensions.length,
+                  mcps: message.catalog.mcps.length,
+                  extensions: message.catalog.extensions.length,
                 })
-              } else if (message.type === 'titles') core.setTitles(id, message.titles)
-              else connection.applied = new Set(message.grantIds)
+                core.engine.reconcile()
+              }
+              connection.applied = new Set(message.applied)
+              core.setTitles(id, message.titles)
             },
             onClose: (_event, ws) => {
               if (core.connections.get(id)?.ws === ws) core.connections.delete(id)

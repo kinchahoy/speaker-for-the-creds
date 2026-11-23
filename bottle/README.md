@@ -41,10 +41,6 @@ Everything bottle keeps is in `~/.bottle` (mode 700), or `$BOTTLE_HOME` (at most
 | `templates` | Launch templates; see below. |
 | `herdr` | `false` disables Herdr tabs; `true` makes a missing `hc` an error. |
 
-### Docker
-
-`bottle/compose.yaml` runs bottle in a read-only container with `/dev/kvm`, on speaker's Docker network (it reaches speaker by service name, `http://speaker:3000`). Its `.env` sets `BOTTLE_NAME` (the host name speaker shows), `AGENT_SPACE` and `BOTTLE_OUTPUT` (existing host folders for the shared agent space and the archives), `KVM_GID` (`getent group kvm`) and `SPEAKER_NETWORK`. The host token is bound to the container's address, so register from inside it: `docker compose exec bottle bottle register`; until then the container waits. Nothing is published; use `docker compose exec bottle bottle ls` and friends.
-
 ## Build and run
 
 _AI-drafted_

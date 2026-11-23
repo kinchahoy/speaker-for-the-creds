@@ -1,5 +1,6 @@
-// The owner's pages: Hono's html templates styled by Open Props and a small stylesheet, with htmx for the live Agents panel,
-// confirmations and form posts. The panel polls every 5 seconds and is morphed (idiomorph), so open disclosures and focus stay.
+// The owner's pages: Hono's html templates styled by Pico CSS (indigo) and a small stylesheet, with htmx for the live
+// Agents panel, confirmations and form posts. The panel updates via SSE (with a 30s fallback) and is morphed
+// (idiomorph), so open disclosures and focus stay.
 import { html, raw } from 'hono/html'
 import { type Group, identityFields, type LogEntry, type Service, type View } from './core.ts'
 import { type BrowserSite, brokerMissing, lifetimes } from './browser.ts'
@@ -25,86 +26,71 @@ export type Setup = {
   error?: string
 }
 const css = `
-.masked{-webkit-text-security:disc}
-:root{color-scheme:light dark;font:1rem/1.5 var(--font-system-ui);accent-color:var(--accent);caret-color:var(--accent);
---bg:light-dark(var(--gray-0),oklch(17% .012 262));--surface:light-dark(#fff,oklch(22% .015 262));--surface-2:light-dark(var(--gray-1),oklch(26% .016 262));--ink:light-dark(var(--gray-9),var(--gray-1));--dim:light-dark(var(--gray-7),var(--gray-4));--line:light-dark(var(--gray-3),oklch(32% .015 262));
---accent:light-dark(var(--indigo-8),var(--indigo-4));--on-accent:light-dark(#fff,oklch(16% .04 265));--region:light-dark(var(--indigo-0),oklch(19.5% .022 264));--ticket:light-dark(#fff,oklch(24% .018 262));--perf:light-dark(var(--indigo-3),oklch(38% .04 264));
---warn:light-dark(oklch(40% .11 70),oklch(85% .11 78));--warn-bg:light-dark(oklch(96.5% .03 82),oklch(27% .035 72));--warn-line:light-dark(oklch(85% .08 78),oklch(40% .06 72));
---bad:light-dark(var(--red-9),var(--red-3));--bad-bg:light-dark(var(--red-0),oklch(26% .055 25));--bad-line:light-dark(var(--red-3),oklch(42% .08 25))}
-*{box-sizing:border-box}html{scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:var(--line) transparent}[hidden]{display:none!important}
-body{margin:0;min-width:320px;background:var(--bg);color:var(--ink)}
-::selection{background:color-mix(in oklch,var(--accent) 22%,transparent);color:var(--ink)}
+:root{color-scheme:light dark;accent-color:var(--pico-primary);caret-color:var(--pico-primary);--pico-spacing:.85rem;--pico-border-radius:.45rem;--pico-form-element-spacing-vertical:.55rem;--pico-form-element-spacing-horizontal:.75rem;--pico-icon-checkbox:none;--pico-icon-minus:none;--pico-icon-chevron:none;--pico-icon-search:none;--bg:light-dark(#f6f7fb,#111520);--surface:light-dark(#fff,#181d29);--surface-2:light-dark(#eef1f7,#212736);--line:light-dark(#dce1ec,#2b3345);--region:light-dark(oklch(96% .02 264),oklch(19.5% .025 264));--perf:light-dark(oklch(82% .06 264),oklch(38% .04 264));--ok:light-dark(#1b7a46,#52d18a);--ok-btn:light-dark(#1b7a46,#1f7a49);--t1:light-dark(oklch(47% .085 225),oklch(75% .075 225));--t2:light-dark(oklch(48% .135 264),oklch(76% .11 264));--t3:light-dark(oklch(49% .115 65),oklch(79% .1 74));--warn:light-dark(oklch(42% .12 70),oklch(85% .11 78));--warn-bg:light-dark(oklch(96.5% .035 82),oklch(26% .04 72));--warn-line:light-dark(oklch(84% .08 78),oklch(42% .06 72));--bad:light-dark(#c62828,#ff7b7b);--bad-bg:light-dark(#fef2f2,oklch(25% .055 25));--bad-line:light-dark(#f5b8b8,oklch(42% .08 25))}
+html{scrollbar-gutter:stable;scrollbar-width:thin}body{min-width:320px;overflow-x:clip;background:var(--bg)}[hidden]{display:none!important}
+.masked{-webkit-text-security:disc}.dim{color:var(--pico-muted-color)}.ok{color:var(--ok)}.clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+time,code,.count,.n{font-variant-numeric:tabular-nums}code{overflow-wrap:anywhere}p{text-wrap:pretty}h2,h3{text-wrap:balance}
 .ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
-.top{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--line)}.top .in{max-width:1120px;margin:auto;padding:0 20px}
-form[data-busy]{opacity:.55}.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green-9)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
-.logo{display:grid;place-items:center;width:32px;height:32px;border-radius:var(--radius-3);background:var(--accent);color:var(--on-accent);flex:none}
-h1{font-size:1.05rem;line-height:1.2;font-weight:800;letter-spacing:-.02em;margin:0;white-space:nowrap}h1 em{font-weight:700}
-nav.tabs{display:flex;gap:2px;margin-left:12px}nav.tabs a{display:flex;align-items:center;gap:6px;min-height:52px;padding:0 14px;border-bottom:3px solid transparent;color:var(--dim);text-decoration:none;font-weight:650;white-space:nowrap}
-nav.tabs a:hover{color:var(--ink)}nav.tabs a[aria-current]{color:var(--ink);border-color:var(--accent)}nav.tabs .count{padding:0 7px;border-radius:var(--radius-round);background:var(--accent);color:var(--on-accent);font-size:.78rem;font-weight:700}
-main{max-width:1120px;margin:auto;padding:18px 20px 72px}main>p:first-child{margin:4px 0 14px}[id]{scroll-margin-top:72px}
-p{text-wrap:pretty}h2{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;font-size:1.25rem;line-height:1.25;font-weight:750;letter-spacing:-.02em;margin:0 0 14px;text-wrap:balance}h3{font-size:1.05rem;font-weight:700;margin:20px 0 10px;text-wrap:balance}
-small{color:var(--dim);font-size:.875rem}h2 small{font-size:.82rem;font-weight:650}a{color:var(--accent);text-underline-offset:3px}code{font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
-time,code,.count{font-variant-numeric:tabular-nums}
-.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-3);padding:18px 20px;margin-bottom:20px}.panel.region{background:var(--region);border:0}
+.top{position:sticky;top:0;z-index:10;padding:env(safe-area-inset-top) 0 0;background:var(--surface);border-bottom:1px solid var(--line)}.top .in,main{max-width:1120px;margin:auto;padding-inline:20px}main{padding-top:18px;padding-bottom:calc(64px + env(safe-area-inset-bottom))}[id]{scroll-margin-top:calc(68px + env(safe-area-inset-top))}
+.bar{display:flex;align-items:center;gap:12px;min-height:52px}.bar>a{font-size:.88rem;min-height:44px;display:inline-flex;align-items:center;padding:0 4px}.bar small{margin-left:auto;display:inline-flex;align-items:center;gap:7px;font-weight:600}.bar small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ok)}.bar small.offline{color:var(--bad)}.bar small.offline::before{background:var(--bad)}
+.logo{display:grid;place-items:center;width:32px;height:32px;border-radius:.5rem;background:var(--pico-primary-background);color:var(--pico-primary-inverse);flex:none}
+h1{font-size:1.05rem;line-height:1.2;font-weight:800;letter-spacing:-.02em;margin:0;white-space:nowrap}h1 em,.auth-brand em{font-weight:700;font-style:normal;color:var(--pico-primary)}
+nav.tabs{display:flex;gap:2px;margin-left:10px}nav.tabs a{display:flex;align-items:center;gap:6px;min-height:52px;padding:0 14px;border-bottom:3px solid transparent;border-radius:0;color:var(--pico-muted-color);text-decoration:none;font-weight:650;white-space:nowrap}nav.tabs a:hover{color:var(--pico-color)}nav.tabs a[aria-current]{color:var(--pico-color);border-color:var(--pico-primary)}nav.tabs .count{padding:1px 7px;border-radius:999px;background:var(--pico-primary-background);color:var(--pico-primary-inverse);font-size:.76rem;font-weight:700;line-height:1.35}
+h2{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px;font-size:1.2rem;font-weight:750;letter-spacing:-.02em;margin:0 0 14px}h2 small{font-size:.82rem;font-weight:650;color:var(--pico-muted-color)}h3{font-size:1.02rem;font-weight:700;margin:16px 0 10px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:.65rem;padding:18px 20px;margin-bottom:18px}.panel.region{background:var(--region);border-color:color-mix(in oklch,var(--pico-primary) 18%,var(--line))}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,380px),1fr));gap:16px;align-items:start}
-article>footer{padding-bottom:12px}
-.region article{background:var(--ticket);border:1px solid light-dark(transparent,var(--line));border-radius:var(--radius-3);box-shadow:light-dark(var(--shadow-3),none);padding:18px 18px 0}
-article>header{display:block;margin-bottom:10px}.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}article>header strong{font-size:1.12rem;font-weight:750;line-height:1.25}.card-meta{display:block;margin-top:4px;line-height:1.45}
-.reason{margin:10px 0 12px;padding:8px 12px;border-radius:var(--radius-2);background:var(--surface-2);font-size:.95rem}.reason-label{font-size:.78rem;font-weight:700;color:var(--dim);margin-right:6px;text-transform:uppercase;letter-spacing:.03em}
+.region article{margin:0;padding:18px 18px 0;background:var(--surface);border:1px solid var(--line);border-radius:.65rem;box-shadow:light-dark(0 4px 14px rgba(18,24,40,.06),none)}.region article>header,.region article>footer{margin:0 0 10px;padding:0;background:none;border:0}.region article>footer{padding-bottom:12px;margin:0}
+.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}.card-head strong{font-size:1.08rem;font-weight:750}.card-meta{display:block;margin-top:3px;line-height:1.45;color:var(--pico-muted-color)}
+.reason{margin:10px 0 12px;padding:8px 12px;border-radius:.45rem;background:var(--surface-2);font-size:.94rem}.reason-label{font-size:.75rem;font-weight:750;color:var(--pico-muted-color);margin-right:6px;text-transform:uppercase;letter-spacing:.04em}
+.context-note{display:flex;align-items:center;gap:7px;margin:0 0 10px;padding:7px 10px;border-radius:.45rem;background:var(--surface-2);color:var(--pico-muted-color);font-size:.84rem;line-height:1.35}.context-note .ic{width:15px;height:15px}
 .stub{position:relative;margin:14px -18px 0;padding:14px 18px 18px;border-top:2px dashed var(--perf)}.stub::before,.stub::after{content:"";position:absolute;top:-9px;width:16px;height:16px;border-radius:50%;background:var(--region)}.stub::before{left:-9px}.stub::after{right:-9px}
-.list article{border-top:1px solid var(--line);padding:6px 0}.list article:first-child{border-top:0;padding-top:0}.scope{margin:0 0 8px}.alert{margin:4px 0}
-.mark,.k{--h:268;--m:light-dark(oklch(56% .19 var(--h)),oklch(78% .13 var(--h)))}.k{display:inline-grid;place-items:center;vertical-align:middle;margin-right:6px;color:var(--dim)}.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:var(--radius-3);background:color-mix(in oklch,var(--m) 18%,transparent);color:var(--m);flex:none}.chips .mark{width:22px;height:22px}.chips .mark .ic{width:13px;height:13px}
-mark,.badge{display:inline-block;padding:1px 8px;border-radius:var(--radius-round);font-size:.78rem;font-weight:700;vertical-align:middle}mark,.badge-warn{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
-.warn{color:var(--bad)}p.warn{padding:10px 14px;border-radius:var(--radius-3);background:var(--bad-bg);border:1px solid var(--bad-line);font-weight:600}
-label{display:block;font-size:.86rem;font-weight:600;color:var(--dim)}
-input:not([type=checkbox],[type=radio]),select,textarea{display:block;width:100%;min-height:44px;margin:6px 0 14px;padding:9px 12px;border:1px solid var(--gray-6);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font:inherit;font-size:1rem}textarea{font-family:var(--font-monospace-code)}
-input[type=checkbox]{width:22px;height:22px;margin:0;flex:none}fieldset{border:0;margin:0 0 8px;padding:0;display:grid;gap:6px}legend{padding:0;margin-bottom:6px;width:100%}
-fieldset label{display:flex;gap:10px;align-items:center;min-height:44px;padding:7px 10px;border:1px solid transparent;border-radius:var(--radius-2);font-size:1rem;font-weight:400;color:var(--ink);cursor:pointer}fieldset label:hover{background:var(--surface-2)}fieldset label span{min-width:0;overflow-wrap:anywhere}fieldset label small{display:block;line-height:1.3}fieldset label code{font-weight:650}label.risky{background:var(--warn-bg);border-color:var(--warn-line)}label.risky:hover{background:var(--warn-bg)}
-button,.action-btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:1px solid transparent;border-radius:var(--radius-2);background:var(--accent);color:var(--on-accent);font:inherit;font-size:.94rem;font-weight:650;cursor:pointer;white-space:nowrap;text-decoration:none;transition:filter .16s ease-out,background-color .16s ease-out,border-color .16s ease-out}button:hover,.action-btn:hover{filter:brightness(1.06)}button:disabled{opacity:.6;cursor:wait}
-button.approve{background:var(--green-9);color:#fff;font-weight:750}button.secondary,.action-btn{background:var(--surface);color:var(--ink);border-color:var(--line)}button.secondary:hover,.action-btn:hover{background:var(--surface-2);filter:none}
-button.deny{background:transparent;color:var(--bad);border-color:var(--bad-line)}button.deny:hover{background:var(--bad-bg);filter:none}
-.ib{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 4px;border:0;background:transparent;color:var(--dim);font:650 .8rem var(--font-monospace-code);border-radius:var(--radius-2);text-decoration:none}.ib:hover{background:var(--surface-2);color:var(--ink);filter:none}.ib.revoke:hover,.ib.del:hover{color:var(--bad)}form:has(>.ib){display:contents}
-@media(pointer:fine){.keyline button{min-height:32px}.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.rw:not(.sv) .acts{opacity:0}.sv .acts{opacity:.6}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn){min-height:30px}}
-@media(pointer:coarse){.gr{--ac:6rem}.rw.sv{--ac:14rem}.cs .c .ib{min-width:44px;min-height:44px;margin:-10px -12px -10px -6px}}
-.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.stub button{flex:1;min-height:50px;font-size:1rem}.stub button:first-child{flex:1.6}
-.chips{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}.chips input[type=text]{flex:1 1 220px;max-width:260px;margin:0}.chips label{position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 14px 0 10px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);font-size:.88rem;font-weight:600;cursor:pointer;transition:background-color .16s ease-out,border-color .16s ease-out}
-.chips label:has(:checked){background:var(--accent);color:var(--on-accent);border-color:var(--accent)}.chips label input{position:absolute;opacity:0}
-.jump-links{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.jump-links a{display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);color:var(--ink);text-decoration:none;font-size:.88rem;font-weight:600}.jump-links a:hover{background:var(--surface-2)}
-details>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;list-style:none;color:var(--accent);font-weight:650}summary::after{content:"";width:8px;height:8px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg);transition:transform .16s ease-out}details[open]>summary::after{transform:rotate(225deg)}
-.panel>details{border-top:1px solid var(--line);margin-top:10px}.sub-details{border-top:1px solid var(--line);margin:8px 0 14px;padding-top:4px}
-.log-filter{display:flex;flex-wrap:wrap;gap:0 8px;align-items:end;margin-bottom:8px}.log-filter>label{flex:1 1 220px}.log-filter button{margin-bottom:14px}.log-filter .seg{margin-bottom:14px}.log-filter .seg a{min-height:44px;font-size:.94rem}.log-filter>details{flex-basis:100%}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0 12px}
-.on{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}.on a:not(.action-btn){display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:var(--radius-round);color:var(--ink);text-decoration:none;font-size:.88rem}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:0 0 8px;font-size:.88rem}.kv dt{color:var(--dim)}.kv dd{margin:0;font:.9em var(--font-monospace-code);overflow-wrap:anywhere}
-table.data-table{width:100%;border-collapse:collapse;font-size:.92rem}table.data-table th{text-align:left;color:var(--dim);font-size:.82rem;white-space:nowrap}table.data-table th,table.data-table td{padding:4px 12px 4px 0;border-top:1px solid var(--line);vertical-align:top}table.data-table td{overflow-wrap:anywhere}table.data-table td>details{margin:0}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more,table.data-table tr.more td{border-top:0;padding-top:0}
-.dim{color:var(--dim)}.clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ah{display:flex;flex-wrap:wrap;align-items:center;gap:0 10px;min-height:32px}.ah .nt{display:flex;gap:8px;align-items:baseline;min-width:0}.ah .nt>*,.ah .md{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.ah .grow{flex:1}.ah q{color:var(--dim);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--dim);font-size:.84rem}.t .ic{width:14px;height:14px}.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.pop{position:relative}.pop>summary{min-height:28px;min-width:28px;justify-content:center}.pop>summary::after{content:none}.pop>div{position:absolute;right:0;z-index:5;width:min(92vw,420px);padding:10px 14px;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface);box-shadow:var(--shadow-3)}
+.list article,.panel>article{margin:0;padding:8px 0;background:none;border:0;box-shadow:none;border-radius:0}.list article+article{border-top:1px solid var(--line)}.panel>article>header,.list article>header{margin:0;padding:0;background:none;border:0}.scope{margin:0 0 8px}.alert{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.9rem}.alert .mark{width:22px;height:22px}.alert .mark .ic{width:14px;height:14px}.alert code{background:none;padding:0;font-weight:650}
+.mark,.k{--h:225;--m:light-dark(oklch(47% .085 var(--h)),oklch(75% .075 var(--h)))}.k{display:inline-grid;place-items:center;vertical-align:middle;margin-right:6px;color:var(--pico-muted-color)}.mark{display:grid;place-items:center;width:30px;height:30px;border-radius:.45rem;background:color-mix(in oklch,var(--m) 13%,transparent);color:var(--m);flex:none}.mark.tier-routine{--m:var(--t1)}.mark.tier-notable{--m:var(--t2)}.mark.tier-sensitive{--m:var(--t3)}.chips .mark{width:20px;height:20px}.chips .mark .ic{width:13px;height:13px}
+mark,.badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.76rem;font-weight:700;vertical-align:middle;line-height:1.45}mark{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}.badge{background:var(--surface-2);color:var(--pico-muted-color);border:1px solid var(--line)}
+.warn{color:var(--bad)}p.warn{padding:10px 14px;border-radius:.5rem;background:var(--bad-bg);border:1px solid var(--bad-line);font-weight:600}
+input[type=checkbox]{appearance:auto;width:22px;height:22px;margin:0;flex:none;vertical-align:middle}select{appearance:auto;background-image:none}input[type=search]{background-image:none;padding-inline-start:var(--pico-form-element-spacing-horizontal)}
+label{font-size:.88rem;font-weight:600}label:has(input[type=checkbox]){display:flex;align-items:center;gap:10px;min-height:44px;font-weight:400;cursor:pointer}fieldset{margin:0 0 8px;padding:0;display:grid;gap:5px}legend{padding:0;margin-bottom:4px;width:100%}
+fieldset label{padding:7px 10px;border:1px solid transparent;border-radius:.45rem;font-size:.96rem;margin:0}fieldset label:hover{background:var(--surface-2)}fieldset label span{min-width:0;overflow-wrap:anywhere}fieldset label code{background:none;padding:0;font-weight:650;font-size:.92em;color:var(--pico-color)}fieldset label small{display:block;font-size:.84rem;line-height:1.38;color:var(--pico-muted-color)}fieldset label.tier-notable{background:color-mix(in oklch,var(--t2) 5%,transparent);border-color:color-mix(in oklch,var(--t2) 20%,transparent)}fieldset label.tier-notable:hover{background:color-mix(in oklch,var(--t2) 9%,transparent)}fieldset label.tier-sensitive{background:color-mix(in oklch,var(--t3) 7%,transparent);border-color:color-mix(in oklch,var(--t3) 26%,transparent)}fieldset label.tier-sensitive:hover{background:color-mix(in oklch,var(--t3) 11%,transparent)}
+button,.action-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:auto;min-height:44px;padding:0 16px;margin:0;font-size:.92rem;font-weight:650;white-space:nowrap;text-decoration:none}button.approve{background:var(--ok-btn);border-color:var(--ok-btn);color:#fff;font-weight:750}button.approve:hover{filter:brightness(.94)}button.secondary,.action-btn{background:var(--surface);color:var(--pico-color);border:1px solid var(--line)}button.secondary:hover,.action-btn:hover{background:var(--surface-2)}button.deny{background:transparent;color:var(--bad);border:1px solid var(--bad-line)}button.deny:hover{background:var(--bad-bg)}.stub button.deny{color:var(--pico-color);border-color:var(--line);font-weight:600}.stub button.deny:hover{background:var(--surface-2);border-color:color-mix(in oklch,var(--pico-color) 24%,var(--line))}form[data-busy]{opacity:.55}
+.ib{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 6px;border:0;background:transparent;color:var(--pico-muted-color);font:650 .8rem var(--pico-font-family-monospace);border-radius:.4rem;text-decoration:none}.ib:hover{background:var(--surface-2);color:var(--pico-color)}.ib.revoke:hover,.ib.del:hover{color:var(--bad)}form:has(>.ib){display:contents}
+.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.stub button{flex:1;min-height:48px;font-size:.98rem}.stub button:first-child{flex:1.6}
+.chips,.jump-links,.on{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}.chips input[type=text]{flex:1 1 220px;max-width:260px;margin:0;min-height:44px}.chips label,.jump-links a,.on a:not(.action-btn){position:relative;display:inline-flex;gap:7px;align-items:center;min-height:44px;padding:0 12px;margin:0;border:1px solid var(--line);border-radius:.45rem;background:var(--surface);color:var(--pico-color);text-decoration:none;font-size:.86rem;font-weight:600;cursor:pointer}.chips label:has(:checked){background:var(--pico-primary-background);color:var(--pico-primary-inverse);border-color:var(--pico-primary-background)}.chips label input{position:absolute;opacity:0}.jump-links a:hover,.on a:not(.action-btn):hover{background:var(--surface-2)}.on a:not(.action-btn){border-radius:999px}
+details{margin-bottom:0}details>summary{display:flex;align-items:center;min-height:44px;padding:4px 0;color:var(--pico-primary);font-weight:650;line-height:1.35}details>summary::after{width:7px;height:7px;margin:0 4px 0 auto;border:solid currentColor;border-width:0 2px 2px 0;background:none;float:none;transform:rotate(45deg)}details[open]>summary{margin-bottom:8px}details[open]>summary::after{transform:rotate(225deg)}.panel>details{border-top:1px solid var(--line);margin-top:10px}.sub-details{border-top:1px solid var(--line);margin:8px 0 12px}
+.log-filter{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin-bottom:8px}.log-filter>label{flex:1 1 220px;margin:0}.log-filter input{margin:0}.log-filter>details{flex-basis:100%}.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0 12px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;margin:0 0 8px;font-size:.86rem}.kv dt{color:var(--pico-muted-color)}.kv dd{margin:0;font:.9em var(--pico-font-family-monospace);overflow-wrap:anywhere}
+table.data-table{margin:0 0 8px;font-size:.9rem}table.data-table th{color:var(--pico-muted-color);font-size:.8rem;white-space:nowrap}table.data-table th,table.data-table td{padding:6px 12px 6px 0;vertical-align:top;overflow-wrap:anywhere}table.data-table td:first-child{overflow-wrap:normal}td.act .actions{flex-wrap:nowrap}table.data-table tr.more td{border-top:0;padding-top:0}.more summary{justify-content:flex-start;gap:6px}.more summary::after{content:none}
+.ah{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-height:34px}.ah .nt{display:flex;gap:8px;align-items:baseline;min-width:0}.ah .nt>*,.ah .md{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.ah .grow{flex:1}.ah q{color:var(--pico-muted-color);quotes:"\\201C" "\\201D"}.ah .ib{margin:0 -4px}.t{display:inline-flex;align-items:center;gap:3px;color:var(--pico-muted-color);font-size:.82rem}.t .ic{width:14px;height:14px}
+.pop{position:relative}.pop>summary{min-height:28px;min-width:28px;padding:0;justify-content:center}.pop>summary::after{content:none}.pop>div{position:absolute;right:0;z-index:5;width:min(92vw,420px);padding:12px 14px;border:1px solid var(--line);border-radius:.5rem;background:var(--surface);box-shadow:var(--pico-box-shadow)}
 .gr{--ac:3.6rem;border-top:1px solid var(--line);font-size:.88rem}.gr.ph{opacity:.6}.sc{--in:1.4rem}.xb{display:none}
-.rw{--nw:12rem;display:grid;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1.8rem 1.8rem 2.6rem minmax(var(--ac),1fr);align-items:center;gap:0 8px;min-height:30px;color:var(--ink);font-weight:400;cursor:default}.rw>*{min-width:0}.rw::after{content:none}.rw>.k{justify-self:end}.rw code{font-size:.86rem}.rw.sv{--nw:14rem;--ac:9rem;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1fr var(--ac);min-height:34px}.rw.cs{grid-template-columns:20px minmax(0,1fr)}.n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis}.nm>*{flex:none}.nm strong{flex:0 1 auto}.ok{color:light-dark(var(--green-9),var(--green-4))}
-.lv{font:700 .72rem var(--font-monospace-code);color:var(--dim)}.lv.w{color:var(--warn)}
-.cs div{display:flex;flex-wrap:wrap;gap:3px 6px;padding:2px 0}.cs span.c{display:inline-flex;align-items:center;gap:4px;padding:0 0 0 9px;border:1px solid var(--line);border-radius:var(--radius-round);font:.82rem var(--font-monospace-code);min-height:24px}.cs span.c.held{padding-right:9px}.cs .c .ib{opacity:.6}.cs .c:hover .ib{opacity:1}
-.ev>summary{display:grid;grid-template-columns:6.5rem 8rem minmax(0,1fr) 7rem 1rem;gap:0 10px;min-height:28px;color:var(--ink);font-weight:400;font-size:.84rem;border-top:1px solid var(--line)}.ev>summary>*{min-width:0}.ev>summary::after{margin:0}.ev time .dim{opacity:.6}.ev .kv{padding:6px 0 6px 6.5rem}.ev.g>summary{grid-template-columns:4.4rem minmax(0,1fr) 7rem 1rem}.ev.g .kv{padding-left:4.4rem}.more summary{justify-content:flex-start;gap:6px}.more summary::after{content:none}
-.gh{display:flex;gap:10px;align-items:baseline;margin:14px 0 2px;font-size:.92rem}.gh .r{margin-left:auto}
-.keyline{display:flex;gap:8px;align-items:center;margin:0 0 12px}.keyline input{margin:0;min-height:36px;min-width:0;font:.84rem var(--font-monospace-code)}.keyline button{flex:none}
-.seg{display:inline-flex;margin:0 0 8px auto}.seg a{display:inline-flex;align-items:center;min-height:32px;padding:0 12px;border:1px solid var(--line);color:var(--ink);text-decoration:none;font-size:.84rem}.seg a:first-child{border-radius:var(--radius-2) 0 0 var(--radius-2)}.seg a:last-child{border-radius:0 var(--radius-2) var(--radius-2) 0;border-left:0}.seg a[aria-current]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-.auth-wrap{min-height:100dvh;display:grid;place-items:center;padding:20px}.auth{width:100%;max-width:420px;margin:0}.auth-brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;font-size:1.35rem;font-weight:800;letter-spacing:-.03em}.auth-brand em{font-weight:700}.auth-brand .logo{background:light-dark(var(--indigo-10),var(--indigo-4));color:light-dark(#fff,oklch(16% .04 265))}.auth button{width:100%}.auth h2{align-items:center}
-dialog{max-width:440px;width:calc(100% - 32px);padding:20px;border:1px solid var(--line);border-radius:var(--radius-3);background:var(--surface);color:var(--ink);box-shadow:var(--shadow-4)}dialog::backdrop{background:oklch(12% .02 262 / .58)}dialog h3{margin:0 0 8px}dialog p{margin:0 0 18px;color:var(--dim)}dialog .actions{justify-content:flex-end}
-:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
-@media(max-width:640px){.rw,.ev>summary{display:flex;gap:8px;min-height:44px;font-size:.94rem}.sc{padding-left:1.4rem}.rw code,.ev code{font-size:inherit}.rw>.mc,.rw>.n,.rw>.acts,.ev>summary>.ag{display:none}.rw>.nm1,.ev>summary>.w{flex:1 1 0}.rw.cs{min-height:0}.cs div{flex:1}.cs span.c{font-size:.9rem}details[open]>.xb{display:grid;gap:8px;padding:2px 0 10px 28px;font-size:.94rem}.xb .bt{display:flex;flex-wrap:wrap;gap:8px}.xb .bt>*{flex:1 1 40%}.xb .bt button,.xb .bt .action-btn{width:100%}.ev .kv{padding-left:0}.ah .nt{flex:1 1 100%}.ah .md{flex:1 1 0}.reason{margin:6px 0 8px;padding:6px 10px}.stub button{min-height:44px}.keyline{flex-wrap:wrap}.keyline input{flex:1 1 100%}.pop>div{right:auto;left:0}.top .in{padding:0 8px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}.bar small{margin-left:auto}.logo{width:30px;height:30px}main{padding:14px 12px 56px}.panel{padding:14px}.region article{padding:12px 12px 0}.stub{margin:10px -12px 0;padding:10px 12px 12px}.panel.region{padding:8px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--dim);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
+.rw{--nw:12rem;display:grid;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1.8rem 1.8rem 2.6rem minmax(var(--ac),1fr);align-items:center;gap:0 8px;min-height:32px;padding:0;color:var(--pico-color);font-weight:400;cursor:default}.rw>*{min-width:0}.rw::after{content:none}.rw>.k{justify-self:end}.rw code{font-size:.84rem;padding:0;background:none}.rw.sv{--nw:14rem;--ac:9rem;grid-template-columns:calc(20px + var(--in,0rem)) minmax(0,calc(var(--nw) - var(--in,0rem))) minmax(0,20rem) 1fr var(--ac);min-height:36px}.rw.cs{grid-template-columns:20px minmax(0,1fr)}.n{text-align:right}.acts{display:flex;justify-content:flex-end}.nm{display:flex;gap:6px;align-items:center}.nm strong{overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}.nm>*{flex:none}
+.lv{font:700 .72rem var(--pico-font-family-monospace);color:var(--pico-muted-color)}.lv.w{color:var(--warn)}
+.cs div{display:flex;flex-wrap:wrap;gap:4px 6px;padding:3px 0}.cs span.c{display:inline-flex;align-items:center;gap:4px;padding:0 0 0 9px;border:1px solid var(--line);border-radius:999px;font:.8rem var(--pico-font-family-monospace);min-height:24px}.cs span.c.held{padding-right:9px}.cs .c .ib{opacity:.6}.cs .c:hover .ib{opacity:1}
+.ev>summary{display:grid;grid-template-columns:6.5rem 8rem minmax(0,1fr) 7rem 1rem;gap:0 10px;min-height:30px;padding:0;color:var(--pico-color);font-weight:400;font-size:.84rem;border-top:1px solid var(--line)}.ev>summary>*{min-width:0}.ev>summary::after{margin:0}.ev code{padding:0;background:none}.ev time .dim{opacity:.6}.ev .kv{padding:6px 0 6px 6.5rem}.ev.g>summary{grid-template-columns:4.4rem minmax(0,1fr) 7rem 1rem}.ev.g .kv{padding-left:4.4rem}
+.gh{display:flex;gap:10px;align-items:baseline;margin:14px 0 2px;font-size:.9rem}.gh .r{margin-left:auto}
+.keyline{display:flex;gap:8px;align-items:center;margin:0 0 12px}.keyline input{margin:0;min-height:38px;min-width:0;font:.84rem var(--pico-font-family-monospace)}.keyline button{flex:none}
+.seg{display:inline-flex;margin:0 0 0 auto}.seg a{display:inline-flex;align-items:center;min-height:44px;padding:0 12px;border:1px solid var(--line);color:var(--pico-color);text-decoration:none;font-size:.86rem;font-weight:600}.seg a:first-child{border-radius:.45rem 0 0 .45rem}.seg a:last-child{border-radius:0 .45rem .45rem 0;border-left:0}.seg a[aria-current]{background:var(--pico-primary-background);color:var(--pico-primary-inverse);border-color:var(--pico-primary-background)}
+.auth-wrap{min-height:100dvh;display:grid;place-items:center;padding:20px}.auth{width:100%;max-width:420px}.auth-brand{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;font-size:1.3rem;font-weight:800;letter-spacing:-.03em}.auth button{width:100%}
+dialog>article{max-width:440px}dialog>article>header,dialog>article>footer{border:0;background:none}dialog>article>header{padding-bottom:0}dialog>article>footer{padding-top:0}
+@media(pointer:fine){.keyline button{min-height:36px}.ib{min-width:28px;min-height:28px}.ib .ic{width:16px;height:16px}.cs .ib{min-width:22px;min-height:22px}.cs .ic{width:13px;height:13px}.rw:not(.sv) .acts{opacity:0}.sv .acts{opacity:.65}.gr:hover .acts,.gr:focus-within .acts{opacity:1}.chips label,.jump-links a,.on a:not(.action-btn),.seg a{min-height:34px}}
+@media(pointer:coarse){.gr{--ac:6rem}.rw.sv{--ac:14rem}.cs .c .ib{min-width:44px;min-height:44px;margin:-10px -12px -10px -6px}}
+@media(max-width:640px){.rw,.ev>summary{display:flex;gap:8px;min-height:44px;font-size:.94rem}.sc{padding-left:1.2rem}.rw>.mc,.rw>.n,.rw>.acts,.ev>summary>.ag{display:none}.rw>.nm1,.ev>summary>.w{flex:1 1 0}.rw.cs{min-height:0}.cs div{flex:1}.cs span.c{font-size:.88rem}details[open]>.xb{display:grid;gap:8px;padding:4px 0 10px 26px;font-size:.94rem}.xb .bt{display:flex;flex-wrap:wrap;gap:8px}.xb .bt>*{flex:1 1 40%}.xb .bt button,.xb .bt .action-btn{width:100%}.ev .kv{padding-left:0}.ah .nt{flex:1 1 100%}.ah .md{flex:1 1 0}.stub button{min-height:46px}.keyline{flex-wrap:wrap}.keyline input{flex:1 1 100%}.pop>div{right:auto;left:0}.top .in{padding-inline:10px}h1{position:absolute;clip-path:inset(50%);width:1px;height:1px;overflow:hidden}nav.tabs{margin-left:0}nav.tabs a{padding:0 10px}.bar>a,.bar small:not(.offline){display:none}main{padding:14px 12px calc(56px + env(safe-area-inset-bottom))}.panel{padding:14px}.panel.region{padding:10px}.region article{padding:14px 14px 0}.stub{margin:12px -14px 0;padding:12px 14px 14px}.chips input[type=text]{flex:1 1 100%;max-width:none}table.data-table thead{display:none}table.data-table,table.data-table tbody,table.data-table tr,table.data-table td{display:block;width:100%!important}table.data-table tr{padding:10px 0;border-top:1px solid var(--line)}table.data-table td{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border:0;padding:3px 0;text-align:right}table.data-table td::before{content:attr(data-label);color:var(--pico-muted-color);font-size:.8rem;font-weight:600;text-align:left;flex:none}table.data-table td:empty{display:none}table.data-table td:first-child{display:block;text-align:left}table.data-table td:first-child::before{display:block}table.data-table td.act{justify-content:flex-end}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 `
 export const icons: Record<string, [icon: string, hue: number]> = {
-  brand: ['key-round', 268],
-  service: ['server', 70],
-  secret: ['key-round', 335],
-  site: ['globe', 205],
-  folder: ['folder', 135],
-  mcp: ['wrench', 295],
-  ext: ['puzzle', 25],
-  host: ['shield-check', 250],
-  agent: ['bot', 180],
-  ssh: ['terminal', 95],
-  browser: ['app-window', 160],
+  brand: ['key-round', 264],
+  service: ['server', 225],
+  'service-rw': ['server-cog', 264],
+  secret: ['key-round', 68],
+  site: ['globe', 225],
+  folder: ['folder', 225],
+  'folder-rw': ['folder-pen', 264],
+  mcp: ['wrench', 225],
+  ext: ['puzzle', 225],
+  host: ['shield-check', 68],
+  agent: ['bot', 225],
+  ssh: ['terminal', 68],
+  browser: ['app-window', 264],
+  info: ['info', 225],
   edit: ['pencil', 0],
   log: ['scroll-text', 0],
   del: ['trash', 0],
@@ -120,8 +106,8 @@ const glyph = (kind: string) => html`<svg class="ic"><use href="/admin/assets/ic
 // A kind's icon, named for assistive tech and as a tooltip.
 const ico = (kind: string) =>
   html`<span class="k" role="img" aria-label="${kinds[kind as keyof typeof kinds]}" title="${kinds[kind as keyof typeof kinds]}">${glyph(kind)}</span>`
-const mark = (kind: string) =>
-  html`<span class="mark" style="--h:${icons[kind][1]}" aria-hidden="true"><svg class="ic"><use href="/admin/assets/icons.svg#i-${kind}"></use></svg></span>`
+const mark = (kind: string, tier?: string, label?: string) =>
+  html`<span class="mark ${tier ? `tier-${tier}` : ''}" style="--h:${icons[kind][1]}" ${raw(label ? `role="img" aria-label="${String(html`${label}`)}" title="${String(html`${label}`)}"` : 'aria-hidden="true"')}>${glyph(kind)}</span>`
 
 // The page's only script (htmx is loaded without eval): group checkboxes, live filtering with empty-kind hiding,
 // relative times, Approve labels that follow the duration and selection, conditional auth header field, live-polling
@@ -258,7 +244,78 @@ document.addEventListener('htmx:beforeSwap', (e) => {
 })
 document.addEventListener('input', tick)
 document.addEventListener('htmx:afterSwap', tick)
-document.addEventListener('DOMContentLoaded', () => { tick(); reveal() })
+const b64 = (s) => Uint8Array.from(atob((s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+let sse
+const connectEvents = () => {
+  if (sse || !('EventSource' in window)) return
+  let first = true
+  sse = new EventSource('/admin/events')
+  sse.addEventListener('change', () => {
+    say('Live', false)
+    if (first) { first = false; return }
+    window.dispatchEvent(new CustomEvent('speaker:change'))
+  })
+  sse.onerror = () => say('Offline', true)
+}
+const syncPush = async () => {
+  const btn = document.querySelector('[data-push-toggle]')
+  const note = document.getElementById('push-status')
+  if (!btn || !note) return
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    btn.disabled = true
+    note.textContent = 'Unavailable here (on iOS, use Share -> Add to Home Screen over HTTPS first).'
+    return
+  }
+  const reg = await navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin' }).catch(() => null)
+  const sub = await reg?.pushManager.getSubscription()
+  btn.textContent = sub ? 'Disable push on this device' : 'Enable push on this device'
+  note.textContent = sub ? 'Enabled on this device.' : 'Off on this device.'
+  const test = document.querySelector('[data-push-test]')
+  if (test) test.hidden = !sub
+}
+document.addEventListener('click', async (e) => {
+  if (e.target.matches('[data-push-test]')) {
+    const btn = e.target
+    const note = document.getElementById('push-status')
+    btn.disabled = true
+    try {
+      const res = await fetch('/admin/push/test', { method: 'POST' })
+      if (!res.ok) throw new Error((await res.text()).trim() || 'Test push failed')
+      if (note) note.textContent = 'Test push sent.'
+    } catch (err) {
+      if (note) note.textContent = err.message || 'Test push failed'
+    } finally {
+      btn.disabled = false
+    }
+    return
+  }
+  if (!e.target.matches('[data-push-toggle]')) return
+  const btn = e.target
+  const note = document.getElementById('push-status')
+  btn.disabled = true
+  try {
+    const reg = await navigator.serviceWorker.register('/admin/sw.js', { scope: '/admin' })
+    const existing = await reg.pushManager.getSubscription()
+    if (existing) {
+      await fetch('/admin/push/unsubscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: existing.endpoint }) })
+      await existing.unsubscribe()
+    } else {
+      const perm = await Notification.requestPermission()
+      if (perm !== 'granted') throw new Error('Notification permission denied')
+      const { publicKey } = await (await fetch('/admin/push/key')).json()
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(publicKey) })
+      const res = await fetch('/admin/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(sub.toJSON()) })
+      if (!res.ok) throw new Error('Could not save subscription')
+    }
+    await syncPush()
+  } catch (err) {
+    if (note) note.textContent = err.message || 'Push setup failed'
+  } finally {
+    btn.disabled = false
+  }
+})
+document.addEventListener('DOMContentLoaded', () => { tick(); reveal(); connectEvents(); syncPush() })
+document.addEventListener('htmx:afterSettle', () => { syncPush() })
 addEventListener('hashchange', reveal)
 setInterval(tick, 1000)`
 const htmxConfig = JSON.stringify({
@@ -271,7 +328,7 @@ const htmxConfig = JSON.stringify({
   ],
 })
 const head = (nonce = '') =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/open-props.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script src="/admin/assets/idiomorph.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="htmx-config" content="${htmxConfig}"><title>Speaker for the creds</title><link rel="manifest" href="/admin/manifest.json"><link rel="apple-touch-icon" href="/admin/assets/icon.svg"><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}</style><script src="/admin/assets/htmx.js"></script><script src="/admin/assets/idiomorph.js"></script><script nonce="${nonce}">${raw(pageScript)}</script></head>`
 const sections = [
   ['agents', 'Agents', '/admin'],
   ['log', 'Activity', '/admin/log'],
@@ -291,7 +348,7 @@ const kinds = {
 const filterBar = html`<div class="chips" role="search" hidden><input type="text" name="q" placeholder="Filter by name or item" aria-label="Search"><label><input type="radio" name="kind" value="" checked>All</label>${Object.entries(kinds).map(([k, text]) => html`<label><input type="radio" name="kind" value="${k}">${mark(k)}${text}</label>`)}</div>`
 const filterEmpty = html`<div id="filter-empty" class="panel" hidden><p>No items match this filter.</p><button type="button" class="secondary" data-clear-filter>Clear filter</button></div>`
 const logo = html`<span class="logo" aria-hidden="true"><svg class="ic"><use href="/admin/assets/icons.svg#i-brand"></use></svg></span>`
-const confirmDialog = html`<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body"><h3 id="confirm-title">Confirm</h3><p id="confirm-body"></p><div class="actions"><button type="button" class="secondary" data-no>Keep</button><button type="button" class="deny" id="confirm-yes" data-yes>Confirm</button></div></dialog>`
+const confirmDialog = html`<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body"><article><header><h3 id="confirm-title">Confirm</h3></header><p id="confirm-body"></p><footer class="actions"><button type="button" class="secondary" data-no>Keep</button><button type="button" class="deny" id="confirm-yes" data-yes>Confirm</button></footer></article></dialog>`
 export const layout = (nonce: string | undefined, section: Section, body: Html | string, pending = 0) =>
   html`${head(nonce)}<body hx-boost="true" hx-ext="morph"><header class="top"><div class="in"><div class="bar">${logo}<h1>Speaker for the <em>creds</em></h1><nav class="tabs" aria-label="Sections">${sections.map(
     ([id, label, href]) =>
@@ -306,7 +363,7 @@ const authPage = (
   exposed: boolean,
   error?: string,
 ) =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/open-props.css"><style>${raw(css)}</style></head><body><main class="auth-wrap"><div class="auth"><div class="auth-brand">${logo}<span>Speaker for the <em>creds</em></span></div><section class="panel"><h2>${heading}</h2><p>${intro}</p>${exposed ? html`<p class="warn" role="note">This page uses plain HTTP, so your password crosses the network unencrypted.</p>` : ''}${error ? html`<p class="warn" role="alert">${error}</p>` : ''}<form method="post" action="${action}">${fields}<button>${button}</button></form></section></div></main></body></html>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><title>Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}</style></head><body><main class="auth-wrap"><div class="auth"><div class="auth-brand">${logo}<span>Speaker for the <em>creds</em></span></div><section class="panel"><h2>${heading}</h2><p>${intro}</p>${exposed ? html`<p class="warn" role="note">This page uses plain HTTP, so your password crosses the network unencrypted.</p>` : ''}${error ? html`<p class="warn" role="alert">${error}</p>` : ''}<form method="post" action="${action}">${fields}<button>${button}</button></form></section></div></main></body></html>`
 const password = (name: string, label: string, autocomplete: string) =>
   html`<label>${label}<input name="${name}" type="password" autocomplete="${autocomplete}" required></label>`
 export const signInPage = (exposed: boolean, error?: string) =>
@@ -425,8 +482,29 @@ export function agents(
       ? html` <mark>same agent enrolled ${Math.round((a.createdAt - Math.max(...earlier.map((o) => o.createdAt))) / 60_000)} min earlier</mark>`
       : ''
   }
-  const pick = (i: Card['items'][number]) =>
-    html`<label class="${i.risk ? 'risky' : ''}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icons[i.kind] ? i.kind : 'host')}<span><code>${i.item}</code>${i.with ? html` <small>(needed by ${i.with}; ends with it)</small>` : ''}${i.risk ? html` <span class="badge badge-warn">${i.risk}</span>` : ''} <small>${i.text}</small>${i.kind === 'browser' ? html` <a href="/admin?section=services#setup-browsers" hx-boost="false">Open it to log in</a>` : ''}${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
+  const itemIcon = (i: Card['items'][number]): [icon: string, label: string] => {
+    if (i.kind === 'service')
+      return i.item.endsWith('.full') ? ['service-rw', 'Service (read/write)'] : ['service', 'Service (read)']
+    if (i.kind === 'folder')
+      return i.item.endsWith(':rw') ? ['folder-rw', 'Folder (read/write)'] : ['folder', 'Folder (read-only)']
+    if (i.kind === 'site') return ['site', 'Network site']
+    if (i.kind === 'secret') return ['secret', 'Secret']
+    if (i.kind === 'ssh') return ['ssh', 'SSH shell']
+    if (i.kind === 'browser') return ['browser', 'Browser session']
+    if (i.kind === 'mcp') return ['mcp', 'In-sandbox MCP']
+    if (i.kind === 'ext') return ['ext', 'Pi extension']
+    return ['host', 'Sandbox host']
+  }
+  const pick = (i: Card['items'][number]) => {
+    const [icon, label] = itemIcon(i)
+    const tier = i.tier ?? 'routine'
+    return html`<label class="tier-${tier}"><input type="checkbox" name="items" value="${i.item}" ${raw(i.wider ? '' : 'checked')}>${mark(icon, tier, label)}<span><code>${i.item}</code> <small>${i.text}</small>${i.kind === 'browser' ? html` <a href="/admin?section=services#setup-browsers" hx-boost="false">Open it to log in</a>` : ''}${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></label>`
+  }
+  const isPrivate = (kind: string, item: string) =>
+    kind === 'service'
+      ? services[item.replace(/\.(read|full)$/, '')]?.auth.type !== 'none'
+      : ['folder', 'ssh', 'browser', 'secret'].includes(kind)
+  const isWeb = (kind: string, reach: string[]) => kind === 'site' || (kind === 'ext' && reach.length > 1)
   // Self-reported identity and what speaker itself knows stay on separate, labelled lines.
   const meta = ({ who, type, subject }: Card) =>
     type === 'host'
@@ -435,6 +513,19 @@ export function agents(
   const cardHtml = (r: Card) => {
     const host = r.type === 'host'
     const a = byId.get(r.subject)
+    const heldGrants = host ? [] : grants.filter((g) => g.subject === r.subject)
+    const reqPrivate = !host && r.items.some((i) => isPrivate(i.kind, i.item))
+    const reqWeb = !host && r.items.some((i) => isWeb(i.kind, i.reach))
+    const heldPrivate = heldGrants.some((g) => isPrivate(g.kind, g.item))
+    const heldWeb = heldGrants.some((g) => isWeb(g.kind, g.detail.reach))
+    const combo =
+      reqPrivate && reqWeb
+        ? 'Combines private access with web egress.'
+        : reqPrivate && heldWeb
+          ? 'Agent already holds web egress.'
+          : reqWeb && heldPrivate
+            ? 'Agent already holds private access.'
+            : ''
     // The groups the request asked for, each with the members still pending, then the items asked for on their own.
     const asked = r.want
       .filter((w) => w.startsWith('group:') && Object.hasOwn(groups, w.slice(6)))
@@ -451,11 +542,17 @@ export function agents(
         ? select('duration', 'Allow access for', r.durations, r.duration)
         : hidden('duration', r.durations[0])
     const some = r.items.slice(0, 3).map((i) => i.item)
-    // A bundle reads as its name, size and a scope summary, with every server warning outside the Review; loose items show directly.
+    const noted = r.items.filter((i) => i.warning || i.tier === 'sensitive')
+    // A bundle reads as its name, size and a scope summary, with sensitive items or server warnings outside the Review; loose items show directly.
     const bundle = asked.length
-      ? html`<p class="scope"><strong>${asked.map((g) => g.name).join(', ')}</strong> · ${plural(r.items.length, 'capability', 'capabilities')} · <small>${some.join(', ')}${r.items.length > 3 ? ` and ${r.items.length - 3} more` : ''}</small></p>${r.items.filter((i) => i.risk || i.warning).map((i) => html`<p class="alert"><code>${i.item}</code> ${i.risk ? html`<span class="badge badge-warn">${i.risk}</span>` : ''} ${i.warning ? html`<mark>${i.warning}</mark>` : ''}</p>`)}`
+      ? html`<p class="scope"><strong>${asked.map((g) => g.name).join(', ')}</strong> · ${plural(r.items.length, 'capability', 'capabilities')} · <small>${some.join(', ')}${r.items.length > 3 ? ` and ${r.items.length - 3} more` : ''}</small></p>${noted.map(
+          (i) => {
+            const [icon, label] = itemIcon(i)
+            return html`<p class="alert">${mark(icon, i.tier ?? 'sensitive', label)}<span><code>${i.item}</code>${i.warning ? html` <mark title="${i.hint ?? ''}">${i.warning}</mark>` : ''}</span></p>`
+          },
+        )}`
       : ''
-    return html`<article id="request-${r.id}" data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}${r.as ? html` <small>as <code>${r.as}</code></small>` : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
+    return html`<article id="request-${r.id}" data-kind="${[...new Set(r.items.map((i) => i.kind))].join(' ')}"><header><div class="card-head"><strong>${a ? a.label : r.who.label}</strong>${a ? title(a) : ''}${r.as ? html` <small>as <code>${r.as}</code></small>` : ''}<small>${host ? 'wants to register' : html`${a?.sandboxHost ? `${a.sandboxHost} · ` : ''}requested ${local(r.createdAt, 'Requested ')}`}</small></div>${meta(r)}</header>${host ? '' : html`<p class="reason"><span class="reason-label">Reason</span> ${r.reason || html`<small>none supplied yet</small>`}</p>`}${bundle}${combo ? html`<p class="context-note">${glyph('info')}<span>${combo}</span></p>` : ''}<form method="post" action="/admin/requests/${r.id}/approve">${r.items.map((i) => hidden('shown', i.item))}${asked.length ? html`<details class="sub-details"><summary>Review ${plural(r.items.length, 'capability', 'capabilities')}</summary>${sets}</details>` : sets}<div class="stub">${duration}<div class="actions"><button class="approve" ${raw(host ? '' : 'data-sync')}>${host ? 'Approve host' : `Approve ${r.duration === 'permanent' ? 'until revoked' : `for ${r.duration}`}`}</button><button class="deny" formaction="/admin/requests/${r.id}/deny">${host ? 'Deny host' : 'Deny'}</button></div></div></form>${r.trigger ? html`<footer><small>Triggered by <code>${r.trigger}</code></small></footer>` : ''}</article>`
   }
 
   const end = (g: { expiresAt: string | null }) => (g.expiresAt ? Date.parse(g.expiresAt) : Number.POSITIVE_INFINITY)
@@ -491,8 +588,6 @@ export function agents(
       ]
     }
     const tag = (g: Grant) => html`id="grant-${g.id}" data-item="${g.item}" data-expires="${g.expiresAt ?? ''}"`
-    const bundled = (g: Grant) =>
-      g.bundledWith.length ? `comes with ${g.bundledWith.join(', ')} and ends with it` : ''
     // One grant, one line: kind icon, name, detail (an address for a service), level, uses, own expiry, actions. On a
     // phone only the icon, name, level and expiry stay on the line; tapping it opens the rest.
     const line = (g: Grant, name: Html | string, main: Html | string, cls = '') => {
@@ -501,7 +596,7 @@ export function agents(
       const n = g.uses
         ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}" title="${plural(g.uses, 'use', 'uses')}">${g.uses}</a>`
         : ''
-      return html`<details class="gr ${cls}" ${tag(g)} title="${bundled(g)}"><summary class="rw">${ico(g.kind)}<span class="clip nm1">${name}</span><span class="clip dim mc">${note}</span><span class="lv ${lv === 'RW' ? 'w' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span><span class="n">${n}</span><span class="dim">${when(g)}</span><span class="acts">${acts(g).map((a) => a[0])}</span></summary><div class="xb"><span class="dim">${note}</span>${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}">${plural(g.uses, 'use', 'uses')}</a>` : ''}<div class="bt">${acts(g).map((a) => a[1])}</div></div></details>`
+      return html`<details class="gr ${cls}" ${tag(g)}><summary class="rw">${ico(g.kind)}<span class="clip nm1">${name}</span><span class="clip dim mc">${note}</span><span class="lv ${lv === 'RW' ? 'w' : ''}" title="${lv === 'RW' ? 'read and change' : lv ? 'read only' : ''}">${lv}</span><span class="n">${n}</span><span class="dim">${when(g)}</span><span class="acts">${acts(g).map((a) => a[0])}</span></summary><div class="xb"><span class="dim">${note}</span>${g.uses ? html`<a href="/admin/log?grant=${encodeURIComponent(g.id)}">${plural(g.uses, 'use', 'uses')}</a>` : ''}<div class="bt">${acts(g).map((a) => a[1])}</div></div></details>`
     }
     const addrOf = (id: string) => (services[id] ? addr(services[id].baseUrl) : id)
     // A service is its name; a scope `parent:name` sits under its parent, which is always shown (dimmed when this
@@ -535,7 +630,7 @@ export function agents(
       })
     const others = mine.filter((g) => !['service', 'site', 'ext'].includes(g.kind))
     const chip = (g: Grant) =>
-      html`<span class="c" ${tag(g)} title="${[g.item, bundled(g), g.detail.warning].filter(Boolean).join(' · ')}">${g.item.replace(/^\w+:/, '')}${when(g)}${state(g)}${acts(
+      html`<span class="c" ${tag(g)} title="${[g.item, g.kind === 'ext' ? g.detail.text : '', g.detail.warning].filter(Boolean).join(' · ')}">${g.item.replace(/^\w+:/, '')}${when(g)}${state(g)}${acts(
         g,
       )
         .slice(when(g) ? 0 : -1)
@@ -543,11 +638,9 @@ export function agents(
     const chips = (kind: string, list: Html[]) =>
       list.length ? html`<div class="gr rw cs">${ico(kind)}<div>${list}</div></div>` : ''
     const ids = (list: Grant[]) => list.map((g) => hidden('id', g.id))
-    // Followers end with their parent, so they go first and no id is gone when its turn comes.
-    const everything = [...mine].sort((x, y) => y.bundledWith.length - x.bundledWith.length)
-    const toExtend = mine.filter((g) => extendable(g) && !g.bundledWith.length)
+    const toExtend = mine.filter(extendable)
     const model = a.agent.split(' · ')[0].replace(` on ${a.sandboxHost}`, '')
-    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" hx-boost="false" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(everything), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>${idLine('self', a)}<br>${idLine('known', { ...a, via: a.sandboxHost, key: a.tokenHash.slice(0, 8) })}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(a.requests, 'request', 'requests')} · ${a.granted} granted · ${a.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
+    const head = html`<header class="ah"><span class="nt"><strong>${a.label}</strong>${a.title ? html`<q>${a.title}</q>` : ''}</span><small class="md">${[a.sandboxHost, model].filter(Boolean).join(' · ')}</small>${mine.some((g) => g.enforcement !== 'enforced') ? html`<mark title="Some access is not yet confirmed in force">not confirmed</mark>` : ''}${odd ? html`<a class="warn" hx-boost="false" href="/admin/log?agent=${encodeURIComponent(a.id)}" title="${c.lastRefusal ?? ''}">${odd}</a>` : ''}${cards.filter((r) => r.subject === a.id).map((r) => html`<a href="#request-${r.id}"><mark>request waiting</mark></a>`)}<span class="grow"></span>${tm('used', a.lastUsedAt ? 'Last used' : 'Unused', a.lastUsedAt ? local(a.lastUsedAt, 'Last used ') : '–')}${common === null ? tm('left', 'No expiry', '∞') : common ? tm('left', 'Time left', local(Date.parse(common), 'Expires ')) : ''}${common !== undefined && mine.length > 1 ? html`${toExtend.length ? button('/admin/grants/extend', ids(toExtend), 'Extend all grants', '', `+${span1(toExtend[0])}`) : ''}${button('/admin/grants/revoke', ids(mine), `Revoke all ${mine.length} grants of ${a.label}`, `Revoke all ${mine.length} grants of ${a.label}? Calls using them are blocked immediately.`, 'revoke')}` : ''}<details class="pop"><summary class="ib" aria-label="Details and agent controls" title="Details and agent controls">${glyph('more')}</summary><div><p><small>${idLine('self', a)}<br>${idLine('known', { ...a, via: a.sandboxHost, key: a.tokenHash.slice(0, 8) })}<br>Id <code>${a.id}</code> · enrolled ${local(a.createdAt)}<br>${uses(a.uses, `agent=${encodeURIComponent(a.id)}`)}${a.lastUsedAt ? html`, last used ${local(a.lastUsedAt)}` : ''}<br>${plural(a.requests, 'request', 'requests')} · ${a.granted} granted · ${a.denied} denied · ${c.refused} refused · ${c.blocked} blocked</small></p>${button(`/admin/agents/${a.id}/revoke`, '', 'Revoke agent', `Revoke agent ${a.label}? Its token and all its grants end immediately.`)}</div></details></header>`
     const session = (x: (typeof open)[number]) =>
       html`<details class="gr"><summary class="rw">${ico('ssh')}<span class="clip nm1">${x.what}</span><span class="clip dim mc">${local(x.started, 'Open since ')}</span><span class="lv"></span><span class="n"></span><span></span><span class="acts">${button('/admin/ssh/sessions/end', hidden('id', x.id), `End SSH session ${x.what}`, `End this SSH session now? ${x.what}`, 'revoke')}</span></summary><div class="xb"><div class="bt">${button('/admin/ssh/sessions/end', hidden('id', x.id), 'End session', `End this SSH session now? ${x.what}`)}</div></div></details>`
     return html`<article id="agent-${a.id}" data-kind="${[...new Set([...mine.map((g) => g.kind), ...open.map(() => 'ssh'), ...held.map(() => 'ext')])].join(' ')}">${head}${tree}${others.sort((x, y) => x.item.localeCompare(y.item)).map((g) => line(g, g.item.replace(/^\w+:|:rw$/g, ''), g.detail.text))}${open.map(session)}${chips('site', mine.filter((g) => g.kind === 'site').map(chip))}${chips('ext', [...held.map((item) => html`<span class="c held" title="${item}: held for the task by the launch template; not revoked here">${item.replace(/^\w+:/, '')}</span>`), ...mine.filter((g) => g.kind === 'ext').map(chip)])}</article>`
@@ -561,7 +654,7 @@ export function agents(
   const rest = all.filter(idle)
   const approved = hosts.filter((h) => h.grant)
   return String(
-    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="every 5s" hx-target="#agents" hx-swap="morph:outerHTML" hx-sync="body:queue all" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
+    html`<section id="agents" hx-get="/admin/panel/agents" hx-trigger="speaker:change from:window, every 30s" hx-target="#agents" hx-swap="morph:outerHTML" hx-sync="body:queue all" data-pending="${cards.length}">${cards.length ? html`<section id="needs" class="panel region"><h2>Needs attention <small class="count">${cards.length}</small></h2><div class="cards">${cards.map(cardHtml)}</div></section>` : ''}<section id="current" class="panel"><h2>Current agents ${current.length ? html`<small class="count">${current.length}</small>` : ''}</h2>${current.length ? html`<div class="list">${current.map(agentBlock)}</div>` : empty('No agent has current access.')}<p><small>Expiry and revocation block new calls; a response already streaming may finish.</small></p></section>${rest.length ? html`<details id="idle" class="panel"><summary>No current access (${rest.length})</summary><div class="list">${rest.map(agentBlock)}</div></details>` : ''}${approved.length ? html`<details id="hosts" class="panel"><summary>Hosts (${approved.length})</summary><table class="data-table"><thead><tr><th scope="col">Host</th><th scope="col">Connection</th><th scope="col">Kinds</th><th scope="col" aria-label="Actions"></th></tr></thead><tbody>${approved.map((h) => html`<tr id="host-${h.id}"><td data-label="Host"><strong>${h.name}</strong></td><td data-label="Connection">${connected.has(h.id) ? 'Connected' : 'Not connected'}</td><td data-label="Kinds">${h.kinds.join(' ') || 'none'}</td><td class="act"><details><summary>Details</summary><p><small>Id <code>${h.id}</code> · ${registered(h)}</small></p>${button(`/admin/hosts/${h.id}/remove`, '', 'Remove host', `Remove sandbox host ${h.name}? Its agents and their grants end immediately.`)}</details></td></tr>`)}</tbody></table></details>` : ''}</section>`,
   )
 }
 const groupErrors: Record<string, string> = {
@@ -792,7 +885,7 @@ export function setup({
   })
   const browserPanel = html`${brokerReady ? '' : html`<p class="warn" role="note">${brokerMissing}.</p>`}${error === 'browser' ? html`<p class="warn" role="alert">Browser site not saved: the name uses letters, numbers, - and _; the start URL is http(s), without a query, on one of the domains.</p>` : ''}${browserRows.length ? table(['Name', 'Start URL', 'Domains', 'State', 'Actions'], browserRows) : empty('No browser sites. A browser site is a website you sign in to by hand; agents then use it without seeing the login.')}<details><summary>Add a browser site</summary>${browserForm()}</details>`
   const jumpNav = html`<nav class="jump-links" aria-label="Setup sections"><a href="#setup-services">Services</a><a href="#setup-secrets">Secrets</a><a href="#groups">Groups</a><a href="#setup-ssh">SSH</a><a href="#setup-browsers">Browsers</a><a href="/admin#hosts" hx-boost="false">Hosts</a><a href="#setup-password">Owner security</a></nav>`
-  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-browsers"><h2 title="A browser site is a headless Chromium session you open and sign in to by hand; agents with a grant drive it with commands and never see its cookies.">Browser sites</h2>${browserPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
+  return html`${jumpNav}<section class="panel" id="setup-services"><h2 title="A service is an upstream API speaker proxies: it adds the credential to each call, so the agent never holds it.">Services <small>rules are ask unless shown</small></h2>${chosen ? html`<article><h3>Edit service: ${selected}</h3>${serviceForm}${chosen.mcp ? tools(selected ?? '') : ''}</article>` : ''}${serviceRows.length ? html`<div>${serviceRows}</div>` : empty('No services configured. Add a service to let agents request access to an upstream API.')}${chosen ? '' : prefix ? html`<article><h3>Add a scope to ${scope}</h3>${serviceForm}</article>` : html`<details><summary>Add service</summary>${serviceForm}</details>`}</section><section class="panel" id="setup-secrets"><h2 title="A secret is a value speaker inserts into an agent's requests, only to the hosts you allow; the agent sees just a variable holding a placeholder.">Secrets</h2>${secretErrors[error ?? ''] ? html`<p class="warn" role="alert">${secretErrors[error ?? '']}</p>` : ''}${secretRows.length ? table(['Name', 'Allowed destinations', 'Agent variable', 'Actions'], secretRows) : empty('No secrets yet.')}<details><summary>Add a secret</summary>${secretForm()}</details></section><section class="panel" id="groups"><h2 title="A group is what an agent may ask for; a bottle template names the group to request at launch. Changes apply to new requests; requests already pending keep their items.">Groups</h2>${groupErrors[error ?? ''] ? html`<p class="warn" role="alert">${groupErrors[error ?? '']}</p>` : ''}${groupRows.length ? table(['Group', 'Purpose', 'Members', 'Actions'], groupRows) : empty('No groups. A group collects items so an agent can request them with one approval.')}<details><summary>Add group</summary>${groupForm('', { items: [] })}</details><p><small>Deleting a group does not end existing grants.</small></p></section><section class="panel" id="setup-ssh"><h2>SSH targets and shares</h2>${sshPanel}</section><section class="panel" id="setup-browsers"><h2 title="A browser site is a headless Chromium session you open and sign in to by hand; agents with a grant drive it with commands and never see its cookies.">Browser sites</h2>${browserPanel}</section><section class="panel" id="setup-password"><h2>Owner security</h2><p class="actions"><button type="button" class="secondary" data-push-toggle>Enable push on this device</button><button type="button" class="secondary" data-push-test hidden>Send test push</button><small id="push-status"></small></p><details><summary>Change owner password</summary><form method="post" action="/admin/password">${password('current', 'Current password', 'current-password')}${password('password', 'New password', 'new-password')}${password('confirm', 'Repeat the new password', 'new-password')}<button>Change password</button></form></details></section>`
 }
 const s = (value: unknown) => String(value ?? '')
 const arr = (v: unknown) => (Array.isArray(v) ? v.map(s) : [])
@@ -916,4 +1009,4 @@ canvas.onkeydown = (e) => {
 // A pasted password (from a password manager) is typed in, one character at a time.
 document.onpaste = (e) => { for (const c of e.clipboardData.getData('text')) char(c) }`
 export const browserPage = (nonce: string | undefined, site: string, until: number) =>
-  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>${site} · Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/open-props.css"><style>${raw(css)}canvas{display:block;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:var(--radius-2);background:var(--surface-2)}</style></head><body><main><h2>${site} <small id="status">Connecting</small></h2><p>Click into the page and sign in; paste works for passwords. Agents holding <code>browser:${site}</code> use this session until it closes ${local(until, 'Closes ')}. <a href="/admin?section=services#setup-browsers">Back to Setup</a></p><canvas width="1280" height="720" tabindex="0" aria-label="Live view of ${site}"></canvas><script nonce="${nonce ?? ''}">${raw(viewScript)}</script></main></body></html>`
+  html`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><title>${site} · Speaker for the creds</title><link rel="stylesheet" href="/admin/assets/pico.css"><style>${raw(css)}canvas{display:block;width:100%;aspect-ratio:16/9;border:1px solid var(--line);border-radius:.45rem;background:var(--surface-2)}</style></head><body><main><h2>${site} <small id="status">Connecting</small></h2><p>Click into the page and sign in; paste works for passwords. Agents holding <code>browser:${site}</code> use this session until it closes ${local(until, 'Closes ')}. <a href="/admin?section=services#setup-browsers">Back to Setup</a></p><canvas width="1280" height="720" tabindex="0" aria-label="Live view of ${site}"></canvas><script nonce="${nonce ?? ''}">${raw(viewScript)}</script></main></body></html>`

@@ -4,6 +4,7 @@ import { getCookie, setCookie } from 'hono/cookie'
 import { csrf } from 'hono/csrf'
 import { HTTPException } from 'hono/http-exception'
 import { NONCE, secureHeaders } from 'hono/secure-headers'
+import { streamSSE } from 'hono/streaming'
 import { rateLimiter } from 'hono-rate-limiter'
 import { z } from 'zod'
 import {
@@ -24,6 +25,7 @@ import {
   type View,
 } from './core.ts'
 import { kindPrefixes } from './items.ts'
+import { pushSubscriptionSchema } from './push.ts'
 import { WrongPassword } from './store.ts'
 import { agents, browserPage, icons, layout, log, setPasswordPage, setup, signInPage } from './ui.ts'
 
@@ -44,6 +46,8 @@ export function adminApp(core: Core) {
         imgSrc: ["'self'"],
         scriptSrc: ["'self'", NONCE],
         connectSrc: ["'self'"],
+        workerSrc: ["'self'"],
+        manifestSrc: ["'self'"],
         formAction: ["'self'"],
         frameAncestors: ["'none'"],
         baseUri: ["'none'"],
@@ -74,7 +78,6 @@ export function adminApp(core: Core) {
   const asset = (path: string) => readFileSync(new URL(import.meta.resolve(path)), 'utf8')
   const cached = (type: string, body: string) => (c: Context) =>
     c.body(body, 200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'max-age=86400' })
-  const props = ['colors', 'shadows', 'borders', 'sizes', 'fonts'].map((f) => asset(`open-props/${f}.min.css`)).join('')
   const lucide = asset('lucide-static/sprite.svg')
   const symbol = ([kind, [icon]]: [string, [string, number]]) => {
     const found = lucide.match(new RegExp(`<symbol id="${icon}"[\\s\\S]*?</symbol>`))
@@ -82,10 +85,49 @@ export function adminApp(core: Core) {
     return found[0].replace(`"${icon}"`, `"i-${kind}"`)
   }
   const sprite = `<svg xmlns="http://www.w3.org/2000/svg"><defs>${Object.entries(icons).map(symbol).join('')}</defs></svg>`
+  const appIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="40" fill="#364fc7"/><g transform="translate(36 36) scale(5)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="#fff"/></g></svg>`
+  const manifest = JSON.stringify({
+    name: 'Speaker for the creds',
+    short_name: 'Speaker',
+    start_url: '/admin',
+    scope: '/admin',
+    display: 'standalone',
+    theme_color: '#364fc7',
+    background_color: '#171923',
+    icons: [{ src: '/admin/assets/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
+  })
+  const swScript = `self.addEventListener('push', (e) => {
+  const data = e.data ? e.data.json() : {}
+  e.waitUntil(self.registration.showNotification(data.title || 'Speaker', {
+    body: data.body || '',
+    tag: data.tag || 'speaker',
+    renotify: true,
+    icon: '/admin/assets/icon.svg',
+    data: { url: data.url || '/admin' },
+  }))
+})
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close()
+  const url = e.notification.data?.url || '/admin'
+  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const open = list.find((w) => w.url.includes('/admin'))
+    if (open) return open.navigate(url).then(() => open.focus())
+    return clients.openWindow(url)
+  }))
+})`
   admin.get('/assets/htmx.js', cached('text/javascript', asset('htmx.org/dist/htmx.min.js')))
   admin.get('/assets/idiomorph.js', cached('text/javascript', asset('idiomorph/dist/idiomorph-ext.min.js')))
-  admin.get('/assets/open-props.css', cached('text/css', props))
+  admin.get('/assets/pico.css', cached('text/css', asset('@picocss/pico/css/pico.indigo.min.css')))
   admin.get('/assets/icons.svg', cached('image/svg+xml', sprite))
+  admin.get('/assets/icon.svg', cached('image/svg+xml', appIcon))
+  admin.get('/manifest.json', cached('application/manifest+json', manifest))
+  admin.get('/sw.js', (c) =>
+    c.body(swScript, 200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-cache',
+      'service-worker-allowed': '/admin',
+    }),
+  )
   const sessionLife = 12 * 3600_000
   const sessionCookie = 'speaker_session'
   const current = (id: string | undefined) => id !== undefined && (core.sessions.get(id) ?? 0) > Date.now()
@@ -166,6 +208,30 @@ export function adminApp(core: Core) {
     if (current(token) && apiTokens.has(token as string)) return await next()
     return apiError(c, 401, 'Sign in with POST /admin/api/signin and send Authorization: Bearer <token>')
   })
+  const events = (c: Context) =>
+    streamSSE(c, async (stream) => {
+      let open = true
+      let queue: Promise<unknown> = Promise.resolve()
+      const send = () => {
+        if (!open) return
+        queue = queue.then(() => stream.writeSSE({ event: 'change', data: '{}' })).catch(() => undefined)
+      }
+      const off = core.onChange(send)
+      const ping = setInterval(() => {
+        if (open) queue = queue.then(() => stream.write(': ping\n\n')).catch(() => undefined)
+      }, 25_000)
+      ping.unref()
+      await new Promise<void>((done) => {
+        stream.onAbort(() => {
+          open = false
+          clearInterval(ping)
+          off()
+          done()
+        })
+        send()
+      })
+    })
+  admin.get('/api/events', events)
   admin.get('/api/pending', (c) => c.json({ pending: core.engine.cards() }))
   admin.get('/api/active', (c) =>
     c.json({
@@ -281,6 +347,26 @@ export function adminApp(core: Core) {
     }
     const view = core.view()
     return c.html(layout(nonce, 'agents', panel(view), view.cards.length))
+  })
+  admin.get('/events', events)
+  admin.get('/push/key', async (c) =>
+    c.json({ publicKey: await core.vapidPublicKey(), count: core.pushSubscriptionCount() }),
+  )
+  admin.post('/push/subscribe', async (c) => {
+    await core.addPushSubscription(pushSubscriptionSchema.parse(await c.req.json()))
+    core.audit('push_subscribed')
+    return c.body(null, 204)
+  })
+  admin.post('/push/unsubscribe', async (c) => {
+    const { endpoint } = z.object({ endpoint: z.url() }).parse(await c.req.json())
+    await core.removePushSubscription(endpoint)
+    core.audit('push_unsubscribed')
+    return c.body(null, 204)
+  })
+  admin.post('/push/test', async (c) => {
+    await core.sendTestPush()
+    core.audit('push_tested')
+    return c.body(null, 204)
   })
   // The older inbox and active panels poll the same one.
   admin.get('/panel/:name{inbox|active|agents}', (c) => c.html(panel(core.view())))

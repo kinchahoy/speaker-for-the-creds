@@ -487,9 +487,10 @@ export class Agents {
         hosts: secretHosts.parse(hosts),
         expiresAt,
       }));
-    // A secret grant also opens egress to the hosts it names.
+    // Secret and extension grants also open egress to the hosts they declare.
     agent.live.hosts = [
       ...this.#granted(agent, "site").map(({ item, expiresAt }) => ({ host: refOf(item), expiresAt })),
+      ...this.#granted(agent, "ext").flatMap(({ item, expiresAt }) => (this.catalog.extensions[refOf(item)]?.sites ?? []).map((host) => ({ host, expiresAt }))),
       ...agent.live.secretHosts.flatMap(({ hosts, expiresAt }) => hosts.map((host) => ({ host, expiresAt }))),
     ];
     agent.live.shares.clear();

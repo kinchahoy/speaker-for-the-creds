@@ -38,7 +38,7 @@ export const Catalog = z
           description: z.string().min(1),
           /** The tools the extension registers; `--tools` is an allowlist, so unlisted tools stay hidden. */
           tools: z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)),
-          /** Hosts the extension itself contacts; speaker adds them to a request for it. */
+          /** Hosts the extension itself contacts; bottle opens them while ext:<id> is granted. */
           sites: z.array(z.string().min(1)),
           /** Guidance appended to the system prompt while the extension is loaded. */
           note: z.string().min(1).optional(),

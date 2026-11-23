@@ -20,6 +20,8 @@ Newest first. Frontmatter `state`/`updated` mirror the newest entry.
 
 ## Ideas
 
+- Agent questions on the approval/push surface: route mid-run `ask_user_question` prompts or checkpoints from unattended agents through the same `/admin` inbox and iOS Web Push notifications as permission cards · cost M · 2026-11-23
+- Standing profiles & remembered hosts in the encrypted vault: keep `store.json` locked on reboot until the owner signs in once, then restore approved sandbox hosts and narrow recurring profiles (e.g., `life-todo` with no public web egress) automatically from the decrypted vault instead of re-approving every card after a restart; ad-hoc requests still go to the real-time approval inbox · cost M · 2026-11-23
 - Secret-URL credentials in the encrypted store: some upstreams use the URL itself as the credential (ha-mcp's in-process server at `.../api/webhook/<id>` or `:9584/private_<random>`), so today that secret sits in plain service config as `baseUrl`; let a service's `baseUrl` (or a path segment) come from an encrypted secret instead: serves the star because the Home Assistant path the to-do agent depends on would keep its credential under the same unlock-and-log rules as every other key · cost S · 2026-11-18
 
 ## Next steps

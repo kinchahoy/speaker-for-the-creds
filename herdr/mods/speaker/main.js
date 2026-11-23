@@ -101,7 +101,45 @@ export default class Speaker extends View {
     } else cx.spawn(async (cx) => { for (;;) if ((await nextCommand()) === "open") openInbox(); });
     const refresh = (cx) => this.act(cx, async () => {});
     refresh(cx);
-    cx.timer.every(10_000, refresh);
+    this.watchEvents(cx);
+    cx.timer.every(30_000, refresh);
+  }
+
+  // Subscribes to speaker's SSE stream (/admin/api/events) so approvals and toasts arrive immediately.
+  watchEvents(cx) {
+    this.sse?.abort();
+    if (!token || !settings()?.url) return;
+    const ac = new AbortController();
+    this.sse = ac;
+    cx.spawn(async (cx) => {
+      try {
+        const response = await fetch(`${settings().url}/admin/api/events`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: ac.signal,
+        });
+        if (response.status === 401) { token = undefined; cx.notify(); return; }
+        if (!response.ok || !response.body) throw new Error(`events answered ${response.status}`);
+        const reader = response.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let first = true;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const frames = buf.split("\n\n");
+          buf = frames.pop() ?? "";
+          if (frames.some((f) => f.includes("event: change"))) {
+            if (first) { first = false; continue; }
+            this.act(cx, async () => {});
+          }
+        }
+      } catch (error) {
+        if (ac.signal.aborted) return;
+        log(`speaker SSE -> ${error.message}`);
+      }
+      if (!ac.signal.aborted && token) cx.timer.after(5_000, (cx) => this.watchEvents(cx));
+    });
   }
 
   // Runs an action, then reloads speaker and bottle independently (a failure keeps that side's last data, shown stale).
@@ -176,6 +214,7 @@ export default class Speaker extends View {
         ({ token, publicUrl } = await api("/signin", { password: this.password.value() }));
         this.password.set_value("");
         this.reveal(false); // act re-renders afterwards
+        this.watchEvents(cx);
       } finally {
         this.signingIn = false;
       }
@@ -193,6 +232,7 @@ export default class Speaker extends View {
       const next = { url: clean(this.urlInput), bottle: clean(this.bottleInput), machine: clean(this.machineInput) };
       if (!next.url) throw new Error("Speaker URL is required");
       if (next.url !== settings()?.url) {
+        this.sse?.abort();
         token = publicUrl = undefined;
         this.pending = [];
         this.grants = [];

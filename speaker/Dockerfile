@@ -18,9 +18,9 @@ FROM node:26-slim
 WORKDIR /app/speaker
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data \
   BROWSER_BROKER_PORT=3100 AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chromium-sandboxed
-# The jump server (sshd), ssh, ssh-agent and ssh-keygen for SSH and folders over SSH; Chromium and a font for browser
-# sites, run by the user `browser` (setpriv, from util-linux, switches users at start).
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server openssh-client chromium fonts-liberation \
+# ssh-keygen (from openssh-client) for speaker's initial SSH key; Chromium and a font for browser sites, run by the user
+# `browser` (setpriv, from util-linux, switches users at start).
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client chromium fonts-liberation \
   && rm -rf /var/lib/apt/lists/* \
   && mkdir /data && chown node:node /data \
   && useradd --system --no-create-home --shell /usr/sbin/nologin browser

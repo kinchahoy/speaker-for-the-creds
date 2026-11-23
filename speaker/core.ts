@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, watchFile } from 'node:fs'
 import { lookup } from 'node:dns/promises'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, open, readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join, resolve } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
@@ -18,12 +18,22 @@ import {
   type Engine,
   type Kind,
   type Refusal as Refused,
+  type Tier,
 } from './engine.ts'
 import { createBrowser } from './browser.ts'
 import { coversAny, durationNames, errorBody, type ErrorCode, type ErrorFields, itemForms, kindOf } from './items.ts'
 import { createJump } from './jump.ts'
 import { createCa, createProxy, type ProxySecret, Refusal } from './proxy.ts'
-import { createStore, generateSshKey, openStore, type OwnerSecret, type Store, type Vault } from './store.ts'
+import { addSubscription, removeSubscription, sendPush, vapidKeys } from './push.ts'
+import {
+  createStore,
+  generateSshKey,
+  openStore,
+  type OwnerSecret,
+  type PushSubscriptionRecord,
+  type Store,
+  type Vault,
+} from './store.ts'
 
 // A service id: a name, or a scope `name:scope` of a service that holds its own key (checked when it is saved).
 export const serviceIdSchema = z
@@ -220,11 +230,13 @@ export const browserSiteSchema = z
     path: ['startUrl'],
   })
 // config.json (see createCore). A secret's entry is what it may reach; its value is in the encrypted store.
+export const tierNames = ['routine', 'notable', 'sensitive'] as const
 export const configSchema = z.object({
   services: z.record(serviceIdSchema, serviceSchema),
   groups: groupsSchema.default({}),
   secrets: z.record(ownerSecretSchema.shape.name, secretSetupSchema).default({}),
   browsers: z.record(idSchema, browserSiteSchema).default({}),
+  tiers: z.record(z.string().min(1), z.enum(tierNames)).default({}),
 })
 // What a card posts: the items ticked and every item the card showed. Only shown items are decided.
 export const decisionSchema = z.object({
@@ -274,7 +286,6 @@ export type GrantView = Approval & {
   label: string
   agent: string
   enforcement: Enforcement
-  bundledWith: string[]
   detail: Description
 }
 // One connected sandbox host: its socket, the grants it reported applied, and what it can start inside its VMs
@@ -305,7 +316,6 @@ export type Env = { Variables: { caller: Caller } }
 export const demoSecret = 'speaker-demo-credential-not-for-real-services'
 export const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
-export const union = (...lists: string[][]) => [...new Set(lists.flat())]
 export const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 export function readConfig(environment: NodeJS.ProcessEnv = process.env) {
@@ -464,12 +474,25 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
   // The log: every event goes to standard output and is appended to audit.jsonl, which the admin Log page reads, so
   // the record outlives a restart. It is never trimmed; delete or rotate the file by hand.
   const auditFile = file('audit.jsonl')
-  const readLog = async (): Promise<LogEntry[]> =>
-    ((await optionalFile(auditFile)) ?? '')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as LogEntry)
-      .reverse()
+  const auditTailBytes = 2 * 1024 * 1024
+  const readLog = async (): Promise<LogEntry[]> => {
+    const fh = await open(auditFile, 'r').catch(() => undefined)
+    if (!fh) return []
+    try {
+      const { size } = await fh.stat()
+      const start = Math.max(0, size - auditTailBytes)
+      const buf = Buffer.alloc(size - start)
+      await fh.read(buf, 0, buf.length, start)
+      const text = buf.toString('utf8')
+      return (start > 0 ? text.slice(text.indexOf('\n') + 1) : text)
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as LogEntry)
+        .reverse()
+    } finally {
+      await fh.close()
+    }
+  }
   const audit = (event: string, fields: Record<string, unknown> = {}) => {
     const who = typeof fields.agent === 'string' ? agentById(fields.agent) : undefined
     const entry: LogEntry = {
@@ -819,10 +842,15 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       ...base,
       where: 'host',
       validate: inCatalog('extensions', 'Extensions'),
-      describe: (item, agentId) => ({
-        text: `${hostEntry(agentId, 'extensions', item)?.label ?? 'Pi extension'} · runs in the sandbox`,
-        reach: [item],
-      }),
+      describe(item, agentId) {
+        const entry = catalogOf(agentId)?.extensions.find(({ id }) => item === `ext:${id}`)
+        const sites = entry?.sites ?? []
+        return {
+          text: `${entry?.label ?? 'Pi extension'} · runs in the sandbox${sites.length ? ` · contacts ${sites.join(', ')}` : ''}`,
+          reach: [item, ...sites],
+          warning: broad(sites),
+        }
+      },
     },
     // A sandbox host registering: approving lets it create agents and enforce the kinds it named. It stays until the
     // owner removes it; removing it (or denying the registration) ends its agents and forgets it.
@@ -872,6 +900,31 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
       },
     },
   }
+  // Resolves an item's visual tier (`routine`, `notable`, `sensitive`): explicit `tiers` overrides (exact item, then
+  // longest prefix) take precedence; otherwise kind/write-level defaults apply, stepping up once on warnings or wider scope.
+  const tierOf = (item: string, kind: string, desc: Description): Tier => {
+    const tiers = ownerConfig.tiers
+    if (Object.hasOwn(tiers, item)) return tiers[item]
+    const prefix = Object.keys(tiers)
+      .filter((k) => item.startsWith(k))
+      .sort((a, b) => b.length - a.length)[0]
+    if (prefix) return tiers[prefix]
+    const base: Tier =
+      kind === 'ssh' || kind === 'secret' || kind === 'host'
+        ? 'sensitive'
+        : desc.risk === 'read/write' || desc.risk === 'browser'
+          ? 'notable'
+          : 'routine'
+    if (!desc.warning && !desc.wider) return base
+    return base === 'routine' ? 'notable' : 'sensitive'
+  }
+  for (const [kind, spec] of Object.entries(kinds)) {
+    const describe = spec.describe
+    spec.describe = (item, subject) => {
+      const desc = describe(item, subject)
+      return { ...desc, tier: tierOf(item, kind, desc) }
+    }
+  }
   const engine = createEngine({
     kinds,
     kindOf: (item) => kindOf(item) as string,
@@ -915,7 +968,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     askHost(host.id)
     saveHosts()
   }
-  for (const id of hosts.keys()) askHost(id)
 
   const snapshot = (hostId: string) => ({
     type: 'snapshot',
@@ -940,9 +992,67 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
         reason: request.reason,
       })),
   })
+  const eventListeners = new Set<() => void>()
+  const onChange = (listener: () => void) => {
+    eventListeners.add(listener)
+    return () => void eventListeners.delete(listener)
+  }
+  const notifiedCards = new Set<string>(engine.cards().map((card) => card.id))
+  function notifyNewCards() {
+    const cards = engine.cards()
+    const currentIds = new Set(cards.map((card) => card.id))
+    for (const id of notifiedCards) if (!currentIds.has(id)) notifiedCards.delete(id)
+    if (vault.state !== 'unlocked') return
+    const opened = vault.store
+    for (const card of cards) {
+      if (notifiedCards.has(card.id)) continue
+      notifiedCards.add(card.id)
+      if (!opened.vault.pushSubscriptions?.length) continue
+      const body = card.items.map((i) => i.item).join(', ')
+      void sendPush(
+        opened,
+        config.PUBLIC_URL,
+        {
+          title: `${card.who.label} asks for access`,
+          body: card.reason ? `${body} — ${card.reason}` : body,
+          url: `/admin#request-${card.id}`,
+          tag: `speaker-${card.id}`,
+        },
+        (endpoint, error) => audit('push_failed', { endpoint, error }),
+      )
+    }
+  }
   function push() {
     syncJump()
     for (const [id, { ws }] of connections) ws.send(JSON.stringify(snapshot(id)))
+    for (const listener of eventListeners) listener()
+    notifyNewCards()
+  }
+  for (const id of hosts.keys()) askHost(id)
+  const vapidPublicKey = async () => (await vapidKeys(unlocked())).publicKey
+  const addPushSubscription = (sub: PushSubscriptionRecord) => addSubscription(unlocked(), sub)
+  const removePushSubscription = (endpoint: string) => removeSubscription(unlocked(), endpoint)
+  const pushSubscriptionCount = () =>
+    vault.state === 'unlocked' ? (vault.store.vault.pushSubscriptions?.length ?? 0) : 0
+  const sendTestPush = async () => {
+    const opened = unlocked()
+    if (!opened.vault.pushSubscriptions?.length) throw new HTTPException(409, { message: 'No push devices enabled' })
+    const errors: string[] = []
+    await sendPush(
+      opened,
+      config.PUBLIC_URL,
+      {
+        title: 'Speaker test notification',
+        body: 'Push notifications are working on this device.',
+        url: '/admin',
+        tag: 'speaker-test',
+      },
+      (endpoint, error) => {
+        errors.push(error)
+        audit('push_failed', { endpoint, error })
+      },
+    )
+    if (errors.length) throw new HTTPException(502, { message: `Push failed: ${errors[0]}` })
   }
   setInterval(() => {
     sweep()
@@ -1064,7 +1174,6 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
           label: agent?.label ?? '',
           agent: agent?.agent ?? '',
           enforcement: enforcementOf(grant),
-          bundledWith: (grant.with ?? []).flatMap((id) => engine.approvals.get(id)?.item ?? []),
           detail: engine.describe(grant),
         }
       }),
@@ -1115,7 +1224,7 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     try {
       const next = configSchema.parse(await json(configFile))
       if (JSON.stringify(next) === JSON.stringify(ownerConfig)) return // speaker's own save
-      for (const key of ['services', 'groups', 'secrets', 'browsers'] as const) {
+      for (const key of ['services', 'groups', 'secrets', 'browsers', 'tiers'] as const) {
         for (const name of Object.keys(ownerConfig[key])) delete ownerConfig[key][name]
         Object.assign(ownerConfig[key], next[key])
       }
@@ -1161,6 +1270,12 @@ export async function createCore(config: ReturnType<typeof readConfig>) {
     rid,
     sweep,
     push,
+    onChange,
+    vapidPublicKey,
+    addPushSubscription,
+    removePushSubscription,
+    pushSubscriptionCount,
+    sendTestPush,
     syncJump,
     snapshot,
     serviceItem,

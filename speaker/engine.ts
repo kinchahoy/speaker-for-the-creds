@@ -8,6 +8,7 @@ import { durationNames, durations } from './items.ts'
 import { type ApprovalEvent, type ApprovalState, approvalTable, transition } from './lifecycle.ts'
 
 export type Duration = (typeof durationNames)[number] | 'permanent'
+export type Tier = 'routine' | 'notable' | 'sensitive'
 export type SubjectType = 'agent' | 'host'
 // What asking for an item leads to: a card for the owner, or an answer at once: open (an open service read), never (the
 // owner's rule), unavailable (denied and logged: it cannot be delivered).
@@ -22,6 +23,7 @@ export type Description = {
   // Not pre-ticked on the card.
   wider?: boolean
   risk?: 'read/write' | 'secret' | 'SSH' | 'browser'
+  tier?: Tier
 }
 export type Refusal = { message: string; next: string }
 
@@ -58,8 +60,6 @@ export type Approval = {
   grantedMs?: number
   grantedAt?: number
   reach: string[]
-  // Granted only because another item of the same request brought it: it ends with the last of these grants.
-  with?: string[]
   uses: number
   lastUsedAt: number | null
 }
@@ -74,8 +74,6 @@ export type Request = {
   trigger?: string
   // The name the agent gave itself for this task (Speaker-Agent), shown on the card; self-reported, never trusted.
   as?: string
-  // Items that came only with another item of this request (item -> the item that brought it).
-  bundled?: Record<string, string>
   approvals: string[]
   createdAt: number
   decidedAt?: number
@@ -161,43 +159,25 @@ export function createEngine(env: {
   function end(approval: Approval, event: Exclude<ApprovalEvent, 'grant' | 'extend' | 'open'>, why?: string) {
     const was = approval.state
     approval.state = transition('approval', approvalTable, was, event)
-    if (was === 'granted') {
+    if (was === 'granted')
       env.audit(`grant_${approval.state}`, {
         grant: approval.id,
         ...named(approval),
         item: approval.item,
         ...(why ? { why } : {}),
       })
-      for (const follower of grants())
-        if (follower.with?.includes(approval.id)) {
-          follower.with = follower.with.filter((id) => id !== approval.id && approvals.get(id)?.state === 'granted')
-          if (!follower.with.length) end(follower, event, why)
-        }
-    }
     kindOf(approval).ended(approval)
   }
-  function grant(approval: Approval, duration: Duration, at: number, bundle?: string[]) {
+  function grant(approval: Approval, duration: Duration, at: number) {
     const replaced = grants(approval.subject).filter((old) => old.item === approval.item)
-    const old = replaced[0]
-    // A grant held on its own is not tied to an extension by this one, and keeps the later end.
-    const keep = old && !old.with && bundle ? old : undefined
-    const until = duration === 'permanent' ? null : new Date(at + durations[duration]).toISOString()
-    const later = keep && (keep.expiresAt === null || (until !== null && keep.expiresAt > until))
     Object.assign(approval, {
-      expiresAt: later ? keep.expiresAt : until,
-      grantedMs: later ? keep.grantedMs : duration === 'permanent' ? undefined : durations[duration],
+      expiresAt: duration === 'permanent' ? null : new Date(at + durations[duration]).toISOString(),
+      grantedMs: duration === 'permanent' ? undefined : durations[duration],
       grantedAt: at,
       reach: kindOf(approval).describe(approval.item, approval.subject).reach,
-      ...(bundle?.length && !keep ? { with: bundle } : {}),
     })
     approval.state = transition('approval', approvalTable, approval.state, 'grant')
-    // A later approval of the same item replaces the earlier grant; what came with it follows this one.
-    for (const previous of replaced) {
-      for (const follower of grants())
-        if (follower.with?.includes(previous.id))
-          follower.with = [...new Set(follower.with.map((id) => (id === previous.id ? approval.id : id)))]
-      end(previous, 'revoke', 'replaced')
-    }
+    for (const previous of replaced) end(previous, 'revoke', 'replaced')
     env.audit('grant_created', {
       grant: approval.id,
       ...named(approval),
@@ -216,7 +196,6 @@ export function createEngine(env: {
       duration: Duration
       trigger?: string
       as?: string
-      bundled?: Record<string, string>
     },
   ) {
     const itemsOf = (r: Request) => of(r).map((a) => a.item)
@@ -240,7 +219,6 @@ export function createEngine(env: {
       duration: input.duration,
       trigger: input.trigger,
       as: input.as,
-      ...(input.bundled && Object.keys(input.bundled).length ? { bundled: input.bundled } : {}),
       approvals: [],
       createdAt: Date.now(),
     }
@@ -297,18 +275,8 @@ export function createEngine(env: {
       const yes = pending.filter((a) => approved.includes(a.item))
       const no = pending.filter((a) => !approved.includes(a.item))
       if (!pending.length) throw new HTTPException(409, { message: 'None of the shown items are pending' })
-      // A bundled item binds to the grant of the item that brought it, made first.
-      const bringer = (a: Approval) => {
-        const by = request.bundled?.[a.item]
-        return by && yes.some((other) => other.item === by) ? by : undefined
-      }
       const at = Date.now()
-      for (const a of yes.filter((a) => !bringer(a))) grant(a, span, at)
-      for (const a of yes.filter(bringer)) {
-        const by = grants(request.subject).find((g) => g.item === bringer(a))
-        const before = grants(request.subject).find((g) => g.item === a.item)?.with ?? []
-        grant(a, span, at, by ? [...new Set([...before, by.id])] : undefined)
-      }
+      for (const a of yes) grant(a, span, at)
       for (const a of no) {
         strikes.set(strikeKey(a.subject, a.item), [...recentStrikes(strikeKey(a.subject, a.item)), Date.now()])
         end(a, 'deny')
@@ -332,7 +300,6 @@ export function createEngine(env: {
     approval.expiresAt = new Date(
       Math.max(Date.parse(approval.expiresAt), Date.now()) + approval.grantedMs,
     ).toISOString()
-    for (const follower of grants()) if (follower.with?.includes(id)) follower.expiresAt = approval.expiresAt
     env.audit('grant_extended', { grant: id, ...named(approval), expiresAt: approval.expiresAt })
     env.changed()
   }
@@ -407,7 +374,6 @@ export function createEngine(env: {
           item: a.item,
           kind: a.kind,
           ...kindOf(a).describe(a.item, a.subject),
-          ...(r.bundled?.[a.item] ? { with: r.bundled[a.item] } : {}),
         })),
         createdAt: r.createdAt,
       }))

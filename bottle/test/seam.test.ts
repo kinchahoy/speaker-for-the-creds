@@ -60,19 +60,21 @@ test("launching creates one card with the template's items; approving puts them 
     "plain.read",
     "secret:RELEASED",
     "site:example.com",
-    "site:notes.example.com",
     "svc:narrow.read",
   ]);
+  assert.match((card.items.find(({ item }) => item === "ext:notes") as { text?: string } | undefined)?.text ?? "", /notes\.example\.com/);
   await approve();
   const route = secretRoute(agent.live as Live, { close: async () => {} } as never);
   await until(() => agent.extRunning.includes("notes") && agent.state === "idle");
   assert.equal(await egressDecision(agent.live, route, "example.com"), "direct");
+  assert.equal(await egressDecision(agent.live, route, "notes.example.com"), "direct");
   assert.equal(await egressDecision(agent.live, route, "evil.test"), "refuse");
 
   const { grants } = (await f.speaker.owner("/active")) as { grants: { id: string; item: string }[] };
   for (const grant of grants.filter(({ item }) => ["site:example.com", "ext:notes"].includes(item))) await f.speaker.owner(`/grants/${grant.id}/revoke`, {});
   await until(() => agent.extRunning.length === 0 && agent.state === "idle");
   assert.equal(await egressDecision(agent.live, route, "example.com"), "refuse");
+  assert.equal(await egressDecision(agent.live, route, "notes.example.com"), "refuse");
   assert.deepEqual(agent.grants.map(({ item }) => item).sort(), ["llm.full", "plain.read", "secret:RELEASED", "svc:narrow.read"]);
 });
 

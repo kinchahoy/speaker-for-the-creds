@@ -166,5 +166,11 @@
       "description": "The owner's planning: edit Home Assistant to-do lists (synced to Apple Reminders), read the Obsidian notes, and write in their Tasks and Planning folders.",
       "items": ["homeassistant:todo.full", "obsidian.read", "obsidian:tasks.full", "obsidian:planning.full"]
     }
+  },
+  "tiers": {
+    "obsidian:tasks.full": "routine",
+    "obsidian:planning.full": "routine",
+    "homeassistant:todo.full": "routine",
+    "homeassistant.full": "sensitive"
   }
 }

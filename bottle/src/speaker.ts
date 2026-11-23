@@ -135,8 +135,8 @@ export const DROP_MS = 30_000;
 
 /**
  * Holds the sandbox host WebSocket, reconnecting for ever. Each snapshot replaces the grant set and request statuses.
- * After `dropMs` without a word from speaker every grant is dropped until the next snapshot. The catalog, applied ids and
- * titles are reported on every connect. `status()` is one line for people; it is logged when the link changes state.
+ * After `dropMs` without a word from speaker every grant is dropped until the next snapshot. A unified `state` message
+ * (catalog, applied ids, titles) is sent on connect and whenever any of those fields change. `status()` is one line for people; it is logged when the link changes state.
  */
 export const watchGrants = (
   config: Config,
@@ -152,8 +152,10 @@ export const watchGrants = (
   let stopped = false;
   let heardAt = Date.now();
   let dropped = false;
-  let applied = "[]";
-  let titles = "{}";
+  let applied: string[] = [];
+  let appliedKey = "[]";
+  let titles: Record<string, string> = {};
+  let titlesKey = "{}";
   let up = false;
   let since = new Date();
   let lastError = "not connected yet";
@@ -164,16 +166,14 @@ export const watchGrants = (
     since = new Date();
     console.log(`speaker: ${status()}`);
   };
-  const send = (message: object) => {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+  const sendState = () => {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "state", catalog: catalogReport(catalog), applied, titles }));
   };
   const open = () => {
     socket = new WebSocket(url, { headers: { authorization: `Bearer ${hostToken}` } });
     socket.onopen = () => {
       change(true);
-      send({ type: "catalog", ...catalogReport(catalog) });
-      send({ type: "applied", grantIds: JSON.parse(applied) });
-      send({ type: "titles", titles: JSON.parse(titles) });
+      sendState();
     };
     socket.onmessage = (event) => {
       heardAt = Date.now();
@@ -211,20 +211,23 @@ export const watchGrants = (
   open();
   const report = (grantIds: string[]) => {
     const next = JSON.stringify([...grantIds].sort());
-    if (next === applied) return;
-    applied = next;
-    send({ type: "applied", grantIds });
+    if (next === appliedKey) return;
+    appliedKey = next;
+    applied = grantIds;
+    sendState();
   };
   /** Replaces the catalog this host offers and reports it at once. */
   const setCatalog = (next: Catalog) => {
     catalog = next;
-    send({ type: "catalog", ...catalogReport(catalog) });
+    sendState();
   };
   /** Reports each agent's title (by speaker agent id), on connect and whenever one changes. */
   const setTitles = (next: Record<string, string>) => {
-    if (JSON.stringify(next) === titles) return;
-    titles = JSON.stringify(next);
-    send({ type: "titles", titles: next });
+    const key = JSON.stringify(next);
+    if (key === titlesKey) return;
+    titlesKey = key;
+    titles = next;
+    sendState();
   };
   const stop = () => {
     stopped = true;

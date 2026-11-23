@@ -170,18 +170,22 @@ async function sandbox(t: TestContext, f: Fixture, kinds = ['site']) {
   return { ws, snapshots, until, agent, as, ask }
 }
 
-test('a sandbox host: one card for site, extension and service; approval delivers the grants, revoking takes them away', async (t) => {
+test('a sandbox host: one card for site, extension and service; approval delivers the grants, revoking or widening sites takes them away', async (t) => {
   const f = await notes(t)
   const h = await sandbox(t, f, ['site', 'ext'])
   const extension = { id: 'web', label: 'Web', description: 'Search', tools: ['s'], sites: ['a.example'] }
-  h.ws.send(JSON.stringify({ type: 'catalog', mcps: [], extensions: [extension] }))
+  const sendState = (sites: string[], applied: string[] = [], titles: Record<string, string> = {}) =>
+    h.ws.send(
+      JSON.stringify({ type: 'state', catalog: { mcps: [], extensions: [{ ...extension, sites }] }, applied, titles }),
+    )
+  sendState(['a.example'])
   await h.until(async () => Object.keys((await body(await h.as('/_speaker/catalog'))).extensions).length)
   assert.equal((await h.ask(['ext:web', 'site:b.example', 'notes.read'])).status, 202)
   const [card] = await h.until(async () => {
     const found = await f.cards()
     return found.length === 1 ? found : undefined
   })
-  const items = ['ext:web', 'notes.read', 'site:a.example', 'site:b.example']
+  const items = ['ext:web', 'notes.read', 'site:b.example']
   assert.deepEqual(
     card.items
       .map((i) => i.item)
@@ -189,6 +193,9 @@ test('a sandbox host: one card for site, extension and service; approval deliver
       .sort(),
     items,
   )
+  const extCard = card.items.find((i) => i.item === 'ext:web') as { item: string; text?: string; reach?: string[] }
+  assert.match(extCard.text ?? '', /a\.example/)
+  assert.deepEqual(extCard.reach, ['ext:web', 'a.example'])
   await f.decide(card.id, 'approve')
   const delivered = () => h.snapshots.findLast((s) => s.grants.length)
   await h.until(delivered)
@@ -205,6 +212,9 @@ test('a sandbox host: one card for site, extension and service; approval deliver
       .sort(),
     items,
   )
+  // Widening an extension's declared sites in a later state update revokes its grant via reach invalidation.
+  sendState(['a.example', 'c.example'], [], { [h.agent.id]: 'researching' })
+  await h.until(() => !h.snapshots.at(-1)?.grants.some((g) => g.item === 'ext:web'))
   assert.equal((await f.form(`/agents/${h.agent.id}/revoke`, {})).status, 303)
   await h.until(() => h.snapshots.at(-1)?.grants.length === 0)
   assert.deepEqual(
@@ -664,4 +674,168 @@ test('a browser site: the owner signs in through the live view, then a granted a
     logged.map((e) => e.command),
     ['snapshot', 'get', 'screenshot'],
   )
+})
+
+test('real-time SSE events, PWA assets, and Web Push subscriptions work end-to-end', async (t) => {
+  const f = await notes(t)
+  // PWA manifest and service worker are served cleanly.
+  const manifest = await f.call('/admin/manifest.json')
+  assert.equal(manifest.status, 200)
+  assert.equal((await manifest.json()).start_url, '/admin')
+  const sw = await f.call('/admin/sw.js')
+  assert.equal(sw.status, 200)
+  assert.equal(sw.headers.get('service-worker-allowed'), '/admin')
+
+  // Owner API SSE stream pushes an immediate change event when an agent files a request.
+  const signInRes = await f.call('/admin/api/signin', f.json({ password: ownerPassword }))
+  const { token } = (await signInRes.json()) as { token: string }
+  const ac = new AbortController()
+  const sseRes = await fetch(`${f.url}/admin/api/events`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: ac.signal,
+  })
+  assert.equal(sseRes.status, 200)
+  assert.match(sseRes.headers.get('content-type') ?? '', /text\/event-stream/)
+  const reader = sseRes.body!.getReader()
+  const dec = new TextDecoder()
+  const first = await reader.read()
+  assert.match(dec.decode(first.value), /event: change/)
+  const a = await f.enrol()
+  await a.ask(['notes.read'])
+  const second = await reader.read()
+  assert.match(dec.decode(second.value), /event: change/)
+  ac.abort()
+
+  // Web Push VAPID key and subscription persist inside the encrypted store.
+  const headers = { cookie: f.cookie(), origin: 'http://localhost', 'content-type': 'application/json' }
+  const keyRes = await f.call('/admin/push/key', { headers: { cookie: f.cookie() } })
+  assert.equal(keyRes.status, 200)
+  const { publicKey, count } = (await keyRes.json()) as { publicKey: string; count: number }
+  assert.ok(publicKey.length > 20)
+  assert.equal(count, 0)
+  const sub = { endpoint: 'https://push.example.test/sub/1', keys: { p256dh: 'p256dh-key', auth: 'auth-secret' } }
+  assert.equal(
+    (await f.call('/admin/push/subscribe', { method: 'POST', headers, body: JSON.stringify(sub) })).status,
+    204,
+  )
+  assert.equal(
+    ((await (await f.call('/admin/push/key', { headers: { cookie: f.cookie() } })).json()) as { count: number }).count,
+    1,
+  )
+  assert.equal(
+    (
+      await f.call('/admin/push/unsubscribe', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      })
+    ).status,
+    204,
+  )
+  assert.equal(
+    ((await (await f.call('/admin/push/key', { headers: { cookie: f.cookie() } })).json()) as { count: number }).count,
+    0,
+  )
+})
+
+test('an MCP service classifies readOnlyHint tools as .read and write/destructive tools as .full', async (t) => {
+  const mcpServer = createServer(async (req, res) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(chunk as Buffer)
+    const text = Buffer.concat(chunks).toString('utf8')
+    if (!text) return res.writeHead(202).end()
+    const msg = JSON.parse(text) as { id?: number; method: string; params?: { name?: string } }
+    if (msg.id === undefined) return res.writeHead(202).end()
+    const result =
+      msg.method === 'initialize'
+        ? {
+            protocolVersion: '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'fake-mcp', version: '1.0.0' },
+          }
+        : msg.method === 'tools/list'
+          ? {
+              tools: [
+                { name: 'search', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } },
+                {
+                  name: 'delete_note',
+                  inputSchema: { type: 'object' },
+                  annotations: { readOnlyHint: false, destructiveHint: true },
+                },
+              ],
+            }
+          : { content: [{ type: 'text', text: `ran ${msg.params?.name}` }] }
+    res
+      .writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }))
+  })
+  mcpServer.listen(0, '127.0.0.1')
+  await once(mcpServer, 'listening')
+  t.after(() => mcpServer.close())
+  const port = (mcpServer.address() as { port: number }).port
+
+  const f = await start(t)
+  assert.equal(
+    (
+      await f.saveService('mcpbox', {
+        baseUrl: `http://127.0.0.1:${port}/mcp`,
+        authType: 'none',
+        mcp: 'on',
+      })
+    ).status,
+    303,
+  )
+  const a = await f.enrol()
+  await grant(f, a, 'mcpbox.read')
+  const callTool = (name: string) =>
+    a.as('/mcpbox', f.json({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }))
+  assert.equal((await callTool('search')).status, 200)
+  const blocked = await callTool('delete_note')
+  assert.equal([blocked.status, await error(blocked)].join(), '403,approval_required')
+  await grant(f, a, 'mcpbox.full')
+  assert.equal((await callTool('delete_note')).status, 200)
+})
+
+test('approval cards reflect 3-tier defaults, config overrides, clean icons, and private + web context notes', async (t) => {
+  const f = await notes(t)
+  assert.equal((await f.saveService('obsidian', { baseUrl: 'https://notes.example.com/api', secret: KEY })).status, 303)
+  assert.equal((await f.saveService('homeassistant', { secret: KEY })).status, 303)
+  await f.form('/secrets/save', { name: 'GH', value: 'tok', hosts: 'github.com', env: 'GH_TOKEN' })
+  const h = await sandbox(t, f, ['site'])
+  assert.equal(
+    (await h.ask(['notes.read', 'notes.full', 'obsidian:tasks.full', 'homeassistant.full', 'secret:GH', 'site:*.com']))
+      .status,
+    202,
+  )
+  const [card] = (await f.api('/pending')).pending as {
+    id: string
+    items: { item: string; tier?: string }[]
+  }[]
+  assert.deepEqual(Object.fromEntries(card.items.map((i) => [i.item, i.tier])), {
+    'notes.read': 'routine',
+    'notes.full': 'notable',
+    'obsidian:tasks.full': 'routine',
+    'homeassistant.full': 'sensitive',
+    'secret:GH': 'sensitive',
+    'site:*.com': 'notable',
+  })
+  const adminHtml = async () => (await f.call('/admin', { headers: { cookie: f.cookie() } })).text()
+  const html1 = await adminHtml()
+  assert.match(html1, /class="tier-routine"[\s\S]*?#i-service"[\s\S]*?notes\.read/)
+  assert.match(html1, /class="tier-notable"[\s\S]*?#i-service-rw"[\s\S]*?notes\.full/)
+  assert.match(html1, /class="tier-routine"[\s\S]*?#i-service-rw"[\s\S]*?obsidian:tasks\.full/)
+  assert.match(html1, /class="tier-sensitive"[\s\S]*?#i-service-rw"[\s\S]*?homeassistant\.full/)
+  assert.match(html1, /class="tier-sensitive"[\s\S]*?#i-secret"[\s\S]*?secret:GH/)
+  assert.match(html1, /Combines private access with web egress\./)
+  assert.doesNotMatch(html1, /badge-warn/)
+
+  // Keyless docs/search services + web sites stay calm with no cross-boundary note; private request after web grant notes it.
+  await f.decide(card.id, 'deny')
+  assert.equal((await h.ask(['context7.read', 'site:pypi.org'])).status, 202)
+  await f.decide((await f.cards())[0].id, 'approve')
+  assert.doesNotMatch(await adminHtml(), /class="context-note"/)
+  assert.equal((await h.ask(['notes.read'])).status, 202)
+  assert.match(await adminHtml(), /class="context-note"[\s\S]*?Agent already holds web egress\./)
+  const svg = await (await f.call('/admin/assets/icons.svg', { headers: { cookie: f.cookie() } })).text()
+  for (const id of ['i-service-rw', 'i-folder-rw', 'i-info']) assert.ok(svg.includes(`id="${id}"`), id)
 })

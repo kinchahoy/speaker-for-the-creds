@@ -1,41 +1,45 @@
-// SSH and folders: targets and shares (plain settings), speaker's ssh-agent, and the jump server: speaker listens on
-// SSH_PORT only while an SSH or over-SSH folder grant is active and hands each connection to a stock, non-root `sshd -i`.
-// Its forced command is relay.ts, which talks to speaker over a unix socket; speaker decides what each session may do
-// and can end it at any time.
-import { type ChildProcess, execFile, spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+// SSH and folders: targets and shares (plain settings) and an in-process ssh2 jump server. Speaker listens on SSH_PORT
+// only while an SSH or over-SSH folder grant is active, authenticates agents by public key and source address, and
+// relays allowed exec and SFTP operations to targets with speaker's key held only in memory.
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createSocket } from 'node:dgram'
 import { once } from 'node:events'
-import { existsSync, rmSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { createServer, type Server, type Socket } from 'node:net'
-import { tmpdir, userInfo } from 'node:os'
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { userInfo } from 'node:os'
 import { join } from 'node:path'
-import { createInterface } from 'node:readline'
-import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 import type { Context, Hono } from 'hono'
+import ssh2, {
+  type Attributes,
+  type Client,
+  type ClientChannel,
+  type Connection,
+  type Server,
+  type ServerChannel,
+  type SFTPWrapper,
+} from 'ssh2'
 import writeFile from 'write-file-atomic'
 import { z } from 'zod'
 import type { Description } from './engine.ts'
 import { type SessionState, sessionTable, transition } from './lifecycle.ts'
-import { type FromSpeaker, toSpeaker, type ToSpeaker } from './relay.ts'
 
-const run = promisify(execFile)
-const relayScript = fileURLToPath(new URL('./relay.ts', import.meta.url))
+const { Client: SshClient, Server: SshServer, utils } = ssh2
+const { SFTP } = createRequire(import.meta.url)('ssh2/lib/protocol/SFTP.js') as {
+  SFTP: new (...args: unknown[]) => SFTPWrapper & { _init(): void; push(d: Buffer | null): void }
+}
+const { OPEN_MODE, STATUS_CODE } = utils.sftp
+const emptyAttrs: Attributes = { mode: 0, uid: 0, gid: 0, size: 0, atime: 0, mtime: 0 }
+
 const aliasSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/, 'A name uses letters, numbers, - and _')
 const targetSchema = z.object({
   host: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9.:_-]*$/, 'Use a host name or IP address'),
   port: z.number().int().min(1).max(65535),
   account: z.string().regex(/^[a-z_][a-z0-9_.-]*\$?$/i, 'Use a plain login name'),
-  // The pinned host key, `ssh-ed25519 AAAA…`.
   hostKey: z.string(),
-  // The address list for `from=` in the target's authorized_keys.
   from: z.string().regex(/^[0-9A-Za-z.:/*?!_-]+(,[0-9A-Za-z.:/*?!_-]+)*$/, 'Use comma-separated addresses'),
-  // Whether `sudo -n true` succeeded when the target was added, and the account's home directory.
   sudo: z.boolean(),
   home: z.string(),
-  // The target's sftp-server, probed when the target was added.
   sftp: z.string().optional(),
 })
 const shareSchema = z.object({
@@ -49,7 +53,6 @@ const settingsSchema = z.object({
 export type Target = z.infer<typeof targetSchema>
 export type Share = z.infer<typeof shareSchema>
 
-// A mistake in what the owner entered: shown on the Setup page, not a server fault.
 class SetupError extends Error {}
 const parsed = <T>(result: z.ZodSafeParseResult<T>) => {
   if (!result.success) throw new SetupError(result.error.issues[0].message)
@@ -61,33 +64,33 @@ const shareOf = (item: string) => {
   const [, name, rw] = /^folder:([a-zA-Z0-9_-]+)(:rw)?$/.exec(item) ?? []
   return name ? { name, rw: Boolean(rw) } : undefined
 }
-const keyBlob = (key: string) => key.split(/\s+/).slice(0, 2).join(' ')
 export const fingerprint = (key: string) =>
   `SHA256:${createHash('sha256')
     .update(Buffer.from(key.split(/\s+/)[1], 'base64'))
     .digest('base64')
     .replace(/=+$/, '')}`
-// OpenSSH's expiry-time: a UTC time as YYYYMMDDHHMMSSZ.
-const expiryTime = (ms: number) => new Date(ms).toISOString().replace(/[-:T]|\.\d{3}/g, '')
+const pathParts = (p: string) => {
+  const out: string[] = []
+  for (const part of p.split('/')) {
+    if (part === '..') out.pop()
+    else if (part && part !== '.') out.push(part)
+  }
+  return out
+}
 
 type Grant = { id: string; agentId: string; item: string; expiresAt: string | null }
 type Env = {
-  // SSH_PORT.
   port: number
   dataDir: string
   agent(id: string): { id: string; sshKey?: string; source: string } | undefined
-  // Every active grant.
   grants(): Grant[]
   audit(event: string, fields: Record<string, unknown>): void
-  // Applies clock-driven expiry now.
   expire(): void
 }
-// One relay connection: `connecting` until it names a granted target or share, then `open` (shown and logged).
-type Session = {
+type ActiveSession = {
   id: string
   state: SessionState
   agent: string
-  socket: Socket
   source: string
   started: number
   grant?: string
@@ -95,12 +98,12 @@ type Session = {
   fields: Record<string, unknown>
   code?: number
   why?: string
+  close(why?: string): void
 }
 export type SshSetup = {
   port?: number
   publicKey?: string
   error?: string
-  // The result of an action that succeeded, such as a re-check.
   note?: string
   targets: Record<string, Target & { line: string; fingerprint: string }>
   shares: Record<string, Share>
@@ -112,25 +115,39 @@ const probeScript = [
   'sudo -n true >/dev/null 2>&1 && echo sudo=yes',
   'for p in "$(command -v sftp-server)" /usr/lib/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/openssh/sftp-server /usr/libexec/sftp-server /usr/lib64/ssh/sftp-server /usr/lib/sftp-server /usr/local/libexec/sftp-server; do [ -x "$p" ] && echo "sftp=$p" && break; done',
 ].join('; ')
-const sshdOptions = [
-  'PidFile none',
-  // authorized_keys lives in the temporary directory, outside a home directory, which StrictModes would reject.
-  'StrictModes no',
-  'PasswordAuthentication no',
-  'KbdInteractiveAuthentication no',
-  'UsePAM no',
-  'AuthenticationMethods publickey',
-  'PermitTTY no',
-  'AllowTcpForwarding no',
-  'X11Forwarding no',
-  'AllowAgentForwarding no',
-  'PermitUserRC no',
-  'Subsystem sftp internal-sftp',
-  'MaxAuthTries 3',
-  'LoginGraceTime 20',
-  'ClientAliveInterval 30',
-  'LogLevel ERROR',
-]
+
+// Wraps an exec'd sftp-server channel in ssh2's SFTP client protocol handler (works even without Subsystem sftp).
+function openSftpOnExec(client: Client, command: string): Promise<SFTPWrapper> {
+  return new Promise((done, fail) => {
+    client.exec(command, (err, stream: ClientChannel) => {
+      if (err) return fail(err)
+      const outgoing = { id: 0, state: 'open', window: 1 << 30, packetSize: 32768 }
+      const shim = {
+        _protocol: {
+          _remoteIdentRaw: '',
+          channelData(_id: number, chunk: Buffer) {
+            outgoing.window = 1 << 30
+            stream.write(chunk)
+          },
+          channelClose: () => stream.close(),
+        },
+      }
+      const remote = new SFTP(shim, { type: 'session', incoming: { id: 0, state: 'open' }, outgoing })
+      const onClose = () => fail(new Error('The target sftp-server closed unexpectedly'))
+      remote
+        .once('ready', () => {
+          remote.off('error', fail).off('close', onClose)
+          done(remote)
+        })
+        .once('error', fail)
+        .once('close', onClose)
+      stream.on('data', (c: Buffer) => remote.push(c))
+      stream.on('end', () => remote.push(null))
+      stream.on('close', () => remote.emit('close'))
+      remote._init()
+    })
+  })
+}
 
 export async function createJump(env: Env) {
   const settingsFile = join(env.dataDir, 'ssh.json')
@@ -139,126 +156,117 @@ export async function createJump(env: Env) {
   )
   const persist = () => writeFile(settingsFile, JSON.stringify(settings, null, 2), { mode: 0o600 })
   const login = userInfo().username
-  const sessions = new Map<string, Session>()
-  // Runtime state, all under one private temporary directory (mode 700) made when speaker unlocks. It holds the
-  // ssh-agent socket, public keys and the jump server's per-start host key; speaker's private key never touches it.
-  let dir = ''
-  let publicKey = ''
-  let agentProcess: ChildProcess | undefined
-  let relayServer: Server | undefined
-  // The jump server: `off`, or `on` with its listener and this start's host key.
-  let jump: { state: 'off' } | { state: 'on'; listener: Server; hostKey: string } = { state: 'off' }
+  const sessions = new Map<string, ActiveSession>()
+  let speakerKey: { private: string; public: string } | undefined
+  let jump: { state: 'off' } | { state: 'on'; server: Server; hostKey: string } = { state: 'off' }
   let timer: NodeJS.Timeout | undefined
-  const path = (name: string) => join(dir, name)
-  const cleanup = () => {
-    // Remove the directory before killing the agent: its socket cleanup racing the removal leaves speaker.pub behind.
-    if (dir) rmSync(dir, { recursive: true, force: true })
-    agentProcess?.kill()
-  }
 
-  // --- Speaker's key: a stock ssh-agent holds it; nothing else sees it. ---
   async function start(key: { private: string; public: string }) {
-    if (dir) return
-    dir = await mkdtemp(join(tmpdir(), 'speaker-'))
-    process.once('exit', cleanup)
-    publicKey = key.public
-    await writeFile(path('speaker.pub'), `${publicKey}\n`)
-    agentProcess = spawn('ssh-agent', ['-D', '-a', path('agent.sock')], { stdio: ['ignore', 'pipe', 'pipe'] })
-    // Pass ssh-agent's errors through, but not the "exiting on signal 15" it prints when speaker stops it.
-    agentProcess.stderr?.on('data', (chunk: Buffer) => {
-      const lines = String(chunk)
-        .split('\n')
-        .filter((line) => line && !line.startsWith('exiting on signal'))
-      if (lines.length) process.stderr.write(`${lines.join('\n')}\n`)
-    })
-    // ssh-agent prints its environment once the socket is bound.
-    await once(agentProcess.stdout ?? agentProcess, 'data')
-    const add = run('ssh-add', ['-'], { env: { ...process.env, SSH_AUTH_SOCK: path('agent.sock') } })
-    add.child.stdin?.end(key.private)
-    await add.catch((error: Error) => {
-      throw new Error(`ssh-agent refused speaker's key: ${error.message}`)
-    })
-    await writeKnownHosts()
-    relayServer = createServer(onRelay).listen(path('relay.sock'))
+    speakerKey = key
   }
 
-  // The system ssh client to a target, authenticating through speaker's ssh-agent with the target's pinned host key.
-  const writeKnownHosts = (extra: Record<string, Target> = {}) =>
-    writeFile(
-      path('known_hosts'),
-      `${Object.entries({ ...settings.targets, ...extra })
-        .map(([alias, target]) => `${alias} ${target.hostKey}`)
-        .join('\n')}\n`,
-    )
-  const sshArgs = (alias: string, target: Target) => [
-    '-F',
-    '/dev/null',
-    '-T',
-    ...[
-      'BatchMode=yes',
-      'IdentitiesOnly=yes',
-      `IdentityFile=${path('speaker.pub')}`,
-      `IdentityAgent=${path('agent.sock')}`,
-      `UserKnownHostsFile=${path('known_hosts')}`,
-      'GlobalKnownHostsFile=/dev/null',
-      'StrictHostKeyChecking=yes',
-      `HostKeyAlias=${alias}`,
-      'ConnectTimeout=10',
-      'LogLevel=ERROR',
-      'ControlPath=none',
-      'ClearAllForwardings=yes',
-    ].flatMap((option) => ['-o', option]),
-    ...['-p', String(target.port), '-l', target.account, target.host],
-    // Everything after `--` is the remote command, never an option of the local ssh.
-    '--',
-  ]
-  async function onTarget(alias: string, target: Target, command: string) {
-    if (!dir) throw new SetupError('Speaker is locked')
-    await writeKnownHosts({ [alias]: target })
+  // --- Outbound ssh2 client to targets (speaker's private key stays in memory) ---
+  function connectTarget(target: Target): Promise<Client> {
+    if (!speakerKey) return Promise.reject(new SetupError('Speaker is locked'))
+    const expected = Buffer.from(target.hostKey.split(/\s+/)[1] ?? '', 'base64')
+    return new Promise((done, fail) => {
+      const client = new SshClient()
+      const onError = (err: Error) => {
+        client.destroy()
+        fail(err)
+      }
+      client
+        .once('ready', () => (client.off('error', onError), done(client)))
+        .once('error', onError)
+        .connect({
+          host: target.host,
+          port: target.port,
+          username: target.account,
+          privateKey: speakerKey!.private,
+          readyTimeout: 10_000,
+          hostVerifier: (key: Buffer) => key.length === expected.length && timingSafeEqual(key, expected),
+        })
+    })
+  }
+  async function onTarget(target: Target, command: string) {
+    if (!speakerKey) throw new SetupError('Speaker is locked')
+    let client: Client | undefined
     try {
-      return (await run('ssh', [...sshArgs(alias, target), command], { timeout: 30_000 })).stdout
+      client = await connectTarget(target)
+      return await new Promise<string>((done, fail) => {
+        const timeout = setTimeout(() => (client?.destroy(), fail(new Error('Timed out'))), 30_000)
+        client!.exec(command, (err, stream) => {
+          if (err) return (clearTimeout(timeout), fail(err))
+          let stdout = '',
+            stderr = ''
+          stream.on('data', (c: Buffer) => (stdout += c.toString('utf8')))
+          stream.stderr.on('data', (c: Buffer) => (stderr += c.toString('utf8')))
+          stream.on('close', (code: number | null) => {
+            clearTimeout(timeout)
+            if (code !== 0) fail(new Error(stderr.trim() || `exit ${code ?? 'unknown'}`))
+            else done(stdout)
+          })
+        })
+      })
     } catch (error) {
-      const { stderr } = error as { stderr?: string }
       throw new SetupError(
-        `Could not run a command as ${target.account}@${target.host}:${target.port}: ${stderr?.trim() || (error as Error).message}`,
+        `Could not run a command as ${target.account}@${target.host}:${target.port}: ${(error as Error).message}`,
       )
+    } finally {
+      client?.end()
     }
   }
-  const authorizedLine = (target: Target) => `from="${target.from}",restrict ${publicKey}`
+  const authorizedLine = (target: Target) => `from="${target.from}",restrict ${speakerKey?.public ?? ''}`
 
   // --- Targets and shares (Setup) ---
-  async function scanHostKey(host: string, port: number) {
-    const { stdout } = await run('ssh-keyscan', ['-T', '5', '-p', String(port), '-t', 'ed25519,ecdsa,rsa', host]).catch(
-      (error: Error) => {
-        throw new SetupError(`Could not read the host key of ${host}:${port}: ${error.message}`)
-      },
-    )
-    const keys = stdout
-      .split('\n')
-      .filter((line) => line && !line.startsWith('#'))
-      .map((line) => line.split(' ').slice(1, 3).join(' '))
-    const key = ['ssh-ed25519', 'ecdsa-', 'ssh-rsa'].map((kind) => keys.find((k) => k.startsWith(kind))).find(Boolean)
-    if (!key) throw new SetupError(`Could not read the host key of ${host}:${port}: no key offered`)
-    return key
+  function scanHostKey(host: string, port: number): Promise<string> {
+    return new Promise((done, fail) => {
+      const client = new SshClient()
+      let found: string | undefined
+      client
+        .once('error', (err) => {
+          client.destroy()
+          if (!found) fail(new SetupError(`Could not read the host key of ${host}:${port}: ${err.message}`))
+        })
+        .once('close', () => {
+          if (!found) fail(new SetupError(`Could not read the host key of ${host}:${port}: no key offered`))
+        })
+        .connect({
+          host,
+          port,
+          username: 'probe',
+          readyTimeout: 5000,
+          algorithms: {
+            serverHostKey: [
+              'ssh-ed25519',
+              'ecdsa-sha2-nistp256',
+              'ecdsa-sha2-nistp384',
+              'ecdsa-sha2-nistp521',
+              'rsa-sha2-512',
+              'rsa-sha2-256',
+              'ssh-rsa',
+            ],
+          },
+          hostVerifier: (key: Buffer) => {
+            const k = utils.parseKey(key)
+            if (!(k instanceof Error)) done((found = `${k.type} ${k.getPublicSSH().toString('base64')}`))
+            return false
+          },
+        })
+    })
   }
-  // The address this machine uses to reach the host: the natural `from=` for the target.
   const outgoingAddress = (host: string, port: number) =>
     new Promise<string>((done, fail) => {
       const socket = createSocket(host.includes(':') ? 'udp6' : 'udp4')
       socket.once('error', (error) => fail(new SetupError(`Cannot route to ${host}: ${error.message}`)))
-      socket.connect(port, host, () => {
-        done(socket.address().address)
-        socket.close()
-      })
+      socket.connect(port, host, () => (done(socket.address().address), socket.close()))
     })
-  // What the account on a target can do: its home directory, passwordless sudo and sftp-server.
-  async function probe(alias: string, target: Target) {
-    const lines = (await onTarget(alias, target, `sh -c ${sh(probeScript)}`)).split('\n')
+  async function probe(target: Target) {
+    const lines = (await onTarget(target, `sh -c ${sh(probeScript)}`)).split('\n')
     if (lines[0] !== target.account) throw new SetupError(`Logged in as ${lines[0]}, not ${target.account}`)
     const value = (name: string) => lines.find((line) => line.startsWith(`${name}=`))?.slice(name.length + 1)
     return { home: value('home') ?? '', sudo: lines.includes('sudo=yes'), sftp: value('sftp') }
   }
-  // Is the target still reachable with the pinned host key and the key line, and what can the account do now?
   async function recheck(form: Record<string, unknown>) {
     const { alias } = parsed(z.object({ alias: aliasSchema }).safeParse(form))
     const target = settings.targets[alias]
@@ -268,7 +276,7 @@ export async function createJump(env: Env) {
       throw new SetupError(
         `The host key of ${alias} changed (pinned ${fingerprint(target.hostKey)}, now ${fingerprint(key)}). Delete the target and add it again only if you expect that`,
       )
-    Object.assign(target, await probe(alias, target))
+    Object.assign(target, await probe(target))
     await persist()
     return `${alias}: reachable, host key matches${target.sudo ? ', passwordless sudo works' : ''}${target.sftp ? '' : ', no sftp-server'}`
   }
@@ -289,19 +297,18 @@ export async function createJump(env: Env) {
     if (Object.hasOwn(settings.targets, alias)) throw new SetupError(`Target ${alias} exists; delete it first`)
     if (account === 'root' && !confirmRoot)
       throw new SetupError('Refused: root has no limits. Tick "I understand" to use root anyway')
-    const hostKey = await scanHostKey(host, port)
     const target: Target = {
       host,
       port,
       account,
-      hostKey,
+      hostKey: await scanHostKey(host, port),
       from: from || (await outgoingAddress(host, port)),
       sudo: false,
       home: '',
     }
     Object.assign(
       target,
-      await probe(alias, target).catch((error: Error) => {
+      await probe(target).catch((error: Error) => {
         throw new SetupError(
           error.message.startsWith('Could not run')
             ? `${error.message}. Add this line to that account's authorized_keys, then try again: ${authorizedLine(target)}`
@@ -333,7 +340,7 @@ export async function createJump(env: Env) {
     const { name, ...share } = parsed(shareSchema.extend({ name: aliasSchema }).safeParse(form))
     const target = settings.targets[share.target]
     if (!target) throw new SetupError(`There is no target ${share.target}`)
-    await onTarget(share.target, target, `test -d ${sh(share.path)}`).catch(() => {
+    await onTarget(target, `test -d ${sh(share.path)}`).catch(() => {
       throw new SetupError(`${share.path} is not a directory on ${share.target} for ${target.account}`)
     })
     settings.shares[name] = share
@@ -348,7 +355,6 @@ export async function createJump(env: Env) {
   }
 
   // --- What an item means for an agent ---
-  // Set when an ssh: or folder: item names no target or share. Names are never listed to agents, so this only says no.
   function unknownName(item: string) {
     const target = targetOf(item)
     if (target !== undefined && !Object.hasOwn(settings.targets, target))
@@ -358,8 +364,7 @@ export async function createJump(env: Env) {
       return `There is no folder named ${folder.name} that you can use.`
     return undefined
   }
-  // Why an ssh: or folder: item cannot be delivered to this agent, or undefined when it can.
-  function unavailable(agentId: string, item: string) {
+  function unavailable(_agentId: string, item: string) {
     const target = targetOf(item)
     if (target !== undefined) return settings.targets[target] ? undefined : `there is no target named ${target}`
     const folder = shareOf(item)
@@ -373,7 +378,6 @@ export async function createJump(env: Env) {
     (targetOf(grant.item) !== undefined || shareOf(grant.item) !== undefined)
   const sshGrants = (agentId?: string) =>
     env.grants().filter((grant) => overSsh(grant) && (agentId === undefined || grant.agentId === agentId))
-  // The card's view of an item: what it reaches, and a warning when it is broader than it looks.
   function describe(item: string): Description {
     const target = settings.targets[targetOf(item) ?? '']
     const at = (t: Target) => `${t.account}@${t.host}:${t.port}`
@@ -401,7 +405,7 @@ export async function createJump(env: Env) {
   }
   const setup = (error?: string, note?: string): SshSetup => ({
     port: env.port,
-    publicKey: publicKey || undefined,
+    publicKey: speakerKey?.public || undefined,
     error,
     note,
     targets: Object.fromEntries(
@@ -413,11 +417,9 @@ export async function createJump(env: Env) {
     shares: settings.shares,
   })
 
-  // --- What /catalog tells an agent ---
   function commands(agentId: string, host: string) {
     if (jump.state === 'off') return []
     const known = `[${host}]:${env.port} ${jump.hostKey}`
-    // A known_hosts file, not KnownHostsCommand: sshfs before 3.8 rejects options it does not know.
     const options =
       '-o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=<known_hosts> -o StrictHostKeyChecking=yes'
     const knownHosts = { line: known, save: `printf '%s\\n' '${known}' > <known_hosts>` }
@@ -446,57 +448,350 @@ export async function createJump(env: Env) {
     })
   }
 
-  // --- The jump server ---
-  const relayCommand = (agentId: string) =>
-    [process.execPath, relayScript, path('relay.sock'), agentId].map(sh).join(' ').replaceAll('"', '\\"')
-  async function writeKeys(grants: Grant[]) {
-    const lines = [...new Set(grants.map((grant) => grant.agentId))].flatMap((agentId) => {
-      const agent = env.agent(agentId)
-      if (!agent?.sshKey) return []
-      const ends = grants.filter((grant) => grant.agentId === agentId).map((grant) => grant.expiresAt)
-      const expiry = ends.includes(null)
-        ? ''
-        : `,expiry-time="${expiryTime(Math.max(...ends.map((end) => Date.parse(end ?? ''))))}"`
-      return [`restrict,from="${agent.source}",command="${relayCommand(agentId)}"${expiry} ${keyBlob(agent.sshKey)}`]
-    })
-    await writeFile(path('authorized_keys'), `${lines.join('\n')}\n`)
+  // --- Session lifecycle ---
+  function createSession(agent: string, source: string, close: (why?: string) => void): ActiveSession {
+    const session: ActiveSession = {
+      id: randomBytes(8).toString('hex'),
+      state: 'connecting',
+      agent,
+      source,
+      started: Date.now(),
+      what: 'connecting',
+      fields: {},
+      close,
+    }
+    sessions.set(session.id, session)
+    return session
   }
-  // Each connection gets its own `sshd -i` on the socket; a new host key per start.
+  function beginSession(session: ActiveSession, grant: Grant, what: string, fields: Record<string, unknown>) {
+    Object.assign(session, {
+      state: transition('session', sessionTable, session.state, 'begin'),
+      grant: grant.id,
+      what,
+      fields,
+    })
+    env.audit('ssh_session', {
+      session: session.id,
+      agent: session.agent,
+      grant: grant.id,
+      fingerprint: fingerprint(env.agent(session.agent)?.sshKey ?? ''),
+      source: session.source,
+      ...fields,
+    })
+  }
+  function closeSession(session: ActiveSession) {
+    if (!sessions.delete(session.id)) return
+    const was = session.state
+    session.state = transition('session', sessionTable, was, 'close')
+    if (was === 'open')
+      env.audit('ssh_session_end', {
+        session: session.id,
+        agent: session.agent,
+        ...session.fields,
+        code: session.code ?? null,
+        why: session.why ?? (session.code === undefined ? 'disconnected' : 'finished'),
+        ms: Date.now() - session.started,
+      })
+  }
+  const end = (session: ActiveSession, why: string) => {
+    session.why ??= why
+    session.close(why)
+    closeSession(session)
+  }
+
+  // --- Inbound ssh2 jump server ---
+  function onConnection(conn: Connection, info: { ip: string }) {
+    const source = info.ip.replace(/^::ffff:/, '')
+    let agentId: string | undefined
+    conn.on('error', () => undefined)
+    conn.on('authentication', (ctx) => {
+      if (ctx.method !== 'publickey' || ctx.username !== login) return ctx.reject(['publickey'])
+      for (const id of new Set(sshGrants().map((g) => g.agentId))) {
+        const agent = env.agent(id)
+        if (!agent?.sshKey || agent.source !== source) continue
+        const key = utils.parseKey(agent.sshKey)
+        if (key instanceof Error || ctx.key.algo !== key.type) continue
+        const pub = key.getPublicSSH()
+        if (ctx.key.data.length !== pub.length || !timingSafeEqual(ctx.key.data, pub)) continue
+        if (!ctx.signature) return ctx.accept()
+        if (ctx.blob && key.verify(ctx.blob, ctx.signature, ctx.hashAlgo)) return ((agentId = id), ctx.accept())
+      }
+      ctx.reject(['publickey'])
+    })
+
+    conn.on('ready', () => {
+      conn.on('session', (accept, reject) => {
+        if (!agentId || !sshGrants(agentId).length) return reject()
+        const who = agentId
+        const sess = accept()
+        const refuse = (ch: ServerChannel, message: string, fields: Record<string, unknown> = {}) => {
+          env.audit('ssh_refused', { agent: who, source, why: message, ...fields })
+          ch.stderr.write(`speaker: ${message}. Check GET /_speaker/catalog\n`)
+          ch.exit(1)
+          ch.close()
+        }
+        for (const ev of ['pty', 'x11', 'auth-agent'] as const) sess.on(ev, (_a: unknown, r: () => void) => r())
+        sess.on('shell', (acceptShell) =>
+          refuse(acceptShell(), 'Name a target and a command: ssh … <target> <command>'),
+        )
+        sess.on('exec', (acceptExec, _r, { command }) => {
+          const ch = acceptExec()
+          const grants = sshGrants(who)
+          if (!grants.length) return refuse(ch, 'You have no active SSH or folder grant')
+          const word = /^\S*/.exec(command)?.[0] ?? ''
+          const rest = command.slice(word.length).replace(/^\s+/, '')
+          if (word === 'rsync' || word === 'scp')
+            return refuse(ch, `${word} is not supported here; use sftp`, { command })
+          if (!word) return refuse(ch, 'Name a target and a command: ssh … <target> <command>')
+          const grant = grants.find((g) => g.item === `ssh:${word}`)
+          const target = settings.targets[word]
+          if (!grant || !target)
+            return refuse(
+              ch,
+              grants.some((g) => shareOf(g.item)?.name === word)
+                ? 'A folder grant allows sftp only: use sftp, scp or sshfs'
+                : `You have no SSH grant for "${word}"`,
+              { command },
+            )
+          if (!rest)
+            return refuse(ch, 'Give a command to run: interactive sessions are not available', { target: word })
+          let targetClient: Client | undefined
+          const active = createSession(who, source, (why) => {
+            if (why) ch.stderr.write(`speaker: the session ended: ${why}. Check GET /_speaker/catalog\n`)
+            targetClient?.destroy()
+            ch.destroy()
+            conn.end()
+          })
+          beginSession(active, grant, `${word}: ${rest}`, { target: word, command: rest })
+          ch.on('close', () => (targetClient?.end(), closeSession(active)))
+          connectTarget(target)
+            .then((client) => {
+              if (active.state === 'closed') return client.destroy()
+              targetClient = client
+              client.exec(rest, (err, remote) => {
+                if (err) return (ch.stderr.write(`speaker: ${err.message}\n`), ch.exit(1), ch.close())
+                ch.pipe(remote)
+                remote.pipe(ch)
+                remote.stderr.pipe(ch.stderr)
+                remote.on('exit', (code: number | null) => ch.exit((active.code = code ?? 255)))
+                remote.on('close', () => (ch.close(), client.end()))
+              })
+            })
+            .catch((err: Error) => (ch.stderr.write(`speaker: ${err.message}\n`), ch.exit(1), ch.close()))
+        })
+        sess.on('sftp', (acceptSftp) => handleSftp(who, source, conn, acceptSftp()))
+      })
+    })
+  }
+
+  // --- Filtering SFTP server over ssh2's SFTPWrapper ---
+  function handleSftp(agent: string, source: string, conn: Connection, sftp: SFTPWrapper) {
+    type Mounted = { name: string; readOnly: boolean; absolute: boolean; root: string; remote: SFTPWrapper }
+    let targetClient: Client | undefined
+    let mounted: Mounted | undefined
+    let mounting: Promise<Mounted | string> | undefined
+    const active = createSession(agent, source, () => (targetClient?.destroy(), sftp.destroy(), conn.end()))
+    sftp.on('end', () => ((active.code ??= 0), targetClient?.end(), sftp.end()))
+    sftp.on('close', () => (targetClient?.end(), closeSession(active)))
+
+    const replyErr = (id: number, err: Error & { code?: number }) =>
+      sftp.status(id, typeof err.code === 'number' ? err.code : STATUS_CODE.FAILURE, err.message)
+    const refuse = (id: number, message: string, code: number = STATUS_CODE.PERMISSION_DENIED) => {
+      env.audit('ssh_refused', { session: active.id, agent, ...active.fields, why: message })
+      sftp.status(id, code, message)
+      return undefined
+    }
+    const virtual = (m: Mounted, p: string) => {
+      if (m.absolute) return `/${m.name}${p === '/' ? '' : p}`
+      const prefix = m.root.endsWith('/') ? m.root : `${m.root}/`
+      return p === m.root ? `/${m.name}` : p.startsWith(prefix) ? `/${m.name}/${p.slice(prefix.length)}` : undefined
+    }
+    const remoteRealpath = (remote: SFTPWrapper, p: string) =>
+      new Promise<string>((done, fail) => remote.realpath(p, (err, abs) => (err ? fail(err) : done(abs))))
+
+    async function mount(name: string): Promise<Mounted | string> {
+      const grants = sshGrants(agent)
+      const folder =
+        grants.find((g) => g.item === `folder:${name}:rw`) ?? grants.find((g) => g.item === `folder:${name}`)
+      const share = folder && settings.shares[name]
+      const sshGrant = grants.find((g) => g.item === `ssh:${name}`)
+      const alias = share ? share.target : sshGrant ? name : undefined
+      const target = alias === undefined ? undefined : settings.targets[alias]
+      if (alias === undefined || !target) return `You have no grant for "${name}"`
+      if (!target.sftp) return `${alias} has no sftp-server`
+      const readOnly = share ? !folder.item.endsWith(':rw') : false
+      const serverCmd = share ? `${target.sftp} -d ${sh(share.path)}${readOnly ? ' -R' : ''}` : target.sftp
+      targetClient = await connectTarget(target)
+      const remote = await openSftpOnExec(targetClient, serverCmd)
+      const root = share ? await remoteRealpath(remote, '.') : '/'
+      beginSession(
+        active,
+        (share ? folder : sshGrant) as Grant,
+        `sftp ${name}`,
+        share ? { share: name, target: alias, readOnly } : { target: alias },
+      )
+      remote.on('close', () => sftp.end())
+      return (mounted = { name, readOnly, absolute: !share, root, remote })
+    }
+
+    async function checkPaths(
+      id: number,
+      rawPaths: string[],
+      op: { name: string; write: boolean; follow: boolean },
+    ): Promise<{ m: Mounted; targets: string[] } | undefined> {
+      const comps = rawPaths.map(pathParts)
+      if (comps.some((c) => !c.length))
+        return op.name === 'realpath'
+          ? (sftp.name(id, [{ filename: '/', longname: '/', attrs: emptyAttrs }]), undefined)
+          : refuse(id, 'Name a share first: paths start with <share>/')
+      const m = mounted ?? (await (mounting ??= mount(comps[0][0])))
+      if (typeof m === 'string') return ((mounting = undefined), refuse(id, m))
+      if (comps.some((c) => c[0] !== m.name)) return refuse(id, `One share per session: this one is ${m.name}`)
+      if (op.write && m.readOnly) return refuse(id, 'This grant is read-only')
+      const rests = comps.map((c) => c.slice(1))
+      const onTargetPath = (rest: string[]) => (m.absolute ? `/${rest.join('/')}` : rest.join('/') || '.')
+      if (!m.absolute && op.write && !op.follow && rests.some((r) => !r.length))
+        return refuse(id, 'The share itself cannot be changed')
+      if (!m.absolute) {
+        const prefix = m.root.endsWith('/') ? m.root : `${m.root}/`
+        for (const rest of rests) {
+          const check = rest.length ? onTargetPath(op.follow ? rest : rest.slice(0, -1)) : '.'
+          let resolved: string
+          try {
+            resolved = await remoteRealpath(m.remote, check)
+          } catch (err) {
+            return (replyErr(id, err as Error & { code?: number }), undefined)
+          }
+          if (!(resolved === m.root || resolved.startsWith(prefix))) return refuse(id, 'Outside the share')
+        }
+      }
+      env.audit('ssh_file', {
+        session: active.id,
+        agent,
+        ...active.fields,
+        grant: active.grant,
+        op: op.name,
+        path: comps.map((c) => `/${c.join('/')}`).join(' -> '),
+      })
+      return { m, targets: rests.map(onTargetPath) }
+    }
+
+    const withPath = (
+      id: number,
+      paths: string[],
+      op: { name: string; write: boolean; follow: boolean },
+      fn: (m: Mounted, targets: string[]) => void,
+    ) =>
+      void checkPaths(id, paths, op)
+        .then((res) => res && fn(res.m, res.targets))
+        .catch((err: Error) => replyErr(id, err))
+    const withHandle = (id: number, write: boolean, fn: (m: Mounted) => void) =>
+      !mounted
+        ? refuse(id, 'Name a share first: paths start with <share>/', STATUS_CODE.FAILURE)
+        : write && mounted.readOnly
+          ? refuse(id, 'This grant is read-only')
+          : fn(mounted)
+    const statusCb = (id: number) => (err?: Error | null) => (err ? replyErr(id, err) : sftp.status(id, STATUS_CODE.OK))
+    const attrsCb = (id: number) => (err: Error | undefined, stats: Attributes) =>
+      err ? replyErr(id, err) : sftp.attrs(id, stats)
+    const handleCb = (id: number) => (err: Error | undefined, handle: Buffer) =>
+      err ? replyErr(id, err) : sftp.handle(id, handle)
+
+    sftp.on('REALPATH', (id, p) =>
+      withPath(id, [p], { name: 'realpath', write: false, follow: true }, (m, [t]) =>
+        m.remote.realpath(t, (err, abs) => {
+          if (err) return replyErr(id, err)
+          const shown = virtual(m, abs)
+          return shown === undefined
+            ? refuse(id, 'Outside the share')
+            : sftp.name(id, [{ filename: shown, longname: shown, attrs: emptyAttrs }])
+        }),
+      ),
+    )
+    sftp.on('OPEN', (id, p, flags, attrs) => {
+      const write = (flags & ~OPEN_MODE.READ) !== 0
+      withPath(id, [p], { name: write ? 'open (write)' : 'open', write, follow: true }, (m, [t]) =>
+        m.remote.open(t, flags, attrs, handleCb(id)),
+      )
+    })
+    sftp.on('STAT', (id, p) =>
+      withPath(id, [p], { name: 'stat', write: false, follow: true }, (m, [t]) => m.remote.stat(t, attrsCb(id))),
+    )
+    sftp.on('LSTAT', (id, p) =>
+      withPath(id, [p], { name: 'lstat', write: false, follow: false }, (m, [t]) => m.remote.lstat(t, attrsCb(id))),
+    )
+    sftp.on('OPENDIR', (id, p) =>
+      withPath(id, [p], { name: 'opendir', write: false, follow: true }, (m, [t]) => m.remote.opendir(t, handleCb(id))),
+    )
+    sftp.on('SETSTAT', (id, p, attrs) =>
+      withPath(id, [p], { name: 'setstat', write: true, follow: true }, (m, [t]) =>
+        m.remote.setstat(t, attrs, statusCb(id)),
+      ),
+    )
+    sftp.on('READLINK', (id, p) =>
+      withPath(id, [p], { name: 'readlink', write: false, follow: false }, (m, [t]) =>
+        m.remote.readlink(t, (err, link) => {
+          if (err) return replyErr(id, err)
+          const shown = virtual(m, link) ?? link
+          sftp.name(id, [{ filename: shown, longname: shown, attrs: emptyAttrs }])
+        }),
+      ),
+    )
+    sftp.on('REMOVE', (id, p) =>
+      withPath(id, [p], { name: 'remove', write: true, follow: false }, (m, [t]) => m.remote.unlink(t, statusCb(id))),
+    )
+    sftp.on('MKDIR', (id, p, attrs) =>
+      withPath(id, [p], { name: 'mkdir', write: true, follow: false }, (m, [t]) =>
+        m.remote.mkdir(t, attrs, statusCb(id)),
+      ),
+    )
+    sftp.on('RMDIR', (id, p) =>
+      withPath(id, [p], { name: 'rmdir', write: true, follow: false }, (m, [t]) => m.remote.rmdir(t, statusCb(id))),
+    )
+    sftp.on('RENAME', (id, a, b) =>
+      withPath(id, [a, b], { name: 'rename', write: true, follow: false }, (m, [x, y]) =>
+        m.remote.rename(x, y, statusCb(id)),
+      ),
+    )
+    sftp.on('CLOSE', (id, h) => withHandle(id, false, (m) => m.remote.close(h, statusCb(id))))
+    sftp.on('READ', (id, h, off, len) =>
+      withHandle(id, false, (m) =>
+        m.remote.read(h, Buffer.allocUnsafe(len), 0, len, off, (err, n, buf) =>
+          err ? replyErr(id, err) : n === 0 ? sftp.status(id, STATUS_CODE.EOF) : sftp.data(id, buf.subarray(0, n)),
+        ),
+      ),
+    )
+    sftp.on('WRITE', (id, h, off, data) =>
+      withHandle(id, true, (m) => m.remote.write(h, data, 0, data.length, off, statusCb(id))),
+    )
+    sftp.on('FSTAT', (id, h) => withHandle(id, false, (m) => m.remote.fstat(h, attrsCb(id))))
+    sftp.on('FSETSTAT', (id, h, attrs) => withHandle(id, true, (m) => m.remote.fsetstat(h, attrs, statusCb(id))))
+    sftp.on('READDIR', (id, h) =>
+      withHandle(id, false, (m) => m.remote.readdir(h, (err, list) => (err ? replyErr(id, err) : sftp.name(id, list)))),
+    )
+    sftp.on('SYMLINK', (id) => refuse(id, 'SFTP symlink is not supported', STATUS_CODE.OP_UNSUPPORTED))
+    sftp.on('EXTENDED', (id, ext) => refuse(id, `SFTP extension ${ext} is not supported`, STATUS_CODE.OP_UNSUPPORTED))
+  }
+
+  // --- Start/stop jump server in line with grants ---
   async function startJump() {
     if (jump.state === 'on') return
-    await rm(path('host_key'), { force: true })
-    await run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', path('host_key')])
-    const options = [
-      `HostKey ${path('host_key')}`,
-      `AuthorizedKeysFile ${path('authorized_keys')}`,
-      `AllowUsers ${login}`,
-    ]
-    await writeFile(path('sshd_config'), [...options, ...sshdOptions].join('\n'))
-    const listener = createServer((socket) => {
-      const child = spawn('/usr/sbin/sshd', ['-i', '-e', '-f', path('sshd_config')], {
-        stdio: [socket, socket, 'inherit'],
-      })
-      child.on('error', (error) => env.audit('ssh_jump_failed', { error: error.message }))
-      // sshd holds the connection now; speaker's copy of it goes.
-      socket.destroy()
-    }).listen(env.port)
-    await once(listener, 'listening')
-    jump = {
-      state: 'on',
-      listener,
-      hostKey: keyBlob(await readFile(path('host_key.pub'), 'utf8')),
-    }
+    const hostKeys = utils.generateKeyPairSync('ed25519')
+    const hostKey = hostKeys.public.trim().split(/\s+/).slice(0, 2).join(' ')
+    const server = new SshServer({ hostKeys: [hostKeys.private], keepaliveInterval: 30_000 }, onConnection)
+    server.listen(env.port, '0.0.0.0')
+    await once(server, 'listening')
+    jump = { state: 'on', server, hostKey }
     env.audit('ssh_jump_started', { port: env.port })
   }
   async function stopJump() {
     if (jump.state === 'off') return
-    const { listener } = jump
+    const { server } = jump
     jump = { state: 'off' }
-    listener.close()
+    await new Promise<void>((done) => server.close(() => done()))
     env.audit('ssh_jump_stopped', {})
   }
 
-  // Brings the jump server in line with the grants: keys rewritten, started or stopped, stale sessions ended.
   let chain: Promise<unknown> = Promise.resolve()
   const sync = () => {
     chain = chain
@@ -509,138 +804,16 @@ export async function createJump(env: Env) {
     return chain
   }
   async function apply() {
-    if (!dir) return
+    if (!speakerKey) return
     const live = sshGrants()
     for (const session of [...sessions.values()])
       if (!live.some((grant) => grant.agentId === session.agent && (!session.grant || grant.id === session.grant)))
         end(session, 'its grant ended')
     clearTimeout(timer)
     if (!live.length) return stopJump()
-    await writeKeys(live)
     await startJump()
-    // Run the clock at the earliest end, so a session does not outlive its grant by a sweep interval.
     const next = Math.min(...live.map((grant) => (grant.expiresAt === null ? Infinity : Date.parse(grant.expiresAt))))
     if (next !== Infinity) timer = setTimeout(env.expire, Math.max(next - Date.now(), 0) + 100).unref()
-  }
-
-  // --- Sessions: one relay connection each ---
-  function end(session: Session, why: string) {
-    session.why ??= why
-    session.socket.end(`${JSON.stringify({ type: 'end', why } satisfies FromSpeaker)}\n`)
-    setTimeout(() => session.socket.destroy(), 1000).unref()
-  }
-  function onRelay(socket: Socket) {
-    let session: Session | undefined
-    const send = (message: FromSpeaker) => void socket.write(`${JSON.stringify(message)}\n`)
-    const refuse = (message: string, fields: Record<string, unknown> = {}) => {
-      env.audit('ssh_refused', { agent: session?.agent, source: session?.source, why: message, ...fields })
-      socket.end(`${JSON.stringify({ type: 'refused', message } satisfies FromSpeaker)}\n`)
-    }
-    // The session names a granted target or share: it opens, shows on the admin page and is logged.
-    const begin = (grant: Grant, what: string, fields: Record<string, unknown>) => {
-      if (!session) return
-      Object.assign(session, {
-        state: transition('session', sessionTable, session.state, 'begin'),
-        grant: grant.id,
-        what,
-        fields,
-      })
-      env.audit('ssh_session', {
-        session: session.id,
-        agent: session.agent,
-        grant: grant.id,
-        fingerprint: fingerprint(env.agent(session.agent)?.sshKey ?? ''),
-        source: session.source,
-        ...fields,
-      })
-    }
-    function start(message: Extract<ToSpeaker, { type: 'start' }>) {
-      const grants = sshGrants(message.agent)
-      const id = randomBytes(8).toString('hex')
-      session = {
-        id,
-        state: 'connecting',
-        agent: message.agent,
-        socket,
-        source: message.source,
-        started: Date.now(),
-        what: 'connecting',
-        fields: {},
-      }
-      if (!env.agent(message.agent)?.sshKey || !grants.length) return refuse('You have no active SSH or folder grant')
-      sessions.set(id, session)
-      if (message.command === 'internal-sftp') return send({ type: 'sftp' })
-      const word = /^\S*/.exec(message.command)?.[0] ?? ''
-      const rest = message.command.slice(word.length).replace(/^\s+/, '')
-      if (word === 'rsync' || word === 'scp')
-        return refuse(`${word} is not supported here; use sftp`, { command: message.command })
-      if (!word) return refuse('Name a target and a command: ssh … <target> <command>')
-      const grant = grants.find((g) => g.item === `ssh:${word}`)
-      const target = settings.targets[word]
-      if (!grant || !target) {
-        const folder = grants.some((g) => shareOf(g.item)?.name === word)
-        return refuse(
-          folder ? 'A folder grant allows sftp only: use sftp, scp or sshfs' : `You have no SSH grant for "${word}"`,
-          {
-            command: message.command,
-          },
-        )
-      }
-      if (!rest) return refuse('Give a command to run: interactive sessions are not available', { target: word })
-      begin(grant, `${word}: ${rest}`, { target: word, command: rest })
-      send({ type: 'run', argv: ['ssh', ...sshArgs(word, target), rest] })
-    }
-    // The first path of an SFTP session names a share (or, with an ssh: grant, a target); a share wins over a target.
-    function mount(current: Session, name: string) {
-      const grants = sshGrants(current.agent)
-      const folder =
-        grants.find((g) => g.item === `folder:${name}:rw`) ?? grants.find((g) => g.item === `folder:${name}`)
-      const share = folder && settings.shares[name]
-      const sshGrant = grants.find((g) => g.item === `ssh:${name}`)
-      const alias = share ? share.target : sshGrant ? name : undefined
-      const target = alias === undefined ? undefined : settings.targets[alias]
-      if (alias === undefined || !target) {
-        const message = `You have no grant for "${name}"`
-        env.audit('ssh_refused', { agent: current.agent, session: current.id, why: message })
-        return send({ type: 'refused', message })
-      }
-      if (!target.sftp) return send({ type: 'refused', message: `${alias} has no sftp-server` })
-      const readOnly = share ? !folder.item.endsWith(':rw') : false
-      const server = share ? `${target.sftp} -d ${sh(share.path)}${readOnly ? ' -R' : ''}` : target.sftp
-      begin(
-        (share ? folder : sshGrant) as Grant,
-        `sftp ${name}`,
-        share ? { share: name, target: alias, readOnly } : { target: alias },
-      )
-      send({ type: 'mount', name, readOnly, absolute: !share, argv: ['ssh', ...sshArgs(alias, target), server] })
-    }
-    function onMessage(message: ToSpeaker) {
-      if (message.type === 'start') return start(message)
-      if (!session) return socket.destroy()
-      const fields = { session: session.id, agent: session.agent, ...session.fields }
-      if (message.type === 'mount') mount(session, message.name)
-      else if (message.type === 'file')
-        env.audit('ssh_file', { ...fields, grant: session.grant, op: message.op, path: message.path })
-      else if (message.type === 'refused') env.audit('ssh_refused', { ...fields, why: message.message })
-      else session.code = message.code
-    }
-    createInterface({ input: socket }).on('line', (line) => onMessage(toSpeaker.parse(JSON.parse(line))))
-    socket.on('error', () => undefined)
-    socket.on('close', () => {
-      if (!session) return
-      sessions.delete(session.id)
-      const was = session.state
-      session.state = transition('session', sessionTable, was, 'close')
-      if (was === 'open')
-        env.audit('ssh_session_end', {
-          session: session.id,
-          agent: session.agent,
-          ...session.fields,
-          code: session.code ?? null,
-          why: session.why ?? (session.code === undefined ? 'disconnected' : 'finished'),
-          ms: Date.now() - session.started,
-        })
-    })
   }
 
   // --- Admin routes (Setup forms and End) ---
@@ -693,11 +866,9 @@ export async function createJump(env: Env) {
         .map(({ id, agent, what, started }) => ({ id, agent, what, started })),
     async stop() {
       clearTimeout(timer)
-      for (const session of sessions.values()) end(session, 'speaker stopped')
+      for (const session of [...sessions.values()]) end(session, 'speaker stopped')
       await stopJump()
-      relayServer?.close()
-      cleanup()
-      dir = ''
+      speakerKey = undefined
     },
   }
 }
