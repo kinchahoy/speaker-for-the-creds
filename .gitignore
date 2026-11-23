@@ -9,6 +9,7 @@ bottle/config.json
 
 # Local-only personal configuration and historical material.
 /personal/
+*.status.md
 herdr/mods/speaker/config.json
 herdr/mods/*/*.d.ts
 herdr/mods/*/jsconfig.json

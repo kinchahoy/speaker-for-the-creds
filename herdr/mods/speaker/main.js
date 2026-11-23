@@ -92,7 +92,7 @@ export default class Speaker extends View {
       this.password.on("submit", (_e, cx) => this.signIn(cx));
       this.urlInput = field("e.g. https://speaker.example.com or a tailnet address", settings()?.url);
       this.bottleInput = field("usually empty; only when bottle's control API is reachable from here, e.g. http://127.0.0.1:7001", settings()?.bottle);
-      this.machineInput = field("a name from hc machine ls, e.g. nuc10i5 (not a web address; empty: this computer)", settings()?.machine);
+      this.machineInput = field("a name from hc machine ls, e.g. home-server (not a web address; empty: this computer)", settings()?.machine);
       for (const input of [this.urlInput, this.bottleInput, this.machineInput]) input.on("submit", (_e, cx) => this.save(cx));
       this.prompt = TextareaState.new({ placeholder: "optional task for the agent", rows: 3 });
       this.folders = field("optional, comma-separated: ~/code/proj:rw, ~/docs");

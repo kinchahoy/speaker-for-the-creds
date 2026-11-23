@@ -13,4 +13,5 @@ Project rules for speaker-for-the-creds, on top of the owner's global rules. "Th
 - **One full UI (a preference, not a hard rule):** the web `/admin` is the complete frontend today. A second one (terminal UI, native panel) costs a lot of custom code, so raise it with the owner before starting one.
 - **Herdr:** "Herdr" means the Herdr app (`herdr-app` plus `hc`), not the older `herdr` terminal app. Its mod documentation is in `~/.config/herdr-app/AGENTS.md`.
 - **Deployment:** it must stay easy for others to deploy, on one laptop or several boxes, with minimal setup on remote machines.
+- **Privacy in git:** exclude `*.status.md` and `/personal/` from git; keep personal hostnames, LAN IPs, private domains, and live machine details out of tracked files.
 - **Words:** the sandbox package is called bottle everywhere. In docs, write "the owner" for the human and name the agent meant; avoid "you" and "I".
