@@ -1,6 +1,34 @@
 # speaker-for-the-creds
 
-_AI-drafted_
+_human-drafted_
+
+*Speaker-for-the-creds* evolved out of my need to be able to give powerful access to my agents without giving them permanent always available access and to be able to ensure that the keys they have access to don't accidentally end up stored in places I'm not monitoring. This is especially difficult because I work a great deal with local open models, whose behaviors around access change greatly from model to model. 
+
+At a high level speaker-for-the-creds makes it easy for agents to work with me to get timebound, finegrained permissions to my homelab (e.g. read rights to my obsidian notes, permission to modify my home assistant dashboards, personal databases etc.), external services (Github, billed MCPs etc.), browser access (i.e. safe one-off browser usage) as well as SSH or SFTP (limited to specific folders) access to my devices. It's designed to work well with the surfaces I care about: iOS, Tailscale and Herdr.
+
+The basic trick is keeping true credentials in the speaker process (encrypted at rest, decrypted only in memory) and swapping credentials while proxying efficiently (simple service proxy for normal endpoints, TLS proxy for gh etc., SSH jump proxy for SSH & SFTP).
+
+Speaker works closely with *Bottle-school* (battle-school but bottled agents get it? yeah not my finest naming moment) - which is a sandbox optimized to run local agents for personal tasks, with the ability to control what external services (including web access) and pi extensions the agent can access. I focused a fair bit on ensuring Qwen 3.8 27B agents can actually successfully obtain and use credentials meaningfully in token efficient ways.
+
+Core design principles:
+- Agents should not actually ever get true credentials that are an exfiltration risk (unless absolutely necessary)
+- Agents should be able to token efficiently use granted endpoints like they normally would (i.e. I don't want every API called wrapped in MCP overhead)
+- Smaller open models should get enough information when things go wrong to understand how to use the speaker endpoint correctly and efficiently
+- Permission requests should be managable by me with a UI that I find usable! I really don't want to be overloaded by unintelligible requests
+
+Types of permissions this project handles well:
+- Arbitrary API endpoints in a token efficient way (including but not limited to MCPs)
+- HTTPS services (git, gh etc.)
+- SSH and SFTP access
+- Protecting web access (for bottled agents)
+- Reasonably safe management of "the agent really needs a logged in browser" workflow 
+- One time transfer of secrets like wifi passwords (no real protection there)
+
+What this project hasn't solved yet:
+- Full OAuth intermediation
+- Wierd prompt injection risks / concerns
+
+_AI-drafted (based on my evolving guidence)_
 
 AI agents are useful in proportion to what they can touch, and dangerous in the exact same proportion. Give an agent an Obsidian vault, Home Assistant, a GitHub token, and SSH keys, and it can finally do real work. It can also leak or misuse every one of those keys the moment a prompt goes sideways.
 
